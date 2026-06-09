@@ -839,6 +839,9 @@ export function registerNotebook(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('markdownNotebook.renamePage', (node?: NoteNode) =>
       renamePage(node, provider),
     ),
+    vscode.commands.registerCommand('markdownNotebook.renameSection', (node?: NoteNode) =>
+      renameSection(node, provider),
+    ),
     vscode.commands.registerCommand('markdownNotebook.moveUp', (node?: NoteNode) =>
       movePage(node, -1, provider),
     ),
@@ -1532,6 +1535,143 @@ async function renamePage(node: NoteNode | undefined, provider: NotebookProvider
     );
   }
 }
+
+async function renameSection(node: NoteNode | undefined, provider: NotebookProvider): Promise<void> {
+  if (!node || node.kind !== 'section') {
+    return;
+  }
+  const oldPath = node.fsPath;
+  const oldDirName = path.basename(oldPath);
+  const parentDir = path.dirname(oldPath);
+
+  const input = await vscode.window.showInputBox({
+    prompt: 'Rename section folder (updates section references and wiki-links)',
+    value: oldDirName,
+  });
+  if (input === undefined) {
+    return;
+  }
+  const newDirName = input.trim();
+  if (!newDirName || newDirName === oldDirName) {
+    return;
+  }
+
+  // Simple validation for invalid folder name characters
+  if (/[\\/:*?"<>|]/.test(newDirName)) {
+    vscode.window.showErrorMessage('Notebook: folder name contains invalid characters.');
+    return;
+  }
+
+  const newPath = path.join(parentDir, newDirName);
+  
+  // Verify target directory doesn't already exist
+  try {
+    const stat = await fsp.stat(newPath);
+    if (stat) {
+      vscode.window.showErrorMessage(`Notebook: a file or folder named "${newDirName}" already exists.`);
+      return;
+    }
+  } catch {
+    // OK, path doesn't exist
+  }
+
+  const root = resolveRoot();
+  let updatedFiles = 0;
+
+  if (root) {
+    const oldRelPath = path.relative(root.fsPath, oldPath);
+    const newRelPath = path.relative(root.fsPath, newPath);
+
+    const cfg = vscode.workspace.getConfiguration('markdownNotebook');
+    const ignore = new Set(
+      (cfg.get<string[]>('ignoreFolders', DEFAULT_IGNORE) ?? DEFAULT_IGNORE).map((s) => s.toLowerCase()),
+    );
+    const files = await listMarkdown(root.fsPath, ignore);
+    const edit = new vscode.WorkspaceEdit();
+
+    for (const f of files) {
+      let doc: vscode.TextDocument;
+      try {
+        doc = await vscode.workspace.openTextDocument(vscode.Uri.file(f));
+      } catch {
+        continue;
+      }
+      const text = doc.getText();
+      const rewritten = rewriteWikiLinkDirectories(text, oldRelPath, newRelPath);
+      if (rewritten !== text) {
+        edit.replace(doc.uri, fullRangeOf(doc), rewritten);
+        updatedFiles++;
+      }
+    }
+
+    if (edit.size > 0) {
+      await vscode.workspace.applyEdit(edit);
+    }
+  }
+
+  // 2) Perform filesystem rename/move
+  try {
+    await vscode.workspace.fs.rename(vscode.Uri.file(oldPath), vscode.Uri.file(newPath), { overwrite: false });
+  } catch (err) {
+    vscode.window.showErrorMessage(`Notebook: rename failed (${String(err)}).`);
+    return;
+  }
+
+  // 3) Update parent folder manual ordering sidecar
+  const ord = await readOrderFile(parentDir);
+  if (ord.includes(oldDirName)) {
+    await writeOrderFile(
+      parentDir,
+      ord.map((n) => (n === oldDirName ? newDirName : n)),
+    );
+  }
+
+  // 4) Regenerate TOCs and Dashboard
+  if (root) {
+    try {
+      await updateTOCsUpToRoot(parentDir, root.fsPath);
+      await updateTOCsUpToRoot(newPath, root.fsPath);
+      await updateMasterTOC(root.fsPath);
+      await updateTasksDashboard(root.fsPath);
+    } catch (err) {
+      console.error('Failed to update indexes after rename:', err);
+    }
+  }
+
+  provider.refresh();
+
+  if (updatedFiles > 0) {
+    vscode.window.showInformationMessage(
+      `Renamed section folder and updated links in ${updatedFiles} file${updatedFiles === 1 ? '' : 's'} (unsaved — review and save).`,
+    );
+  } else {
+    vscode.window.showInformationMessage(`Renamed section folder to "${newDirName}".`);
+  }
+}
+
+function rewriteWikiLinkDirectories(text: string, oldRelPath: string, newRelPath: string): string {
+  const oldPathSlash = oldRelPath.replace(/\\/g, '/') + '/';
+  const newPathSlash = newRelPath.replace(/\\/g, '/') + '/';
+  const oldPathSlashLower = oldPathSlash.toLowerCase();
+
+  return text.replace(/\[\[([^\[\]]+?)\]\]/g, (full, inner: string) => {
+    const pipe = inner.indexOf('|');
+    const target = pipe >= 0 ? inner.slice(0, pipe) : inner;
+    const alias = pipe >= 0 ? inner.slice(pipe) : '';
+    const subMatch = target.match(/[#^].*$/);
+    const sub = subMatch ? subMatch[0] : '';
+    const namePath = sub ? target.slice(0, target.length - sub.length) : target;
+
+    const namePathSlash = namePath.replace(/\\/g, '/');
+    if (namePathSlash.toLowerCase().startsWith(oldPathSlashLower)) {
+      const remaining = namePathSlash.slice(oldPathSlash.length);
+      const rebuilt = newPathSlash + remaining;
+      return `[[${rebuilt}${sub}${alias}]]`;
+    }
+    return full;
+  });
+}
+
 
 /** Rewrite [[old]] / [[old|alias]] / [[old#heading]] / [[dir/old]] targets to the new base name. */
 function rewriteWikiLinks(text: string, oldBase: string, newBase: string): string {

@@ -2,7 +2,7 @@
   "name": "markdown-notebook",
   "displayName": "Markdown Notebook",
   "description": "A Markdown note-taking workspace for VS Code: notebook view, templates, paste-to-import, and document conversion. A OneNote-style companion that works with GitHub Copilot.",
-  "version": "0.8.20",
+  "version": "0.8.21",
   "publisher": "stephen-rector",
   "author": {
     "name": "Stephen Rector"
@@ -92,6 +92,12 @@
       {
         "command": "markdownNotebook.renamePage",
         "title": "Rename (update links)",
+        "category": "Notebook",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "markdownNotebook.renameSection",
+        "title": "Rename Section",
         "category": "Notebook",
         "icon": "$(edit)"
       },
@@ -419,6 +425,11 @@
           "group": "inline@1"
         },
         {
+          "command": "markdownNotebook.renameSection",
+          "when": "view == markdownNotebook.view && viewItem == section",
+          "group": "inline@1"
+        },
+        {
           "command": "markdownNotebook.exportPdf",
           "when": "view == markdownNotebook.view && viewItem =~ /Page$/",
           "group": "inline@2"
@@ -436,6 +447,11 @@
         {
           "command": "markdownNotebook.renamePage",
           "when": "view == markdownNotebook.view && viewItem =~ /Page$/",
+          "group": "7_modification@1"
+        },
+        {
+          "command": "markdownNotebook.renameSection",
+          "when": "view == markdownNotebook.view && viewItem == section",
           "group": "7_modification@1"
         },
         {
