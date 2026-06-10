@@ -7,6 +7,12 @@ export interface NoteMetadata {
   tags: string[];
 }
 
+/** Local calendar date as YYYY-MM-DD. (toISOString gives the UTC date, which is wrong in the evening west of UTC.) */
+export function localDateKey(d: Date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 export async function promptMetadata(
   initialTitle?: string,
   titlePrompt = 'Title for the note',
@@ -29,10 +35,10 @@ export async function promptMetadata(
   }
 
   // 2. Date Pick Prompt (Optional)
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = localDateKey();
   const yesterday = new Date();
   yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayStr = yesterday.toISOString().slice(0, 10);
+  const yesterdayStr = localDateKey(yesterday);
 
   const dateChoice = await vscode.window.showQuickPick([
     { label: '$(circle-slash) No Date', description: 'Skip adding date context', id: 'skip' },

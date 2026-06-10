@@ -50,6 +50,15 @@
         src = el.textContent || '';
         el.setAttribute('data-src', src);
       } else {
+        // Re-render (theme switch): resetting textContent wipes the toolbar,
+        // so first move the orientation button it adopted back to the
+        // container — otherwise it would be destroyed and lost for good.
+        var container = el.closest('.mermaid-block-container');
+        var cmd = el.querySelector('.mermaid-toggle-cmd');
+        if (cmd && container) {
+          cmd.style.display = 'none';
+          container.appendChild(cmd);
+        }
         el.textContent = src;
       }
       el.removeAttribute('data-processed');
@@ -57,17 +66,25 @@
     });
 
     try {
-      window.mermaid.run({ querySelector: 'pre.notebook-mermaid[data-notebook-mermaid]' }).then(
-        function () {
-          blocks.forEach(function (el) {
-            el.classList.add('mermaid-rendered');
-            setupMermaidActions(el);
-          });
-        },
-        function (err) {
-          showErrors(blocks, err);
-        },
-      );
+      // suppressErrors keeps one broken diagram from rejecting the whole run;
+      // each block is then judged individually by whether it produced an SVG.
+      window.mermaid
+        .run({ querySelector: 'pre.notebook-mermaid[data-notebook-mermaid]', suppressErrors: true })
+        .then(
+          function () {
+            blocks.forEach(function (el) {
+              if (el.querySelector('svg')) {
+                el.classList.add('mermaid-rendered');
+                setupMermaidActions(el);
+              } else {
+                showErrors([el], 'diagram failed to parse');
+              }
+            });
+          },
+          function (err) {
+            showErrors(blocks, err);
+          },
+        );
     } catch (err) {
       showErrors(blocks, err);
     }

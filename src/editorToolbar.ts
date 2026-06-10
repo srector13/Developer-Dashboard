@@ -204,12 +204,13 @@ async function toggleTask(): Promise<void> {
   }
 
   if (edits.length > 0) {
+    // Leave the document dirty like any other edit — force-saving here would
+    // silently commit unrelated unsaved changes in the file.
     await editor.edit((editBuilder) => {
       for (const edit of edits) {
         editBuilder.replace(edit.range, edit.newText);
       }
     });
-    await document.save();
   }
 }
 

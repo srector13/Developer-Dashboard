@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { execFile } from 'child_process';
 import { pickDestination } from './notebookFs';
-import { promptMetadata } from './metadataPrompt';
+import { promptMetadata, localDateKey } from './metadataPrompt';
 
 /**
  * Import arbitrary copied text (email chains, web snippets, rich text) into a
@@ -78,7 +78,7 @@ async function runImport(
     return;
   }
 
-  const createdDate = dateKey || new Date().toISOString().slice(0, 10);
+  const createdDate = dateKey || localDateKey();
   const fm: string[] = ['---', `title: ${yamlValue(title)}`, `created: ${createdDate}`];
   if (author) {
     fm.push(`author: ${yamlValue(author)}`);

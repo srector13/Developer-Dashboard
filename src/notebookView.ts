@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { promptMetadata } from './metadataPrompt';
+import { promptMetadata, localDateKey } from './metadataPrompt';
 import { invalidFolderNameReason } from './notebookFs';
 
 const fsp = fs.promises;
@@ -12,6 +12,10 @@ const PINNED_SCAN_BUDGET = 2000; // safety cap on the recursive pinned scan
 const ORDER_FILE = '.notebook-order'; // per-folder manual ordering sidecar
 const DND_MIME = 'application/vnd.code.tree.markdownnotebook';
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+// The closing fence must be a line of exactly "---", so lines like "----" or
+// "--- continued" inside the block don't end the frontmatter early. The
+// lookahead keeps the match length identical to the old, unanchored form.
+const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---(?=[ \t]*(?:\r?\n|$))/;
 
 type NodeKind = 'section' | 'page';
 
@@ -582,10 +586,11 @@ async function readMeta(full: string): Promise<NoteMeta> {
   }
 
   // Frontmatter block.
-  const fm = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  const fm = content.match(FRONTMATTER_RE);
   if (fm) {
-    for (const line of fm[1].split(/\r?\n/)) {
-      const kv = line.match(/^(\w[\w-]*):\s*(.*)$/);
+    const lines = fm[1].split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const kv = lines[i].match(/^(\w[\w-]*):\s*(.*)$/);
       if (!kv) {
         continue;
       }
@@ -596,7 +601,7 @@ async function readMeta(full: string): Promise<NoteMeta> {
       } else if (key === 'pinned') {
         meta.pinned = /^(true|yes)$/i.test(value);
       } else if (key === 'tags') {
-        meta.tags = parseInlineList(value);
+        meta.tags = value ? parseInlineList(value) : parseBlockList(lines, i + 1);
       } else if (key === 'created' || key === 'date') {
         meta.date = stripQuotes(value);
       }
@@ -646,7 +651,12 @@ async function orderPages(dir: string, pages: NoteNode[]): Promise<NoteNode[]> {
       (index.get(path.basename(a.fsPath).toLowerCase()) ?? 0) -
       (index.get(path.basename(b.fsPath).toLowerCase()) ?? 0),
   );
-  return [...listed, ...sortPages(rest)];
+  // Daily notes sort newest-first by design, so new (unlisted) dailies go
+  // before the manually ordered entries — otherwise one manual reorder would
+  // freeze the list and every future daily note would land at the bottom.
+  const restDaily = rest.filter((p) => p.dailyKey);
+  const restOther = rest.filter((p) => !p.dailyKey);
+  return [...sortPages(restDaily), ...listed, ...sortPages(restOther)];
 }
 
 async function readOrderFile(dir: string): Promise<string[]> {
@@ -671,16 +681,36 @@ async function writeOrderFile(dir: string, names: string[]): Promise<void> {
   await fsp.writeFile(target, names.join('\n') + '\n', 'utf8');
 }
 
-/** The page basenames in the exact order the tree currently shows them for a folder. */
-async function displayOrder(dir: string): Promise<string[]> {
+/** The page nodes in the exact order the tree currently shows them for a folder. */
+async function displayOrderNodes(dir: string): Promise<NoteNode[]> {
   const cfg = vscode.workspace.getConfiguration('markdownNotebook');
   const ignore = new Set(
     (cfg.get<string[]>('ignoreFolders', DEFAULT_IGNORE) ?? DEFAULT_IGNORE).map((s) => s.toLowerCase()),
   );
   const dailyRegexes = getDailyRegexes(cfg);
   const { pages } = await readFolder(dir, ignore, dailyRegexes);
-  const ordered = await orderPages(dir, pages);
-  return ordered.map((p) => path.basename(p.fsPath));
+  return orderPages(dir, pages);
+}
+
+/** The page basenames in the exact order the tree currently shows them for a folder. */
+async function displayOrder(dir: string): Promise<string[]> {
+  return (await displayOrderNodes(dir)).map((p) => path.basename(p.fsPath));
+}
+
+/** YAML block-style list (the common Obsidian form): `tags:` followed by indented `- item` lines. */
+function parseBlockList(lines: string[], startIdx: number): string[] {
+  const items: string[] = [];
+  for (let i = startIdx; i < lines.length; i++) {
+    const m = lines[i].match(/^\s+-\s*(.+)$/);
+    if (!m) {
+      break;
+    }
+    const item = stripQuotes(m[1].trim()).replace(/^#/, '');
+    if (item) {
+      items.push(item);
+    }
+  }
+  return items;
 }
 
 function parseInlineList(value: string): string[] {
@@ -1106,7 +1136,7 @@ async function newPage(node: NoteNode | undefined, provider: NotebookProvider): 
   }
 
   const fileName = await uniqueMd(targetDir, baseSlug);
-  const createdDate = dateKey || new Date().toISOString().slice(0, 10);
+  const createdDate = dateKey || localDateKey();
   const author = vscode.workspace.getConfiguration('markdownNotebook').get<string>('author', '').trim();
   const authorLine = author ? `author: ${author}\n` : '';
   const parentDirName = path.basename(targetDir);
@@ -1210,7 +1240,7 @@ async function newDailyNote(provider: NotebookProvider): Promise<void> {
     text = `---\ntitle: Daily Note: ${dateStr}\ncreated: ${dateStr}\n${authorLine}tags: [daily]\n---\n\n${backlink}\n\n# Daily Note: ${dateStr}\n\n## Tasks\n- [ ] \n`;
   } else {
     // Inject backlink into template content
-    const fm = text.match(/^(---\r?\n[\s\S]*?\r?\n---)/);
+    const fm = text.match(/^(---\r?\n[\s\S]*?\r?\n---)(?=[ \t]*(?:\r?\n|$))/);
     let injectedLength = 0;
     if (fm) {
       const fmEndIndex = fm[0].length;
@@ -1329,7 +1359,7 @@ async function newFromTemplate(node: NoteNode | undefined, provider: NotebookPro
     return;
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateKey();
   const title = await vscode.window.showInputBox({
     prompt: 'Title for the new note',
     value: /daily|journal/i.test(picked.file) ? today : '',
@@ -1354,7 +1384,7 @@ async function newFromTemplate(node: NoteNode | undefined, provider: NotebookPro
   const backlink = `[← ${parentDirName} TOC](.toc.md)`;
   
   // Inject backlink after frontmatter
-  const fm = text.match(/^(---\r?\n[\s\S]*?\r?\n---)/);
+  const fm = text.match(/^(---\r?\n[\s\S]*?\r?\n---)(?=[ \t]*(?:\r?\n|$))/);
   let injectedLength = 0;
   if (fm) {
     const fmEndIndex = fm[0].length;
@@ -1437,7 +1467,15 @@ async function movePage(node: NoteNode | undefined, delta: number, provider: Not
   }
   const dir = path.dirname(node.fsPath);
   const base = path.basename(node.fsPath);
-  const order = await displayOrder(dir);
+  let nodes = await displayOrderNodes(dir);
+  // At the notebook root the dashboard shows pinned notes in a separate,
+  // always-sorted group, so swap within the list the user actually sees
+  // (moving a pinned root note is a no-op — its group ignores manual order).
+  const root = resolveRoot();
+  if (root && path.normalize(dir) === path.normalize(root.fsPath)) {
+    nodes = nodes.filter((p) => p.contextValue !== 'pinnedPage');
+  }
+  const order = nodes.map((p) => path.basename(p.fsPath));
   const idx = order.indexOf(base);
   const target = idx + delta;
   if (idx < 0 || target < 0 || target >= order.length) {
@@ -1797,7 +1835,7 @@ function updateOwnContent(
 ): string {
   let out = text;
 
-  const fm = out.match(/^(---\r?\n)([\s\S]*?)(\r?\n---)/);
+  const fm = out.match(/^(---\r?\n)([\s\S]*?)(\r?\n---)(?=[ \t]*(?:\r?\n|$))/);
   if (fm) {
     let block = fm[2];
     if (/^title:/m.test(block)) {
@@ -1821,7 +1859,7 @@ function updateOwnContent(
 }
 
 function parseTitle(text: string): string | undefined {
-  const fm = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  const fm = text.match(FRONTMATTER_RE);
   if (fm) {
     const m = fm[1].match(/^title:\s*(.*)$/m);
     if (m) {
@@ -2175,7 +2213,7 @@ async function updateBacklink(filePath: string, parentDirName: string): Promise<
     }
   } else {
     let updatedContent = '';
-    const fm = content.match(/^(---\r?\n[\s\S]*?\r?\n---)/);
+    const fm = content.match(/^(---\r?\n[\s\S]*?\r?\n---)(?=[ \t]*(?:\r?\n|$))/);
     if (fm) {
       const fmEndIndex = fm[0].length;
       updatedContent = content.slice(0, fmEndIndex) + `\n\n${newLink}\n` + content.slice(fmEndIndex);

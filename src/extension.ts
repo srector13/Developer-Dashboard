@@ -9,7 +9,7 @@ import { pickDestination } from './notebookFs';
 import { extendMarkdownIt, setPreviewScrollTarget } from './markdownItExtensions';
 import { registerPdfExport } from './pdfExport';
 import { OutlineTreeDataProvider, OutlineNode } from './outlineView';
-import { promptMetadata, NoteMetadata } from './metadataPrompt';
+import { promptMetadata, NoteMetadata, localDateKey } from './metadataPrompt';
 import { registerInsertCommands } from './editorToolbar';
 
 const execFileAsync = promisify(execFile);
@@ -721,7 +721,7 @@ async function importDroppedFilesCommand(uris: vscode.Uri[], destDirUri: vscode.
         const metadata: NoteMetadata = {
           title: humanize(base),
           tags: ['imported'],
-          dateKey: new Date().toISOString().slice(0, 10),
+          dateKey: localDateKey(),
           dateStrForFilename: undefined
         };
 
@@ -882,7 +882,7 @@ async function addFrontmatter(outPath: string, fallbackBase: string, metadata?: 
     title = humanize(fallbackBase);
   }
 
-  const createdDate = metadata?.dateKey || new Date().toISOString().slice(0, 10);
+  const createdDate = metadata?.dateKey || localDateKey();
   const author = vscode.workspace.getConfiguration('markdownNotebook').get<string>('author', '').trim();
   const lines = ['---', `title: ${yamlValue(title)}`, `created: ${createdDate}`];
   if (author) {
