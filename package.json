@@ -39,7 +39,6 @@
       "./media/github-markdown.css"
     ],
     "markdown.previewScripts": [
-      "./media/preview-settings.js",
       "./media/theme-bootstrap.js",
       "./media/mermaid.min.js",
       "./media/mermaid-preview.js"
@@ -320,11 +319,6 @@
         "view": "markdownNotebook.view",
         "contents": "No folder is open.\nOpen a folder to use it as your notebook.\n[Open Folder](command:vscode.openFolder)",
         "when": "workbenchState == empty"
-      },
-      {
-        "view": "markdownNotebook.view",
-        "contents": "This notebook has no pages yet.\n[New Page](command:markdownNotebook.newPage)",
-        "when": "workbenchState != empty"
       }
     ],
     "menus": {
@@ -344,6 +338,22 @@
         {
           "command": "pandocToMarkdown.convert",
           "when": "resourceExtname =~ /^\\.(docx|pptx|xlsx|odt|rtf|epub|html?)$/i"
+        },
+        {
+          "command": "markdownNotebook.toggleTaskAtLine",
+          "when": "false"
+        },
+        {
+          "command": "markdownNotebook.toggleMermaidOrientationAtLine",
+          "when": "false"
+        },
+        {
+          "command": "markdownNotebook.outline.goToLine",
+          "when": "false"
+        },
+        {
+          "command": "markdownNotebook.outline.previewScrolled",
+          "when": "false"
         }
       ],
       "view/title": [
@@ -637,6 +647,7 @@
         "pandocToMarkdown.pandocPath": {
           "type": "string",
           "default": "pandoc",
+          "scope": "machine-overridable",
           "markdownDescription": "Path to the `pandoc` executable. Leave as `pandoc` if it is on your PATH, or set an absolute path (e.g. `/opt/homebrew/bin/pandoc`)."
         },
         "pandocToMarkdown.deleteOriginal": {
@@ -703,6 +714,7 @@
             "type": "string"
           },
           "default": [],
+          "scope": "machine-overridable",
           "markdownDescription": "Extra command-line arguments appended to every pandoc invocation (e.g. `[\"--markdown-headings=atx\"]`)."
         },
         "markdownNotebook.alwaysShowPreview": {
@@ -823,6 +835,7 @@
         "markdownNotebook.mermaidCliPath": {
           "type": "string",
           "default": "mmdc",
+          "scope": "machine-overridable",
           "markdownDescription": "Path to the mermaid-cli (`mmdc`) executable, used to render Mermaid diagrams when exporting to PDF/HTML. Install with `npm i -g @mermaid-js/mermaid-cli`. The live preview renders Mermaid without this."
         }
       }

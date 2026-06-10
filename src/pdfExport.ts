@@ -66,9 +66,10 @@ async function exportPdf(node: NodeLike | undefined, context: vscode.ExtensionCo
         let markdown = raw;
         const engine = cfg.get<string>('markdownNotebook.pdfEngine', 'chrome');
 
-        // Only pre-render Mermaid diagrams using mermaid-cli when NOT exporting with Chrome,
-        // since Chrome/Puppeteer parses and renders diagrams natively in the browser!
-        if (!asHtml && engine !== 'chrome') {
+        // Pre-render Mermaid diagrams with mermaid-cli except on the Chrome PDF
+        // path, where Puppeteer renders them natively in the browser. HTML
+        // exports always need pre-rendering — nothing runs Mermaid afterwards.
+        if (asHtml || engine !== 'chrome') {
           progress.report({ message: 'rendering diagrams…' });
           const rendered = await prerenderMermaid(raw, srcUri.fsPath, cfg);
           markdown = rendered.markdown;
@@ -89,7 +90,7 @@ async function exportPdf(node: NodeLike | undefined, context: vscode.ExtensionCo
         }
         success = true;
       } catch (err) {
-        handleExportError(err);
+        handleExportError(err, srcUri);
       }
     },
   );
@@ -174,8 +175,9 @@ async function prerenderMermaid(
 
   let out = markdown;
   for (const r of replacements) {
-    // Inline SVG via raw HTML block so pandoc passes it through.
-    out = out.replace(r.match, `\n<div class="mermaid-svg">\n${r.svg}\n</div>\n`);
+    // Inline SVG via raw HTML block so pandoc passes it through. The replacer
+    // function keeps $-sequences in the SVG from being expanded by replace().
+    out = out.replace(r.match, () => `\n<div class="mermaid-svg">\n${r.svg}\n</div>\n`);
   }
   try {
     await fsp.rm(tmpDir, { recursive: true, force: true });
@@ -212,6 +214,21 @@ async function loadThemeCss(
   return `<style>\n${css}\n${baseCss}\n</style>\n<script>document.addEventListener('DOMContentLoaded', () => { document.body.className='${bodyClass}'; });</script>`;
 }
 
+/** A file inside a fresh private temp directory — no collisions or squatting in the shared tmp dir. */
+async function makeTempFile(name: string): Promise<{ filePath: string; cleanup: () => Promise<void> }> {
+  const dir = await fsp.mkdtemp(path.join(require('os').tmpdir(), 'nb-export-'));
+  return {
+    filePath: path.join(dir, name),
+    cleanup: async () => {
+      try {
+        await fsp.rm(dir, { recursive: true, force: true });
+      } catch {
+        /* best-effort cleanup */
+      }
+    },
+  };
+}
+
 async function pandocToHtml(
   pandocPath: string,
   markdown: string,
@@ -220,8 +237,8 @@ async function pandocToHtml(
   headerHtml: string,
 ): Promise<void> {
   const variant = vscode.workspace.getConfiguration().get<string>('pandocToMarkdown.markdownVariant', 'gfm');
-  const headerFile = path.join(require('os').tmpdir(), `nb-head-${Date.now()}.html`);
-  await fsp.writeFile(headerFile, headerHtml, 'utf8');
+  const header = await makeTempFile('header.html');
+  await fsp.writeFile(header.filePath, headerHtml, 'utf8');
   try {
     await run(
       pandocPath,
@@ -230,7 +247,7 @@ async function pandocToHtml(
         '-t', 'html5',
         '--standalone',
         '--embed-resources',
-        '-H', headerFile,
+        '-H', header.filePath,
         '--metadata', `title=${path.basename(srcPath, '.md')}`,
         '-o', outPath,
       ],
@@ -239,11 +256,7 @@ async function pandocToHtml(
       markdown,
     );
   } finally {
-    try {
-      await fsp.rm(headerFile, { force: true });
-    } catch {
-      /* ignore */
-    }
+    await header.cleanup();
   }
 }
 
@@ -257,8 +270,8 @@ async function pandocToPdf(
 ): Promise<void> {
   const variant = cfg.get<string>('pandocToMarkdown.markdownVariant', 'gfm');
   const engine = cfg.get<string>('markdownNotebook.pdfEngine', 'chrome');
-  const headerFile = path.join(require('os').tmpdir(), `nb-head-${Date.now()}.html`);
-  await fsp.writeFile(headerFile, headerHtml, 'utf8');
+  const header = await makeTempFile('header.html');
+  await fsp.writeFile(header.filePath, headerHtml, 'utf8');
 
   const engines = engine === 'auto' ? ['weasyprint', 'wkhtmltopdf', 'prince'] : [engine];
   let lastErr: unknown;
@@ -272,7 +285,7 @@ async function pandocToPdf(
             '-f', `${variant}+raw_html`,
             `--pdf-engine=${eng}`,
             '--standalone',
-            '-H', headerFile,
+            '-H', header.filePath,
             '--metadata', `title=${path.basename(srcPath, '.md')}`,
             '-o', outPath,
           ],
@@ -295,11 +308,7 @@ async function pandocToPdf(
     (e as any).lastErr = lastErr;
     throw e;
   } finally {
-    try {
-      await fsp.rm(headerFile, { force: true });
-    } catch {
-      /* ignore */
-    }
+    await header.cleanup();
   }
 }
 
@@ -315,7 +324,7 @@ function isMissingEngine(err: unknown): boolean {
   );
 }
 
-function handleExportError(err: unknown): void {
+function handleExportError(err: unknown, srcUri?: vscode.Uri): void {
   const errMsg = (err as Error)?.message || '';
   if (errMsg.includes('Local Chrome/Chromium installation not found') || errMsg.includes('download was cancelled')) {
     vscode.window.showErrorMessage(`Notebook: export failed. ${errMsg}`);
@@ -332,7 +341,9 @@ function handleExportError(err: unknown): void {
         if (pick === 'How to install') {
           vscode.env.openExternal(vscode.Uri.parse('https://weasyprint.org/'));
         } else if (pick === 'Export HTML instead') {
-          vscode.commands.executeCommand('markdownNotebook.exportPdf');
+          // Re-run against the same note — the original may have come from a
+          // tree item, with no markdown editor active to fall back on.
+          vscode.commands.executeCommand('markdownNotebook.exportPdf', srcUri ? { resourceUri: srcUri } : undefined);
         }
       });
     return;
@@ -363,23 +374,22 @@ async function getChromePath(context: vscode.ExtensionContext): Promise<string> 
     // continue
   }
 
-  // 2. Try to find system Chromium
+  // (System Chromium can't be probed: computeSystemExecutablePath only
+  // supports release channels for Chrome/Edge, so that lookup always threw.)
+
+  // 2. Check if we already have a downloaded Chrome in persistent cache.
+  // Use the Chrome build the installed puppeteer-core is pinned to — driving
+  // any other version is unsupported by puppeteer.
+  const cacheDir = path.join(context.globalStorageUri.fsPath, '.browser-cache');
+  let buildId = '149.0.7827.22'; // fallback: puppeteer-core 25.x's pinned build
   try {
-    const computed = browsers.computeSystemExecutablePath({
-      browser: browsers.Browser.CHROMIUM,
-      platform: platform,
-      channel: browsers.ChromeReleaseChannel.STABLE,
-    });
-    if (computed && fs.existsSync(computed)) {
-      return computed;
+    const pup: any = await import('puppeteer-core');
+    if (pup.PUPPETEER_REVISIONS?.chrome) {
+      buildId = pup.PUPPETEER_REVISIONS.chrome;
     }
   } catch {
-    // continue
+    /* keep fallback */
   }
-
-  // 3. Check if we already have a downloaded Chrome in persistent cache
-  const cacheDir = path.join(context.globalStorageUri.fsPath, '.browser-cache');
-  const buildId = '120.0.6099.109'; // A reliable, specific Chrome stable build ID
   const cachedPath = browsers.computeExecutablePath({
     cacheDir: cacheDir,
     browser: browsers.Browser.CHROME,
@@ -430,10 +440,10 @@ async function chromeToPdf(
   css: string,
   context: vscode.ExtensionContext,
 ): Promise<void> {
-  const tempHtmlPath = path.join(require('os').tmpdir(), `nb-export-${Date.now()}.html`);
-  
+  const tempHtml = await makeTempFile('export.html');
+
   // 1. Compile Markdown to a temporary standalone HTML file using Pandoc
-  await pandocToHtml(pandocPath, markdown, srcPath, tempHtmlPath, css);
+  await pandocToHtml(pandocPath, markdown, srcPath, tempHtml.filePath, css);
 
   // Read the actual exportTheme configuration setting directly to evaluate forceDark
   const exportTheme = vscode.workspace.getConfiguration().get<string>('markdownNotebook.exportTheme', 'github');
@@ -454,7 +464,7 @@ async function chromeToPdf(
     });
 
     const page = await browser.newPage();
-    await page.goto(vscode.Uri.file(tempHtmlPath).toString(), { waitUntil: 'networkidle0' });
+    await page.goto(vscode.Uri.file(tempHtml.filePath).toString(), { waitUntil: 'networkidle0' });
 
     // Explicitly add body classes in Puppeteer to ensure style rules are immediately applied
     await page.evaluate((opts: any) => {
@@ -497,7 +507,9 @@ async function chromeToPdf(
         win.mermaid.initialize({
           startOnLoad: false,
           theme: isDark ? 'dark' : 'default',
-          securityLevel: 'loose',
+          // strict, matching the live preview — note content must not run
+          // script in the export browser.
+          securityLevel: 'strict',
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         });
         await win.mermaid.run();
@@ -527,15 +539,16 @@ async function chromeToPdf(
     });
 
   } finally {
-    // 6. Safe cleanup of browser and temporary files
+    // 6. Safe cleanup of browser and temporary files. close() failing (e.g.
+    // Chrome already crashed) must not mask the original export error.
     if (browser) {
-      await browser.close();
+      try {
+        await browser.close();
+      } catch {
+        /* ignore */
+      }
     }
-    try {
-      await fsp.rm(tempHtmlPath, { force: true });
-    } catch {
-      // ignore
-    }
+    await tempHtml.cleanup();
   }
 }
 

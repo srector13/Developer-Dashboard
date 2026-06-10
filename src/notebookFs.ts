@@ -66,13 +66,39 @@ async function collectFolders(
   }
 }
 
+/**
+ * Validate a section (folder) name. Returns an error message, or undefined if
+ * the name is acceptable. Rejects path separators and traversal ("..") so a
+ * section can never be created outside the notebook, plus names that are
+ * invalid on Windows.
+ */
+export function invalidFolderNameReason(name: string): string | undefined {
+  const v = name.trim();
+  if (!v) {
+    return 'Name is empty.';
+  }
+  if (/[\\/:*?"<>|]/.test(v) || /[\x00-\x1f]/.test(v)) {
+    return 'Name contains invalid characters.';
+  }
+  if (v === '.' || v === '..') {
+    return 'Name cannot be "." or "..".';
+  }
+  if (/[. ]$/.test(v)) {
+    return 'Name cannot end with a dot or space.';
+  }
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(v)) {
+    return 'Name is reserved on Windows.';
+  }
+  return undefined;
+}
+
 async function createSection(rootDir: string): Promise<string | undefined> {
   const name = await vscode.window.showInputBox({
     prompt: 'Name for the new section',
     placeHolder: 'e.g. Meetings',
-    validateInput: (v) => (/[\\/:*?"<>|]/.test(v) ? 'Name contains invalid characters.' : undefined),
+    validateInput: (v) => invalidFolderNameReason(v),
   });
-  if (!name || !name.trim()) {
+  if (!name || !name.trim() || invalidFolderNameReason(name)) {
     return undefined;
   }
   const dir = path.join(rootDir, name.trim());

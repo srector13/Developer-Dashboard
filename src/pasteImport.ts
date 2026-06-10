@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { execFile } from 'child_process';
 import { pickDestination } from './notebookFs';
-import { promptMetadata } from './metadataPrompt';
+import { promptMetadata, localDateKey } from './metadataPrompt';
 
 /**
  * Import arbitrary copied text (email chains, web snippets, rich text) into a
@@ -15,8 +15,10 @@ export function registerPasteImport(
   afterCreate?: (uri: vscode.Uri) => void,
 ): void {
   context.subscriptions.push(
-    vscode.commands.registerCommand('markdownNotebook.importFromClipboard', () =>
-      importFromClipboard(resolveRoot, afterCreate),
+    vscode.commands.registerCommand(
+      'markdownNotebook.importFromClipboard',
+      (node?: { fsPath?: string; kind?: string }) =>
+        importFromClipboard(resolveRoot, afterCreate, node?.kind === 'section' ? node.fsPath : undefined),
     ),
   );
 }
@@ -24,13 +26,14 @@ export function registerPasteImport(
 async function importFromClipboard(
   resolveRoot: () => vscode.Uri | undefined,
   afterCreate?: (uri: vscode.Uri) => void,
+  destDirHint?: string,
 ): Promise<void> {
   const text = await vscode.env.clipboard.readText();
   if (!text || !text.trim()) {
     vscode.window.showWarningMessage('Notebook: the clipboard is empty.');
     return;
   }
-  await runImport(text, resolveRoot, afterCreate);
+  await runImport(text, resolveRoot, afterCreate, destDirHint);
 }
 
 
@@ -38,6 +41,7 @@ async function runImport(
   text: string,
   resolveRoot: () => vscode.Uri | undefined,
   afterCreate?: (uri: vscode.Uri) => void,
+  destDirHint?: string,
 ): Promise<void> {
   const root = resolveRoot();
   if (!root) {
@@ -72,13 +76,14 @@ async function runImport(
 
   const { title, dateKey, dateStrForFilename, tags } = metadata;
 
-  // Destination: let the user place it anywhere in the tree, defaulting to the import folder.
-  const destDir = await pickDestination(root, 'Where should this note go?');
+  // Destination: the section the command was invoked on, or let the user
+  // place it anywhere in the tree.
+  const destDir = destDirHint ?? (await pickDestination(root, 'Where should this note go?'));
   if (!destDir) {
     return;
   }
 
-  const createdDate = dateKey || new Date().toISOString().slice(0, 10);
+  const createdDate = dateKey || localDateKey();
   const fm: string[] = ['---', `title: ${yamlValue(title)}`, `created: ${createdDate}`];
   if (author) {
     fm.push(`author: ${yamlValue(author)}`);
@@ -87,7 +92,7 @@ async function runImport(
   // Ensure we tag it 'imported' along with any chosen tags!
   const finalTags = Array.from(new Set(['imported', ...tags]));
   const backlink = `[← ${path.basename(destDir)} TOC](.toc.md)`;
-  fm.push(`tags: [${finalTags.join(', ')}]`, '---', '', backlink, '', body, '');
+  fm.push(`tags: [${finalTags.map(yamlValue).join(', ')}]`, '---', '', backlink, '', body, '');
   const content = fm.join('\n');
 
   await vscode.workspace.fs.createDirectory(vscode.Uri.file(destDir));
@@ -165,7 +170,9 @@ function firstHeadingOrLine(body: string): string | undefined {
 }
 
 function yamlValue(s: string): string {
-  return /[:#\[\]{}",]|^\s|\s$/.test(s) ? JSON.stringify(s) : s;
+  // Quote anything YAML could misread: flow/comment/quote characters anywhere,
+  // indicator characters at the start, surrounding whitespace, or emptiness.
+  return /[:#\[\]{}",'`]|^[\s\-*&?>|%@!]|\s$|^$/.test(s) ? JSON.stringify(s) : s;
 }
 
 function slug(s: string): string {

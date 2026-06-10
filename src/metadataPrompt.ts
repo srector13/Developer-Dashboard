@@ -7,6 +7,12 @@ export interface NoteMetadata {
   tags: string[];
 }
 
+/** Local calendar date as YYYY-MM-DD. (toISOString gives the UTC date, which is wrong in the evening west of UTC.) */
+export function localDateKey(d: Date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 export async function promptMetadata(
   initialTitle?: string,
   titlePrompt = 'Title for the note',
@@ -29,10 +35,10 @@ export async function promptMetadata(
   }
 
   // 2. Date Pick Prompt (Optional)
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = localDateKey();
   const yesterday = new Date();
   yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayStr = yesterday.toISOString().slice(0, 10);
+  const yesterdayStr = localDateKey(yesterday);
 
   const dateChoice = await vscode.window.showQuickPick([
     { label: '$(circle-slash) No Date', description: 'Skip adding date context', id: 'skip' },
@@ -138,26 +144,32 @@ function parseDateInput(input: string): { dailyKey: string; original: string } |
   const trimmed = input.trim();
   if (!trimmed) { return undefined; }
 
+  let y: string | undefined;
+  let m = 0;
+  let d = 0;
+
   // 1. Try parsing Year-first format: YYYY-MM-DD or YYYY_MM_DD
   const yearFirst = trimmed.match(/^(\d{4})[-_](\d{1,2})[-_](\d{1,2})$/);
   if (yearFirst) {
-    const y = yearFirst[1];
-    const m = yearFirst[2].padStart(2, '0');
-    const d = yearFirst[3].padStart(2, '0');
-    return { dailyKey: `${y}-${m}-${d}`, original: trimmed };
-  }
-
-  // 2. Try parsing US-first format: MM-DD-YY or MM-DD-YYYY or M-D-YY
-  const usFirst = trimmed.match(/^(\d{1,2})[-_](\d{1,2})[-_](\d{2,4})$/);
-  if (usFirst) {
-    let y = usFirst[3];
-    if (y.length === 2) {
-      y = '20' + y; // e.g. 25 -> 2025
+    y = yearFirst[1];
+    m = +yearFirst[2];
+    d = +yearFirst[3];
+  } else {
+    // 2. Try parsing US-first format: MM-DD-YY or MM-DD-YYYY or M-D-YY
+    const usFirst = trimmed.match(/^(\d{1,2})[-_](\d{1,2})[-_](\d{2}|\d{4})$/);
+    if (usFirst) {
+      y = usFirst[3].length === 2 ? '20' + usFirst[3] : usFirst[3];
+      m = +usFirst[1];
+      d = +usFirst[2];
     }
-    const m = usFirst[1].padStart(2, '0');
-    const d = usFirst[2].padStart(2, '0');
-    return { dailyKey: `${y}-${m}-${d}`, original: trimmed };
   }
 
-  return undefined;
+  // Reject nonsense like 13-40-25 rather than producing key 2025-13-40.
+  if (!y || m < 1 || m > 12 || d < 1 || d > 31) {
+    return undefined;
+  }
+  return {
+    dailyKey: `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`,
+    original: trimmed,
+  };
 }
