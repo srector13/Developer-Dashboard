@@ -1,158 +1,184 @@
-# Markdown Notebook (VS Code extension)
+# Markdown Notebook
+
+**A OneNote-style notebook for VS Code — built on plain Markdown files.**
 
 By Stephen Rector.
 
-A Markdown note-taking workspace for VS Code — a OneNote-style companion that keeps your notes as plain `.md` files so they work with git and GitHub Copilot. It gives you a notebook tree view, templates, paste-to-import, and document conversion in one place.
+Markdown Notebook turns any folder into a friendly notebook: sections, pages, templates, daily notes, task tracking, and one-click import of Word documents or copied emails. Your notes are ordinary `.md` files on disk the whole time, so they work with git, sync tools, and GitHub Copilot — and you can stop using the extension any time without losing a thing.
 
-Features:
-
-- **Notebook view** — a note-aware sidebar (sections, pages, pinned notes, daily notes) separate from the file Explorer.
-- **New Page / New Section / New from Template** — with frontmatter (including your `author:` name) filled in.
-- **Import** — turn copied text or an email chain into a clean Markdown note via pandoc.
-- **Reorder & rename** — drag-and-drop ordering and link-preserving renames that keep `[[wiki-links]]` intact.
-- **Convert documents** — right-click a Word, PowerPoint, or Excel file to convert it to Markdown.
-
-## Converting documents
-
-Right-click a Word, PowerPoint, or Excel file in the Explorer, choose **Convert to Markdown (Pandoc)**, and the extension creates a `.md` next to it and (optionally) cleans up the original.
-
-| File | Pandoc reader | Notes |
-|------|---------------|-------|
-| `.docx` (Word) | `docx` | Works on any modern pandoc. Embedded images extracted to `<file>_media/`. |
-| `.pptx` (PowerPoint) | `pptx` | **Requires pandoc ≥ 3.8.3** (the pptx *input* reader was added then). |
-| `.xlsx` (Excel) | `xlsx` | **Requires pandoc ≥ 3.8.3.** Each worksheet becomes a section with a table. |
-| `.odt`, `.rtf`, `.epub`, `.html` | matching reader | Bonus formats pandoc has long supported. |
-
-Converted files get Notebook frontmatter (`title`, `created`, `author`, `tags: [converted]`) prepended automatically, so they land in the Notebook view as titled notes. The title comes from the document's first heading (which is then removed from the body to avoid a duplicate), falling back to the filename. Turn this off with `pandocToMarkdown.addFrontmatter`; it's skipped automatically when `standalone` is on, since pandoc writes its own metadata then.
-
-> **Heads up:** PowerPoint and Excel *input* are new in pandoc 3.8.3. If you're on an older pandoc the extension will convert Word fine and show a clear message telling you to upgrade for the other two. Check yours with `pandoc --version`.
-
-`.doc`, `.ppt`, and `.xls` (the old pre-2007 binary formats) are **not** supported by pandoc — convert them to the `x` formats in Office first.
-
-## Prerequisites
-
-- [Pandoc](https://pandoc.org/installing.html) on your `PATH` (or set its path in settings). Quick installs:
-  - macOS: `brew install pandoc`
-  - Windows: `winget install --id JohnMacFarlane.Pandoc`
-  - Linux: `sudo apt install pandoc` (note: distro packages are often older than 3.8.3; for pptx/xlsx grab the latest from the [releases page](https://github.com/jgm/pandoc/releases))
-- [Node.js](https://nodejs.org) (only to build the extension).
-
-## Build & run
-
-```bash
-npm install
-npm run compile      # or: npm run watch
+```mermaid
+flowchart LR
+    folder["📁 Any folder<br/>of .md files"] <--> view["📔 Notebook view<br/>sections & pages"]
+    view --> daily["🗓️ Daily notes"]
+    view --> tasks["✅ Tasks dashboard"]
+    view --> pdf["📄 PDF / HTML export"]
+    docs["📝 Word, PowerPoint,<br/>emails, clipboard"] -->|import| view
 ```
 
-Then either:
+## Getting started
 
-- **Try it live:** open this folder in VS Code and press `F5`. A second VS Code window ("Extension Development Host") launches with the extension loaded.
-- **Install it for real:** package it into a `.vsix` and install:
-  ```bash
-  npm install -g @vscode/vsce
-  vsce package
-  code --install-extension pandoc-to-markdown-0.1.0.vsix
-  ```
+1. Install the extension.
+2. Open a folder (or create an empty one) — this becomes your notebook.
+3. Click the **Notebook** icon in the activity bar (left edge of VS Code).
+4. Press the **+** button to create your first page or section.
 
-## Usage
+That's it for note-taking. For importing documents and exporting PDFs, install [Pandoc](https://pandoc.org/installing.html) (see [What you need](#what-you-need) below).
 
-1. Drop a `.docx` / `.pptx` / `.xlsx` into your project.
-2. Right-click it in the Explorer → **Convert to Markdown (Pandoc)**.
-3. A new `.md` appears beside it and opens automatically. The original is moved to Trash (recoverable) by default.
+## The Notebook view
 
-Select multiple files first to batch-convert them. The command also appears in the Command Palette for whatever file is open in the editor.
+The Notebook sidebar shows your folder the way a notebook should look:
 
-## Settings
+- **Folders are sections**, with a page count. **`.md` files are pages.**
+- Page names come from the note's title, not its filename.
+- 📌 Notes with `pinned: true` in their header float to the top with a star.
+- 🗓️ Date-named notes (like `2026-06-10.md`) get a calendar icon, friendly labels ("today", "yesterday"), and sort newest-first.
+- Each page shows its modified date, the first few `#tags`, and how many open `- [ ]` tasks it has.
+- Housekeeping folders (`.git`, `templates`, `attachments`, …) are hidden automatically.
+
+Right-click anything for actions: new page, rename, move up/down, export to PDF, delete. You can also **drag and drop** pages between sections.
+
+### Tables of contents — automatic
+
+Every section gets a hidden table-of-contents page, kept up to date for you. It lists the section's pages, shows task-completion stats, and each note gets a small "← back to TOC" link at the top. Click a section in the sidebar to see its TOC. There's also a notebook-wide dashboard and a **Tasks Dashboard** (checklist icon in the toolbar) that gathers every open task across all your notes.
+
+### Daily notes
+
+Click the calendar icon (or run **Notebook: New Daily Note**) to open today's note — it's created in a `Daily` section if it doesn't exist yet. If you have a template named `daily.md`, it's used automatically.
+
+### Templates
+
+**New from Template** creates a page from any `.md` file in your `templates/` folder. Templates can include placeholders that are filled in when the page is created:
+
+`{{title}}`, `{{date}}`, `{{time}}`, `{{datetime}}`, `{{year}}`, `{{month}}`, `{{day}}`, `{{weekday}}`, `{{slug}}`, and `{{cursor}}` (where your cursor should land).
+
+No templates yet? The command offers to create starter `daily` and `meeting` templates for you.
+
+### Renaming without breaking links
+
+**Rename (update links)** — the pencil icon on a page — renames a note *and* updates every `[[wiki-link]]` to it across your notebook, including links with aliases (`[[note|shown text]]`) and section links (`[[note#Heading]]`). Changes to other notes are left as unsaved edits so you can review them before saving. If two notes share the same file name, ambiguous links are left untouched rather than guessed at.
+
+## Importing — get things *into* your notebook
+
+```mermaid
+flowchart TD
+    clip["📋 Copied text or email"] -->|"Import Clipboard as Note"| pandoc["Pandoc tidies it into Markdown"]
+    file["📄 Word / PowerPoint / Excel file"] -->|"Import Document…"| pandoc
+    rclick["Right-click a file in Explorer"] -->|"Convert to Markdown"| pandoc
+    pandoc --> note["✨ A clean note with title,<br/>date, author and tags"]
+    note --> section["…filed into the section you choose"]
+```
+
+Three ways in:
+
+- **Import Clipboard as Note** (clipboard icon): copy anything — an email chain, a web page section, plain text — and it becomes a clean Markdown note. Rich text keeps its links, quoting, and tables. You pick the title and where it goes.
+- **Import Document…** (download icon): pick a Word, PowerPoint, Excel, or other document from anywhere on your computer; it's converted and filed into the section you choose. The original file is never touched.
+- **Right-click a file in the Explorer → Convert to Markdown (Pandoc)**: converts a document that's already in your folder. By default the original is moved to the OS Trash afterwards (recoverable — and you can turn this off).
+
+Converted notes get a proper title (taken from the document's first heading), creation date, your author name, and a `converted` or `imported` tag — so they show up in the Notebook view looking like they belong.
+
+| You can import | Notes |
+|----------------|-------|
+| `.docx` Word | Embedded images are extracted alongside the note |
+| `.pptx` PowerPoint | Needs Pandoc 3.8.3 or newer |
+| `.xlsx` Excel | Needs Pandoc 3.8.3 or newer — each worksheet becomes a table |
+| `.odt`, `.rtf`, `.epub`, `.html` | Also supported |
+
+> Old-style `.doc` / `.ppt` / `.xls` files aren't supported — re-save them in Office as the modern `x` format first.
+
+## Writing and formatting
+
+A **Markdown Format** menu lives in the editor title bar (and the right-click menu) for common formatting, or use the shortcuts:
+
+| Shortcut (Windows/Linux · Mac) | Does |
+|-------------------------------|------|
+| `Alt+Shift+M` · `Cmd+Alt+M` | Open the format picker |
+| `Ctrl+Shift+B` · `Cmd+Shift+B` | **Bold** |
+| `Ctrl+Shift+I` · `Cmd+Shift+I` | *Italic* |
+| `Ctrl+Alt+1/2/3` · `Cmd+Alt+1/2/3` | Heading 1 / 2 / 3 |
+| `Ctrl+Alt+B` · `Cmd+Alt+B` | Bulleted list |
+| `Ctrl+Alt+N` · `Cmd+Alt+N` | Numbered list |
+| `Ctrl+Alt+X` · `Cmd+Alt+X` | Task list item |
+| `Ctrl+Alt+C` · `Cmd+Alt+C` | Check / uncheck a task |
+| `Ctrl+Alt+-` · `Cmd+Alt+-` | Horizontal separator |
+| `Alt+Shift+S` · `Cmd+Alt+S` | Jump from preview to the Markdown source |
+
+## A better preview
+
+The extension upgrades VS Code's built-in Markdown preview (`Ctrl+K V`) — nothing new to learn:
+
+- **GitHub styling** that follows your light/dark mode, with **Standard / Wide / Full** width buttons right in the preview.
+- **Mermaid diagrams**: fence a block with ` ```mermaid ` and it renders as a diagram (like the ones in this README), themed to match your editor and with zoom controls. Works offline.
+- **Task checkboxes** you can see at a glance, and `==highlighted text==` support.
+- Prefer the plain VS Code preview? Set `markdownNotebook.previewTheme` to `off`. Want dark always? Set it to `github-dark`.
+- Want notes to *open* in the pretty preview by default? Turn on `markdownNotebook.alwaysShowPreview`.
+
+An **Outline** panel below the Notebook view tracks the headings of whatever note you're reading and follows along as you scroll.
+
+## Export to PDF (or HTML)
+
+Right-click any note — in the Notebook view, the Explorer, or an editor tab — and choose **Export to PDF…**.
+
+```mermaid
+flowchart TD
+    note["📄 Your note"] --> html["Styled HTML<br/>(GitHub theme, via Pandoc)"]
+    html --> choice{"Save as…"}
+    choice -->|".pdf"| chrome["🖨️ Chrome prints it<br/>(diagrams included)"]
+    choice -->|".html"| selfc["🌐 Self-contained<br/>HTML file"]
+```
+
+- **PDF**: by default a headless Chrome does the printing, so the result looks exactly like the preview — Mermaid diagrams included. If you don't have Chrome installed, the extension offers a one-time download (~150 MB) of a private copy just for exports.
+- **Prefer no browser?** Set `markdownNotebook.pdfEngine` to `auto` to use a lightweight engine instead (it finds WeasyPrint, wkhtmltopdf, or Prince — install one with e.g. `pip install weasyprint`). With these engines, install [mermaid-cli](https://github.com/mermaid-js/mermaid-cli) (`npm i -g @mermaid-js/mermaid-cli`) if you want diagrams rendered in the PDF.
+- **HTML**: choose a `.html` filename in the save dialog instead and you get a single, styled, share-anywhere HTML file.
+
+Exports use a clean light GitHub theme by default — good for printing. Change it with `markdownNotebook.exportTheme`.
+
+## What you need
+
+| For… | You need | Notes |
+|------|----------|-------|
+| Notes, sections, templates, daily notes, tasks, preview | **Nothing extra** | Works out of the box |
+| Importing / converting documents | [Pandoc](https://pandoc.org/installing.html) | macOS: `brew install pandoc` · Windows: `winget install --id JohnMacFarlane.Pandoc` · Linux: `sudo apt install pandoc` |
+| PowerPoint / Excel import | Pandoc **3.8.3+** | Linux distro packages are often older — grab the [latest release](https://github.com/jgm/pandoc/releases) |
+| PDF export | Pandoc + Chrome | Chrome/Chromium is found automatically, or downloaded once with your permission |
+
+## Settings worth knowing
+
+Open them with the gear icon on the Notebook view. The most useful ones:
 
 | Setting | Default | What it does |
 |---------|---------|--------------|
-| `pandocToMarkdown.pandocPath` | `pandoc` | Path to the pandoc executable. |
-| `pandocToMarkdown.deleteOriginal` | `true` | Remove the source file after a successful conversion. |
-| `pandocToMarkdown.useTrash` | `true` | Move removed originals to Trash instead of deleting permanently. |
-| `pandocToMarkdown.confirmDelete` | `false` | Ask once before removing originals. |
-| `pandocToMarkdown.extractMedia` | `true` | Pull embedded images into `<file>_media/` and link them. |
-| `pandocToMarkdown.markdownVariant` | `gfm` | Markdown flavor (gfm renders tables well). |
-| `pandocToMarkdown.wrap` | `none` | Pandoc `--wrap` mode. |
-| `pandocToMarkdown.standalone` | `false` | Emit a YAML metadata header. |
-| `pandocToMarkdown.openAfterConvert` | `true` | Open the result after converting. |
-| `pandocToMarkdown.extraArgs` | `[]` | Extra args appended to every pandoc call. |
+| `markdownNotebook.root` | *(first open folder)* | Use a subfolder (e.g. `notes`) as the notebook instead |
+| `markdownNotebook.author` | *(empty)* | Your name, written into new notes' headers |
+| `markdownNotebook.alwaysShowPreview` | `false` | Open notes in the rendered preview instead of the editor |
+| `markdownNotebook.previewTheme` | `github` | Preview styling: `github`, `github-dark`, or `off` |
+| `markdownNotebook.defaultPageWidth` | `standard` | Preview page width: `standard`, `wide`, or `full` |
+| `markdownNotebook.pdfEngine` | `chrome` | PDF export engine: `chrome`, `auto`, or a specific lightweight engine |
+| `markdownNotebook.exportTheme` | `github` | Styling for PDF/HTML exports |
+| `markdownNotebook.dailyNotePattern` | `YYYY-MM-DD` & friends | Which filenames count as daily notes |
+| `markdownNotebook.templatesFolder` | `templates` | Where your page templates live |
+| `pandocToMarkdown.deleteOriginal` | `true` | Remove the original after converting (to Trash by default) |
+| `pandocToMarkdown.useTrash` | `true` | Trash (recoverable) vs. permanent delete |
 
-## Safety notes
+## Good to know
 
-- The original is only removed **after** pandoc exits successfully.
-- "Cleanup" uses the OS Trash by default, so a mistaken conversion is recoverable. Set `useTrash` to `false` for permanent deletion, or `confirmDelete` to `true` to be asked first.
-- File paths are passed to pandoc as separate arguments (via `execFile`), not through a shell, so names with spaces or special characters are safe.
+- **Your files stay yours.** Everything is plain Markdown; the only extras the extension writes are hidden index files (`.toc.md`, `.tasks.md`, `.notebook-order`) that keep the tables of contents, task dashboard, and your manual page ordering. They're regular text files and safe to commit to git.
+- **Originals are only removed after a conversion succeeds**, and go to the OS Trash by default.
+- File names with spaces or special characters are handled safely — files are passed to Pandoc directly, never through a shell.
 
-## Notebook view
+## Building from source
 
-The extension adds a **Notebook** icon to the activity bar — a note-aware view of your folder that sits alongside (not instead of) the file Explorer.
+```bash
+npm install
+npm run compile   # or: npm run watch
+```
 
-- Folders show as **sections** (book icon) with a child count; `.md` files show as **pages**.
-- Page labels come from the note's `title:` frontmatter, or its first `#` heading, falling back to a humanized filename.
-- `pinned: true` notes float to the top with a star, scanned from anywhere in the notebook.
-- Daily notes (names matching `markdownNotebook.dailyNotePattern`, default `YYYY-MM-DD`) get a calendar icon, friendly dates (today / yesterday), and newest-first order.
-- Inline descriptions show the modified date, the first couple of `#tags`, and a count of open `- [ ]` tasks.
-- Clutter (`.git`, `.vscode`, `_media`, `attachments`, `templates`, non-markdown files) is hidden — configurable via `markdownNotebook.ignoreFolders`.
-- Toolbar / right-click actions: **New Page**, **New Section** (templated with frontmatter), **Refresh**, **Reveal in Explorer**.
+Open the folder in VS Code and press `F5` to try it in an Extension Development Host, or package and install it:
 
-Notebook settings live under `markdownNotebook.*` (`root`, `ignoreFolders`, `dailyNotePattern`, `templatesFolder`, `author`).
-
-### Import a document into the tree
-
-**Import Document…** (the download icon on the Notebook toolbar) lets you bring in a Word/PowerPoint/Excel/etc. file from anywhere on disk: pick the file, choose which section it should land in (any folder in your notebook, or create a new section on the spot), and it's copied in and converted to Markdown there. The original file outside your notebook is never touched. This is the menu-driven counterpart to right-clicking a file that's already in the workspace.
-
-### Import copied text (paste → Markdown)
-
-Two commands turn whatever you've copied into a clean note, without saving a file first:
-
-- **Import Clipboard as Note** (clipboard icon on the view toolbar) reads your clipboard directly.
-- **Import Pasted Text as Note** (Command Palette) opens an input box pre-filled from the clipboard so you can trim it first.
-
-The text is piped through pandoc. If it looks like rich text / HTML (as a copied email chain usually is), it's read as HTML so quoting, links, and tables survive; otherwise it's cleaned up as Markdown. You're then asked for a **title (optional — leave it blank to use the detected title** from the first heading or line) and **where in the tree** to put it. The note is saved with `title:`, `created:`, your `author:` (if set), and a `tags: [imported]` block.
-
-### Daily / dated notes
-
-Notes whose filename matches `dailyNotePattern` get a calendar icon and date-aware sorting. If the note also has a title (frontmatter or `# H1`), the **title is shown as the label with the date alongside it** — e.g. `2026-05-28-budget-sync.md` titled "Budget Sync" shows as **Budget Sync · May 28** — so you get the meeting context at a glance. A bare daily with no title still shows the formatted date (**Thu, May 28 · today**). Dates from a previous year include the year.
-
-**New from Template** (view toolbar or right-click a section) lists the `.md` files in your `templatesFolder` (default `templates/`, which is hidden from the tree), asks for a title, and creates a page from the chosen template. If you have no templates yet, it offers to drop in starter `daily.md` and `meeting.md` files.
-
-Templates support these placeholders: `{{title}}`, `{{slug}}`, `{{date}}`, `{{time}}`, `{{datetime}}`, `{{year}}`, `{{month}}`, `{{day}}`, `{{weekday}}`, and a `{{cursor}}` marker that positions your cursor in the new note.
-
-### Reordering
-
-- **Move Up / Move Down** (right-click a page) and **drag-and-drop** let you arrange pages manually.
-- Drag a page or section **onto another section** to move it there.
-- Drop a page **onto another page in the same section** to place it just before that page.
-- Manual order is stored in a hidden `.notebook-order` file per folder (one filename per line), so notes themselves stay clean and the order survives in git. Pages not listed there fall back to the default daily/alphabetical sort.
-
-### Rename (link-preserving)
-
-**Rename (update links)** (the pencil on a page, or right-click) renames a note and keeps `[[wiki-links]]` intact:
-
-- Updates the file's `title:` frontmatter and a leading `# H1` that matched the old title.
-- Renames the file (slugified) and rewrites every `[[old-name]]` reference across the notebook to the new name — preserving aliases (`[[old|Text]]`), headings/blocks (`[[old#Section]]`), `.md` suffixes, and folder-qualified targets (`[[dir/old]]`). Matching is by note name and case-insensitive.
-- Edits to other notes are applied as **unsaved** changes so you can review them before saving (Save All to commit). Moving a note between sections doesn't need link updates, since wiki-links resolve by name, not path.
-
-## Enhanced Markdown preview
-
-The extension upgrades VS Code's built-in Markdown preview (no separate preview window to learn):
-
-- **Mermaid diagrams** — ` ```mermaid ` fenced blocks render as diagrams, themed to match your light/dark mode. Mermaid is vendored, so it works offline.
-- **GitHub theme** — a faithful GitHub-style stylesheet that follows your VS Code light/dark mode (or force dark with `markdownNotebook.previewTheme`).
-- **Task lists** — `- [ ]` / `- [x]` render as checkboxes.
-- **`==highlight==`** → highlighted text.
-- External links open in a new tab.
-
-These apply to the standard preview (the open-preview button / `Ctrl+K V`); there's nothing extra to launch.
-
-## Export to PDF
-
-Right-click a note in the Notebook view (or use the inline PDF button that appears when you hover a page), or right-click any `.md` file in the Explorer / editor tab, and choose **Export to PDF…**. You pick where to save, and the note is rendered to PDF with the same GitHub theme as the preview.
-
-How it works (no LaTeX, no bundled browser): pandoc converts the note to HTML, the theme CSS is inlined, and a lightweight HTML-based PDF engine produces the file. Configure the engine with `markdownNotebook.pdfEngine` (`auto` tries WeasyPrint → wkhtmltopdf → Prince). Install one with e.g. `pip install weasyprint`.
-
-- **Mermaid in PDF:** if you have mermaid-cli (`npm i -g @mermaid-js/mermaid-cli`), diagrams are pre-rendered to SVG and appear in the PDF; without it, they're left as code and you're told how to enable them. (The live preview renders Mermaid without mermaid-cli.)
-- **No PDF engine installed?** Save with a `.html` extension in the dialog instead — you get a styled, self-contained HTML file with no extra dependencies.
+```bash
+npm install -g @vscode/vsce
+vsce package
+code --install-extension markdown-notebook-*.vsix
+```
 
 ## License
 
