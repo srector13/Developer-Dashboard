@@ -86,7 +86,8 @@ async function runImport(
   
   // Ensure we tag it 'imported' along with any chosen tags!
   const finalTags = Array.from(new Set(['imported', ...tags]));
-  fm.push(`tags: [${finalTags.join(', ')}]`, '---', '', body, '');
+  const backlink = `[← ${path.basename(destDir)} TOC](.toc.md)`;
+  fm.push(`tags: [${finalTags.join(', ')}]`, '---', '', backlink, '', body, '');
   const content = fm.join('\n');
 
   await vscode.workspace.fs.createDirectory(vscode.Uri.file(destDir));

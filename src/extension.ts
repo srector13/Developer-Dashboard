@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { registerNotebook, resolveRoot, checkAndPromptMigration, updateTasksDashboard, updateTOC, updateMasterTOC, updateTOCsUpToRoot } from './notebookView';
+import { registerNotebook, resolveRoot, checkAndPromptMigration, scheduleIndexUpdate } from './notebookView';
 import { registerPasteImport } from './pasteImport';
 import { pickDestination } from './notebookFs';
 import { extendMarkdownIt } from './markdownItExtensions';
@@ -403,7 +403,8 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (
         e.affectsConfiguration('markdownNotebook.defaultPageWidth') ||
-        e.affectsConfiguration('markdownNotebook.defaultMermaidZoom')
+        e.affectsConfiguration('markdownNotebook.defaultMermaidZoom') ||
+        e.affectsConfiguration('markdownNotebook.previewTheme')
       ) {
         writePreviewSettings(context);
       }
@@ -413,9 +414,10 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
-  // Auto-update Tasks Dashboard and TOCs when any markdown file inside the notebook is saved
+  // Auto-update Tasks Dashboard and TOCs when any markdown file inside the
+  // notebook is saved (debounced and serialized with the watcher updates).
   context.subscriptions.push(
-    vscode.workspace.onDidSaveTextDocument(async (document) => {
+    vscode.workspace.onDidSaveTextDocument((document) => {
       if (document.languageId === 'markdown') {
         const root = resolveRoot();
         if (root) {
@@ -425,10 +427,7 @@ export function activate(context: vscode.ExtensionContext) {
             const relative = path.relative(root.fsPath, filePath);
             const isInside = relative && !relative.startsWith('..') && !path.isAbsolute(relative);
             if (isInside) {
-              const parentDir = path.dirname(filePath);
-              await updateTOCsUpToRoot(parentDir, root.fsPath);
-              await updateMasterTOC(root.fsPath);
-              await updateTasksDashboard(root.fsPath);
+              scheduleIndexUpdate(path.dirname(filePath), root.fsPath);
             }
           }
         }
@@ -894,7 +893,19 @@ async function addFrontmatter(outPath: string, fallbackBase: string, metadata?: 
   }
   
   const finalTags = Array.from(new Set(['converted', ...(metadata?.tags || [])]));
-  lines.push(`tags: [${finalTags.join(', ')}]`, '---', '', body.replace(/^\r?\n+/, ''));
+  lines.push(`tags: [${finalTags.join(', ')}]`, '---', '');
+
+  // Converted notes that land inside the notebook get the same TOC backlink
+  // that newly created pages do.
+  const root = resolveRoot();
+  if (root) {
+    const rel = path.relative(root.fsPath, outPath);
+    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+      lines.push(`[← ${path.basename(path.dirname(outPath))} TOC](.toc.md)`, '');
+    }
+  }
+
+  lines.push(body.replace(/^\r?\n+/, ''));
 
   await fsp.writeFile(outPath, lines.join('\n'), 'utf8');
 }
@@ -1001,11 +1012,13 @@ async function writePreviewSettings(context: vscode.ExtensionContext): Promise<v
   const cfg = vscode.workspace.getConfiguration('markdownNotebook');
   const pageWidth = cfg.get<string>('defaultPageWidth', 'standard');
   const mermaidZoom = cfg.get<number>('defaultMermaidZoom', 100);
+  const previewTheme = cfg.get<string>('previewTheme', 'github');
 
   const filePath = path.join(context.extensionPath, 'media', 'preview-settings.js');
   const content = `window.notebookSettings = {
   defaultPageWidth: ${JSON.stringify(pageWidth)},
-  defaultMermaidZoom: ${mermaidZoom}
+  defaultMermaidZoom: ${JSON.stringify(Number(mermaidZoom) || 100)},
+  previewTheme: ${JSON.stringify(previewTheme)}
 };`;
 
   try {

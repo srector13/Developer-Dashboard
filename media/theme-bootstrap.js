@@ -9,6 +9,14 @@
       setTimeout(apply, 10);
       return;
     }
+
+    // Honor the markdownNotebook.previewTheme setting: 'off' leaves the stock
+    // VS Code preview untouched; 'github-dark' forces the dark variant unless
+    // the user picked something else from the in-preview toolbar.
+    var settingTheme = (window.notebookSettings && window.notebookSettings.previewTheme) || 'github';
+    if (settingTheme === 'off') {
+      return;
+    }
     document.body.classList.add('notebook-github-theme');
 
     // Apply layout width constraints from local storage preference or default settings
@@ -18,7 +26,8 @@
     document.body.classList.add('notebook-width-' + currentWidthMode);
 
     // Apply theme overrides
-    var currentThemeMode = localStorage.getItem('notebook-theme-mode') || 'auto';
+    var defaultThemeMode = settingTheme === 'github-dark' ? 'dark' : 'auto';
+    var currentThemeMode = localStorage.getItem('notebook-theme-mode') || defaultThemeMode;
     applyThemeMode(currentThemeMode);
 
     // Inject Toolbar if not already present
