@@ -319,11 +319,6 @@
         "view": "markdownNotebook.view",
         "contents": "No folder is open.\nOpen a folder to use it as your notebook.\n[Open Folder](command:vscode.openFolder)",
         "when": "workbenchState == empty"
-      },
-      {
-        "view": "markdownNotebook.view",
-        "contents": "This notebook has no pages yet.\n[New Page](command:markdownNotebook.newPage)",
-        "when": "workbenchState != empty"
       }
     ],
     "menus": {
@@ -343,6 +338,22 @@
         {
           "command": "pandocToMarkdown.convert",
           "when": "resourceExtname =~ /^\\.(docx|pptx|xlsx|odt|rtf|epub|html?)$/i"
+        },
+        {
+          "command": "markdownNotebook.toggleTaskAtLine",
+          "when": "false"
+        },
+        {
+          "command": "markdownNotebook.toggleMermaidOrientationAtLine",
+          "when": "false"
+        },
+        {
+          "command": "markdownNotebook.outline.goToLine",
+          "when": "false"
+        },
+        {
+          "command": "markdownNotebook.outline.previewScrolled",
+          "when": "false"
         }
       ],
       "view/title": [

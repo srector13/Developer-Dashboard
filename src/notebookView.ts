@@ -241,6 +241,36 @@ export class NotebookProvider implements vscode.TreeDataProvider<NoteNode> {
 }
 
 
+/**
+ * Parse a date fragment matched by a daily-note pattern into a YYYY-MM-DD key.
+ * Accepts year-first (2026-06-10) and US-first with 2- or 4-digit years
+ * (6-10-26), and validates month/day ranges so e.g. 31-12-2026 isn't taken
+ * for month 31.
+ */
+function parseDailyKey(fragment: string): string | undefined {
+  let y: number;
+  let m: number;
+  let d: number;
+  const yearFirst = fragment.match(/(\d{4})[-_](\d{1,2})[-_](\d{1,2})/);
+  if (yearFirst) {
+    y = +yearFirst[1];
+    m = +yearFirst[2];
+    d = +yearFirst[3];
+  } else {
+    const usFirst = fragment.match(/(\d{1,2})[-_](\d{1,2})[-_](\d{4}|\d{2})(?!\d)/);
+    if (!usFirst) {
+      return undefined;
+    }
+    m = +usFirst[1];
+    d = +usFirst[2];
+    y = usFirst[3].length === 2 ? 2000 + +usFirst[3] : +usFirst[3];
+  }
+  if (m < 1 || m > 12 || d < 1 || d > 31) {
+    return undefined;
+  }
+  return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
 function computeDisplayTitle(name: string, meta: NoteMeta, dailyRegexes: RegExp[]): string {
   let isDaily = false;
   let dailyKey: string | undefined = undefined;
@@ -248,22 +278,10 @@ function computeDisplayTitle(name: string, meta: NoteMeta, dailyRegexes: RegExp[
 
   for (const re of dailyRegexes) {
     const match = name.match(re);
-    if (match) {
-      // 1. Try parsing Year-first format: YYYY-MM-DD or YYYY_MM_DD
-      const yearFirst = match[0].match(/(\d{4})[-_](\d{1,2})[-_](\d{1,2})/);
-      if (yearFirst) {
-        isDaily = true;
-        matchedDateStr = match[0];
-        break;
-      }
-
-      // 2. Try parsing US-first format: MM-DD-YYYY or MM_DD_YYYY
-      const usFirst = match[0].match(/(\d{1,2})[-_](\d{1,2})[-_](\d{4})/);
-      if (usFirst) {
-        isDaily = true;
-        matchedDateStr = match[0];
-        break;
-      }
+    if (match && parseDailyKey(match[0])) {
+      isDaily = true;
+      matchedDateStr = match[0];
+      break;
     }
   }
 
@@ -371,17 +389,10 @@ async function makePage(full: string, name: string, dailyRegexes: RegExp[], coll
   for (const re of dailyRegexes) {
     const match = name.match(re);
     if (match) {
-      const yearFirst = match[0].match(/(\d{4})[-_](\d{1,2})[-_](\d{1,2})/);
-      if (yearFirst) {
+      const key = parseDailyKey(match[0]);
+      if (key) {
         isDaily = true;
-        dailyKey = `${yearFirst[1]}-${yearFirst[2].padStart(2, '0')}-${yearFirst[3].padStart(2, '0')}`;
-        break;
-      }
-
-      const usFirst = match[0].match(/(\d{1,2})[-_](\d{1,2})[-_](\d{4})/);
-      if (usFirst) {
-        isDaily = true;
-        dailyKey = `${usFirst[3]}-${usFirst[1].padStart(2, '0')}-${usFirst[2].padStart(2, '0')}`;
+        dailyKey = key;
         break;
       }
     }
@@ -547,7 +558,10 @@ async function countPages(dir: string, ignore: Set<string>): Promise<number> {
   return n;
 }
 
-async function hasPagesWithTag(dirPath: string, tag: string, ignore: Set<string>): Promise<boolean> {
+async function hasPagesWithTag(dirPath: string, tag: string, ignore: Set<string>, depth = 0): Promise<boolean> {
+  if (depth > 8) {
+    return false; // depth cap also guards against cyclic symlinks
+  }
   let entries: fs.Dirent[];
   try {
     entries = await fsp.readdir(dirPath, { withFileTypes: true });
@@ -559,7 +573,7 @@ async function hasPagesWithTag(dirPath: string, tag: string, ignore: Set<string>
     const full = path.join(dirPath, entry.name);
     if (entry.isDirectory()) {
       if (ignore.has(entry.name.toLowerCase())) { continue; }
-      if (await hasPagesWithTag(full, tag, ignore)) {
+      if (await hasPagesWithTag(full, tag, ignore, depth + 1)) {
         return true;
       }
     } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md') && entry.name !== '.toc.md') {
@@ -823,11 +837,14 @@ function withIndexLock<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 function dirChainToRoot(startDir: string, rootDir: string): string[] {
+  const root = path.normalize(rootDir);
   const chain: string[] = [];
-  let currentDir = startDir;
-  while (currentDir.length >= rootDir.length && currentDir.startsWith(rootDir)) {
+  let currentDir = path.normalize(startDir);
+  // Require a separator boundary so a sibling like "/notes-archive" is not
+  // mistaken for being inside a root of "/notes".
+  while (currentDir === root || currentDir.startsWith(root + path.sep)) {
     chain.push(currentDir);
-    if (currentDir === rootDir) break;
+    if (currentDir === root) break;
     const parent = path.dirname(currentDir);
     if (parent === currentDir) break;
     currentDir = parent;
@@ -1078,14 +1095,26 @@ export function registerNotebook(context: vscode.ExtensionContext): void {
     }),
   );
 
-  // File watcher to update TOCs on create/delete/rename of markdown files
-  const root = resolveRoot();
-  if (root) {
-    // Watcher events (including bursts from git checkouts or bulk copies) are
-    // coalesced into a single debounced, serialized index update. Note files
-    // are never modified from here — backlinks are written only by the code
-    // paths that create notes, so externally created files stay untouched.
-    const refresh = () => provider.refresh();
+  // File watchers to update TOCs on create/delete/rename of markdown files.
+  // Watcher events (including bursts from git checkouts or bulk copies) are
+  // coalesced into a single debounced, serialized index update. Note files
+  // are never modified from here — backlinks are written only by the code
+  // paths that create notes, so externally created files stay untouched.
+  // Watchers are rebuilt when the notebook root or workspace folders change.
+  const refresh = () => provider.refresh();
+  let watcherDisposables: vscode.Disposable[] = [];
+
+  const setupWatchers = () => {
+    for (const d of watcherDisposables) {
+      d.dispose();
+    }
+    watcherDisposables = [];
+
+    const root = resolveRoot();
+    if (!root) {
+      return;
+    }
+
     const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, '**/*.md'));
     watcher.onDidCreate((uri) => {
       const base = path.basename(uri.fsPath);
@@ -1102,7 +1131,7 @@ export function registerNotebook(context: vscode.ExtensionContext): void {
       if (base.startsWith('.')) { return; }
       scheduleIndexUpdate(path.dirname(uri.fsPath), root.fsPath, refresh);
     });
-    context.subscriptions.push(watcher);
+    watcherDisposables.push(watcher);
 
     const folderWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, '**/'));
     folderWatcher.onDidCreate((uri) => {
@@ -1111,8 +1140,32 @@ export function registerNotebook(context: vscode.ExtensionContext): void {
     folderWatcher.onDidDelete((uri) => {
       scheduleIndexUpdate(path.dirname(uri.fsPath), root.fsPath, refresh);
     });
-    context.subscriptions.push(folderWatcher);
-  }
+    watcherDisposables.push(folderWatcher);
+  };
+
+  setupWatchers();
+  context.subscriptions.push(
+    new vscode.Disposable(() => {
+      for (const d of watcherDisposables) {
+        d.dispose();
+      }
+    }),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      setupWatchers();
+      provider.refresh();
+    }),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('markdownNotebook.root')) {
+        setupWatchers();
+        provider.refresh();
+      } else if (
+        e.affectsConfiguration('markdownNotebook.ignoreFolders') ||
+        e.affectsConfiguration('markdownNotebook.dailyNotePattern')
+      ) {
+        provider.refresh();
+      }
+    }),
+  );
 }
 
 async function newPage(node: NoteNode | undefined, provider: NotebookProvider): Promise<void> {
@@ -1138,13 +1191,13 @@ async function newPage(node: NoteNode | undefined, provider: NotebookProvider): 
   const fileName = await uniqueMd(targetDir, baseSlug);
   const createdDate = dateKey || localDateKey();
   const author = vscode.workspace.getConfiguration('markdownNotebook').get<string>('author', '').trim();
-  const authorLine = author ? `author: ${author}\n` : '';
+  const authorLine = author ? `author: ${yamlValue(author)}\n` : '';
   const parentDirName = path.basename(targetDir);
   const backlink = `[← ${parentDirName} TOC](.toc.md)`;
-  
-  const tagsStr = tags.length > 0 ? `tags: [${tags.join(', ')}]\n` : 'tags: []\n';
-  
-  const body = `---\ntitle: ${title}\ncreated: ${createdDate}\n${authorLine}${tagsStr}---\n\n${backlink}\n\n# ${title}\n\n`;
+
+  const tagsStr = tags.length > 0 ? `tags: [${tags.map(yamlValue).join(', ')}]\n` : 'tags: []\n';
+
+  const body = `---\ntitle: ${yamlValue(title)}\ncreated: ${createdDate}\n${authorLine}${tagsStr}---\n\n${backlink}\n\n# ${title}\n\n`;
   const target = vscode.Uri.file(path.join(targetDir, fileName));
   try {
     await vscode.workspace.fs.writeFile(target, Buffer.from(body, 'utf8'));
@@ -1236,8 +1289,8 @@ async function newDailyNote(provider: NotebookProvider): Promise<void> {
   if (!text) {
     // Write dynamic fallback daily note content
     const author = vscode.workspace.getConfiguration('markdownNotebook').get<string>('author', '').trim();
-    const authorLine = author ? `author: ${author}\n` : '';
-    text = `---\ntitle: Daily Note: ${dateStr}\ncreated: ${dateStr}\n${authorLine}tags: [daily]\n---\n\n${backlink}\n\n# Daily Note: ${dateStr}\n\n## Tasks\n- [ ] \n`;
+    const authorLine = author ? `author: ${yamlValue(author)}\n` : '';
+    text = `---\ntitle: ${yamlValue(`Daily Note: ${dateStr}`)}\ncreated: ${dateStr}\n${authorLine}tags: [daily]\n---\n\n${backlink}\n\n# Daily Note: ${dateStr}\n\n## Tasks\n- [ ] \n`;
   } else {
     // Inject backlink into template content
     const fm = text.match(/^(---\r?\n[\s\S]*?\r?\n---)(?=[ \t]*(?:\r?\n|$))/);
@@ -1618,11 +1671,12 @@ async function renamePage(node: NoteNode | undefined, provider: NotebookProvider
     vscode.window.showErrorMessage(`Notebook: rename failed (${String(err)}).`);
     return;
   }
+  const oldOrderName = path.basename(oldPath).toLowerCase();
   const ord = await readOrderFile(dir);
-  if (ord.includes(path.basename(oldPath))) {
+  if (ord.some((n) => n.toLowerCase() === oldOrderName)) {
     await writeOrderFile(
       dir,
-      ord.map((n) => (n === path.basename(oldPath) ? path.basename(newPath) : n)),
+      ord.map((n) => (n.toLowerCase() === oldOrderName ? path.basename(newPath) : n)),
     );
   }
 
@@ -1722,11 +1776,12 @@ async function renameSection(node: NoteNode | undefined, provider: NotebookProvi
   }
 
   // 3) Update parent folder manual ordering sidecar
+  const oldDirNameLc = oldDirName.toLowerCase();
   const ord = await readOrderFile(parentDir);
-  if (ord.includes(oldDirName)) {
+  if (ord.some((n) => n.toLowerCase() === oldDirNameLc)) {
     await writeOrderFile(
       parentDir,
-      ord.map((n) => (n === oldDirName ? newDirName : n)),
+      ord.map((n) => (n.toLowerCase() === oldDirNameLc ? newDirName : n)),
     );
   }
 
@@ -1872,7 +1927,9 @@ function parseTitle(text: string): string | undefined {
 }
 
 function yamlValue(s: string): string {
-  return /[:#\[\]{}",]|^\s|\s$/.test(s) ? JSON.stringify(s) : s;
+  // Quote anything YAML could misread: flow/comment/quote characters anywhere,
+  // indicator characters at the start, surrounding whitespace, or emptiness.
+  return /[:#\[\]{}",'`]|^[\s\-*&?>|%@!]|\s$|^$/.test(s) ? JSON.stringify(s) : s;
 }
 
 function fullRangeOf(doc: vscode.TextDocument): vscode.Range {
@@ -1915,7 +1972,12 @@ class NotebookDnD implements vscode.TreeDragAndDropController<NoteNode> {
   constructor(private readonly provider: NotebookProvider) {}
 
   handleDrag(source: readonly NoteNode[], dataTransfer: vscode.DataTransfer): void {
-    dataTransfer.set(DND_MIME, new vscode.DataTransferItem(source.map((n) => n.fsPath)));
+    // The dashboard node is the master .toc.md — moving it makes no sense.
+    const movable = source.filter((n) => n.contextValue !== 'masterTOC');
+    if (movable.length === 0) {
+      return;
+    }
+    dataTransfer.set(DND_MIME, new vscode.DataTransferItem(movable.map((n) => n.fsPath)));
   }
 
   async handleDrop(target: NoteNode | undefined, dataTransfer: vscode.DataTransfer): Promise<void> {
@@ -1966,6 +2028,11 @@ class NotebookDnD implements vscode.TreeDragAndDropController<NoteNode> {
       if (path.normalize(src) === path.normalize(destDir)) {
         continue; // can't drop a folder into itself
       }
+      const relToSrc = path.relative(path.normalize(src), path.normalize(destDir));
+      if (relToSrc && !relToSrc.startsWith('..') && !path.isAbsolute(relToSrc)) {
+        vscode.window.showWarningMessage('Notebook: cannot move a section into its own subfolder.');
+        continue;
+      }
       const srcDir = path.dirname(src);
       if (path.normalize(srcDir) === path.normalize(destDir)) {
         if (beforeBase && src.toLowerCase().endsWith('.md')) {
@@ -1998,9 +2065,10 @@ async function moveInto(srcPath: string, destDir: string): Promise<void> {
     return;
   }
   const srcDir = path.dirname(srcPath);
+  const baseLc = base.toLowerCase();
   const ord = await readOrderFile(srcDir);
-  if (ord.includes(base)) {
-    await writeOrderFile(srcDir, ord.filter((n) => n !== base));
+  if (ord.some((n) => n.toLowerCase() === baseLc)) {
+    await writeOrderFile(srcDir, ord.filter((n) => n.toLowerCase() !== baseLc));
   }
 }
 

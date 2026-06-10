@@ -40,8 +40,7 @@ export class OutlineTreeDataProvider implements vscode.TreeDataProvider<OutlineN
   constructor() {}
 
   refresh(): void {
-    this.buildOutline();
-    this._onDidChangeTreeData.fire();
+    void this.buildOutline().then(() => this._onDidChangeTreeData.fire());
   }
 
   getTreeItem(element: OutlineNode): vscode.TreeItem {
@@ -62,12 +61,12 @@ export class OutlineTreeDataProvider implements vscode.TreeDataProvider<OutlineN
       return element.children;
     }
     if (this.rootNodes.length === 0) {
-      this.buildOutline();
+      await this.buildOutline();
     }
     return this.rootNodes;
   }
 
-  private buildOutline(): OutlineNode[] {
+  private async buildOutline(): Promise<OutlineNode[]> {
     const editor = vscode.window.activeTextEditor;
     let text = '';
     let uri: vscode.Uri | undefined = undefined;
@@ -78,11 +77,13 @@ export class OutlineTreeDataProvider implements vscode.TreeDataProvider<OutlineN
     } else if (this.currentUri) {
       uri = this.currentUri;
       try {
-        text = fs.readFileSync(uri.fsPath, 'utf8');
+        text = await fs.promises.readFile(uri.fsPath, 'utf8');
       } catch {
+        this.rootNodes = [];
         return [];
       }
     } else {
+      this.rootNodes = [];
       return [];
     }
 
@@ -96,8 +97,24 @@ export class OutlineTreeDataProvider implements vscode.TreeDataProvider<OutlineN
     const roots: OutlineNode[] = [];
     const stack: OutlineNode[] = [];
 
+    let fenceChar = ''; // non-empty while inside a ``` / ~~~ code fence
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
+
+      // '# comment' lines inside fenced code blocks are not headings.
+      const fence = line.match(/^\s*(`{3,}|~{3,})/);
+      if (fence) {
+        if (!fenceChar) {
+          fenceChar = fence[1][0];
+        } else if (fence[1][0] === fenceChar) {
+          fenceChar = '';
+        }
+        continue;
+      }
+      if (fenceChar) {
+        continue;
+      }
+
       const match = line.match(/^([#]{1,6})\s+(.+)$/);
       if (!match) {
         continue;

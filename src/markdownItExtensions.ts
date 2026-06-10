@@ -80,8 +80,11 @@ function addMark(md: MarkdownIt): void {
     if (src.charCodeAt(start) !== 0x3d /* = */ || src.charCodeAt(start + 1) !== 0x3d) {
       return false;
     }
+    // The closing == must be non-adjacent and inside this inline run —
+    // searching past posMax would pair with a == in a later construct and
+    // swallow everything in between.
     const end = src.indexOf('==', start + 2);
-    if (end < 0) {
+    if (end < 0 || end === start + 2 || end + 2 > state.posMax) {
       return false;
     }
     if (!silent) {
@@ -200,8 +203,8 @@ function addTaskLists(md: MarkdownIt): void {
           }
         }
       }
-      if (parent.attrPush) {
-        parent.attrPush(['class', 'task-list-item']);
+      if (parent.attrJoin) {
+        parent.attrJoin('class', 'task-list-item');
       }
     } else if (children) {
       const checkboxIdx = children.findIndex((c: any) => {
@@ -225,8 +228,8 @@ function addTaskLists(md: MarkdownIt): void {
         
         children.splice(checkboxIdx, 1, ...tokensToInsert);
         
-        if (parent.attrPush) {
-          parent.attrPush(['class', 'task-list-item']);
+        if (parent.attrJoin) {
+          parent.attrJoin('class', 'task-list-item');
         }
       }
     }

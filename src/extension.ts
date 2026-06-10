@@ -86,7 +86,8 @@ export function activate(context: vscode.ExtensionContext) {
       if (outlineProvider.activeHeadingLine !== activeHeading.line) {
         outlineProvider.activeHeadingLine = activeHeading.line;
         outlineProvider.refresh();
-        outlineTreeView.reveal(activeHeading, { select: true, focus: false });
+        // reveal can reject if the node was disposed by a concurrent refresh.
+        outlineTreeView.reveal(activeHeading, { select: true, focus: false }).then(undefined, () => {});
       }
     } else {
       if (outlineProvider.activeHeadingLine !== undefined) {
@@ -367,6 +368,10 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   // Helper to sync Outline panel when preview tabs are changed or navigated
+  // The disk scan is slow, so stamp each sync attempt: when tabs change
+  // rapidly, a late-resolving older lookup must not overwrite the result of a
+  // newer one with the previous tab's file.
+  let tabSyncSeq = 0;
   async function syncOutlineForTab(label: string) {
     const root = resolveRoot();
     if (!root) { return; }
@@ -374,7 +379,9 @@ export function activate(context: vscode.ExtensionContext) {
     const cleanName = label.replace(/^Preview\s+/i, '').trim();
     if (!cleanName) { return; }
 
+    const seq = ++tabSyncSeq;
     const targetUri = await findFileByName(root.fsPath, cleanName);
+    if (seq !== tabSyncSeq) { return; }
     if (targetUri && outlineProvider.currentUri?.toString() !== targetUri.toString()) {
       outlineProvider.currentUri = targetUri;
       outlineProvider.refresh();
@@ -866,7 +873,7 @@ async function addFrontmatter(outPath: string, fallbackBase: string, metadata?: 
 
   // Promote a leading H1 to the title (and drop it from the body, since the
   // title now lives in frontmatter — avoids a duplicated heading in the note).
-  const h1 = body.match(/^\uFEFF?[ \t]*#[ \t]+(.+?)[ \t]*\r?\n+/);
+  const h1 = body.match(/^\uFEFF?[ \t]*#[ \t]+(.+?)[ \t]*(?:\r?\n+|$)/);
   if (h1) {
     if (!title) {
       title = h1[1].trim();
@@ -890,7 +897,7 @@ async function addFrontmatter(outPath: string, fallbackBase: string, metadata?: 
   }
   
   const finalTags = Array.from(new Set(['converted', ...(metadata?.tags || [])]));
-  lines.push(`tags: [${finalTags.join(', ')}]`, '---', '');
+  lines.push(`tags: [${finalTags.map(yamlValue).join(', ')}]`, '---', '');
 
   // Converted notes that land inside the notebook get the same TOC backlink
   // that newly created pages do.
@@ -904,7 +911,9 @@ async function addFrontmatter(outPath: string, fallbackBase: string, metadata?: 
 
   lines.push(body.replace(/^\r?\n+/, ''));
 
-  await fsp.writeFile(outPath, lines.join('\n'), 'utf8');
+  // Keep the file's line endings consistent with the converted body.
+  const eol = body.includes('\r\n') ? '\r\n' : '\n';
+  await fsp.writeFile(outPath, lines.join(eol), 'utf8');
 }
 
 function humanize(base: string): string {
@@ -913,7 +922,9 @@ function humanize(base: string): string {
 }
 
 function yamlValue(s: string): string {
-  return /[:#\[\]{}",]|^\s|\s$/.test(s) ? JSON.stringify(s) : s;
+  // Quote anything YAML could misread: flow/comment/quote characters anywhere,
+  // indicator characters at the start, surrounding whitespace, or emptiness.
+  return /[:#\[\]{}",'`]|^[\s\-*&?>|%@!]|\s$|^$/.test(s) ? JSON.stringify(s) : s;
 }
 
 async function uniquePath(dir: string, base: string, ext: string): Promise<string> {
