@@ -777,16 +777,82 @@ export function resolveRoot(): vscode.Uri | undefined {
   return folders && folders.length > 0 ? folders[0].uri : undefined;
 }
 
-// Helper to update TOCs up the chain
-export async function updateTOCsUpToRoot(startDir: string, rootDir: string) {
+// ───────────────────────── Index regeneration (TOCs, dashboard) ─────────────────────────
+// Every write to .toc.md / .tasks.md goes through a single lock so concurrent
+// triggers (file watchers, saves, renames) can't interleave writes to the same file.
+let indexLock: Promise<unknown> = Promise.resolve();
+function withIndexLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = indexLock.then(fn, fn);
+  indexLock = run.catch(() => undefined);
+  return run;
+}
+
+function dirChainToRoot(startDir: string, rootDir: string): string[] {
+  const chain: string[] = [];
   let currentDir = startDir;
   while (currentDir.length >= rootDir.length && currentDir.startsWith(rootDir)) {
-    await updateTOC(currentDir);
+    chain.push(currentDir);
     if (currentDir === rootDir) break;
     const parent = path.dirname(currentDir);
     if (parent === currentDir) break;
     currentDir = parent;
   }
+  return chain;
+}
+
+// Helper to update TOCs up the chain
+export async function updateTOCsUpToRoot(startDir: string, rootDir: string) {
+  await withIndexLock(async () => {
+    for (const dir of dirChainToRoot(startDir, rootDir)) {
+      await updateTOCImpl(dir);
+    }
+  });
+}
+
+// Debounced, coalesced refresh of all indexes affected by a set of changed
+// directories. Watcher and save events funnel through here, so a burst of
+// changes (git checkout, bulk import) results in a single notebook-wide pass.
+const pendingIndexDirs = new Set<string>();
+const pendingIndexCallbacks = new Set<() => void>();
+let pendingIndexRoot: string | undefined;
+let pendingIndexTimer: ReturnType<typeof setTimeout> | undefined;
+
+export function scheduleIndexUpdate(startDir: string, rootDir: string, onDone?: () => void): void {
+  pendingIndexDirs.add(startDir);
+  pendingIndexRoot = rootDir;
+  if (onDone) {
+    pendingIndexCallbacks.add(onDone);
+  }
+  if (pendingIndexTimer) {
+    clearTimeout(pendingIndexTimer);
+  }
+  pendingIndexTimer = setTimeout(() => {
+    pendingIndexTimer = undefined;
+    const dirs = [...pendingIndexDirs];
+    pendingIndexDirs.clear();
+    const root = pendingIndexRoot!;
+    const callbacks = [...pendingIndexCallbacks];
+    pendingIndexCallbacks.clear();
+    void withIndexLock(async () => {
+      const chain = new Set<string>();
+      for (const d of dirs) {
+        for (const c of dirChainToRoot(d, root)) {
+          chain.add(c);
+        }
+      }
+      for (const dir of chain) {
+        await updateTOCImpl(dir);
+      }
+      await updateMasterTOCImpl(root);
+      await updateTasksDashboardImpl(root);
+    })
+      .catch((err) => console.error('Notebook: index update failed:', err))
+      .finally(() => {
+        for (const cb of callbacks) {
+          cb();
+        }
+      });
+  }, 500);
 }
 
 export function registerNotebook(context: vscode.ExtensionContext): void {
@@ -980,63 +1046,35 @@ export function registerNotebook(context: vscode.ExtensionContext): void {
   // File watcher to update TOCs on create/delete/rename of markdown files
   const root = resolveRoot();
   if (root) {
+    // Watcher events (including bursts from git checkouts or bulk copies) are
+    // coalesced into a single debounced, serialized index update. Note files
+    // are never modified from here — backlinks are written only by the code
+    // paths that create notes, so externally created files stay untouched.
+    const refresh = () => provider.refresh();
     const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, '**/*.md'));
-    watcher.onDidCreate(async (uri) => {
+    watcher.onDidCreate((uri) => {
       const base = path.basename(uri.fsPath);
       if (base.startsWith('.')) { return; }
-      
-      const parentDir = path.dirname(uri.fsPath);
-      await updateTOCsUpToRoot(parentDir, root.fsPath);
-      await updateMasterTOC(root.fsPath);
-      await updateTasksDashboard(root.fsPath);
-      
-      const parentDirName = path.basename(parentDir);
-      await updateBacklink(uri.fsPath, parentDirName);
-      provider.refresh();
+      scheduleIndexUpdate(path.dirname(uri.fsPath), root.fsPath, refresh);
     });
-    watcher.onDidDelete(async (uri) => {
+    watcher.onDidDelete((uri) => {
       const base = path.basename(uri.fsPath);
       if (base.startsWith('.')) { return; }
-      
-      const parentDir = path.dirname(uri.fsPath);
-      await updateTOCsUpToRoot(parentDir, root.fsPath);
-      await updateMasterTOC(root.fsPath);
-      await updateTasksDashboard(root.fsPath);
-      provider.refresh();
+      scheduleIndexUpdate(path.dirname(uri.fsPath), root.fsPath, refresh);
     });
-    watcher.onDidChange(async (uri) => {
+    watcher.onDidChange((uri) => {
       const base = path.basename(uri.fsPath);
       if (base.startsWith('.')) { return; }
-      
-      const parentDir = path.dirname(uri.fsPath);
-      await updateTOCsUpToRoot(parentDir, root.fsPath);
-      await updateMasterTOC(root.fsPath);
-      await updateTasksDashboard(root.fsPath);
-      
-      provider.refresh();
+      scheduleIndexUpdate(path.dirname(uri.fsPath), root.fsPath, refresh);
     });
     context.subscriptions.push(watcher);
 
     const folderWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, '**/'));
-    folderWatcher.onDidCreate(async (uri) => {
-      try {
-        const stat = await fsp.stat(uri.fsPath);
-        if (stat.isDirectory()) {
-          const parentDir = path.dirname(uri.fsPath);
-          await updateTOC(uri.fsPath);
-          await updateTOCsUpToRoot(parentDir, root.fsPath);
-          await updateMasterTOC(root.fsPath);
-          await updateTasksDashboard(root.fsPath);
-          provider.refresh();
-        }
-      } catch {}
+    folderWatcher.onDidCreate((uri) => {
+      scheduleIndexUpdate(uri.fsPath, root.fsPath, refresh);
     });
-    folderWatcher.onDidDelete(async (uri) => {
-      const parentDir = path.dirname(uri.fsPath);
-      await updateTOCsUpToRoot(parentDir, root.fsPath);
-      await updateMasterTOC(root.fsPath);
-      await updateTasksDashboard(root.fsPath);
-      provider.refresh();
+    folderWatcher.onDidDelete((uri) => {
+      scheduleIndexUpdate(path.dirname(uri.fsPath), root.fsPath, refresh);
     });
     context.subscriptions.push(folderWatcher);
   }
@@ -1466,8 +1504,32 @@ async function renamePage(node: NoteNode | undefined, provider: NotebookProvider
     newPath = path.join(dir, fname);
   }
 
+  // Work out which links may safely be rewritten: folder-qualified links must
+  // point at this note's folder, and bare [[name]] links are only safe when no
+  // other note in the notebook shares the same file name.
+  const root = resolveRoot();
+  let files: string[] = [];
+  let linkOpts: WikiLinkRenameOpts | undefined;
+  if (renaming && root) {
+    const cfg = vscode.workspace.getConfiguration('markdownNotebook');
+    const ignore = new Set(
+      (cfg.get<string[]>('ignoreFolders', DEFAULT_IGNORE) ?? DEFAULT_IGNORE).map((s) => s.toLowerCase()),
+    );
+    files = await listMarkdown(root.fsPath, ignore);
+    const oldBaseLc = oldBase.toLowerCase();
+    const duplicates = files.filter(
+      (f) =>
+        path.basename(f).toLowerCase() === `${oldBaseLc}.md` &&
+        path.normalize(f) !== path.normalize(oldPath),
+    );
+    linkOpts = {
+      relDir: path.relative(root.fsPath, dir).replace(/\\/g, '/'),
+      bareNameUnique: duplicates.length === 0,
+    };
+  }
+
   // 1) The note's own content: frontmatter title, leading H1, and any self-links.
-  const newOwn = updateOwnContent(oldText, oldTitle, newTitle, oldBase, finalBase, renaming);
+  const newOwn = updateOwnContent(oldText, oldTitle, newTitle, oldBase, finalBase, renaming, linkOpts);
   if (newOwn !== oldText) {
     const edit = new vscode.WorkspaceEdit();
     edit.replace(oldUri, fullRangeOf(oldDoc), newOwn);
@@ -1481,14 +1543,8 @@ async function renamePage(node: NoteNode | undefined, provider: NotebookProvider
   }
 
   // 2) Update [[wiki-links]] in every other note (left as reviewable unsaved edits).
-  const root = resolveRoot();
   let updatedFiles = 0;
   if (root) {
-    const cfg = vscode.workspace.getConfiguration('markdownNotebook');
-    const ignore = new Set(
-      (cfg.get<string[]>('ignoreFolders', DEFAULT_IGNORE) ?? DEFAULT_IGNORE).map((s) => s.toLowerCase()),
-    );
-    const files = await listMarkdown(root.fsPath, ignore);
     const edit = new vscode.WorkspaceEdit();
     for (const f of files) {
       if (path.normalize(f) === path.normalize(oldPath)) {
@@ -1501,7 +1557,7 @@ async function renamePage(node: NoteNode | undefined, provider: NotebookProvider
         continue;
       }
       const text = doc.getText();
-      const rewritten = rewriteWikiLinks(text, oldBase, finalBase);
+      const rewritten = rewriteWikiLinks(text, oldBase, finalBase, linkOpts);
       if (rewritten !== text) {
         edit.replace(doc.uri, fullRangeOf(doc), rewritten);
         updatedFiles++;
@@ -1578,6 +1634,19 @@ async function renameSection(node: NoteNode | undefined, provider: NotebookProvi
   const root = resolveRoot();
   let updatedFiles = 0;
 
+  // 1) Rename the folder first, so the link edits below are applied to the
+  // notes at their final locations. (Doing it the other way around leaves
+  // unsaved edits on documents whose files are then moved out from under
+  // them — saving those would resurrect the old folder with stale copies.)
+  try {
+    await vscode.workspace.fs.rename(vscode.Uri.file(oldPath), vscode.Uri.file(newPath), { overwrite: false });
+  } catch (err) {
+    vscode.window.showErrorMessage(`Notebook: rename failed (${String(err)}).`);
+    return;
+  }
+
+  // 2) Rewrite folder-qualified wiki-links across the notebook (left as
+  // reviewable unsaved edits).
   if (root) {
     const oldRelPath = path.relative(root.fsPath, oldPath);
     const newRelPath = path.relative(root.fsPath, newPath);
@@ -1607,14 +1676,6 @@ async function renameSection(node: NoteNode | undefined, provider: NotebookProvi
     if (edit.size > 0) {
       await vscode.workspace.applyEdit(edit);
     }
-  }
-
-  // 2) Perform filesystem rename/move
-  try {
-    await vscode.workspace.fs.rename(vscode.Uri.file(oldPath), vscode.Uri.file(newPath), { overwrite: false });
-  } catch (err) {
-    vscode.window.showErrorMessage(`Notebook: rename failed (${String(err)}).`);
-    return;
   }
 
   // 3) Update parent folder manual ordering sidecar
@@ -1673,9 +1734,20 @@ function rewriteWikiLinkDirectories(text: string, oldRelPath: string, newRelPath
 }
 
 
+interface WikiLinkRenameOpts {
+  /** The renamed note's folder relative to the notebook root ('' = root), slash-separated. */
+  relDir?: string;
+  /** False when another note shares the same file name, making bare [[links]] ambiguous. */
+  bareNameUnique?: boolean;
+}
+
 /** Rewrite [[old]] / [[old|alias]] / [[old#heading]] / [[dir/old]] targets to the new base name. */
-function rewriteWikiLinks(text: string, oldBase: string, newBase: string): string {
+function rewriteWikiLinks(text: string, oldBase: string, newBase: string, opts?: WikiLinkRenameOpts): string {
   const oldLc = oldBase.toLowerCase();
+  const relDirLc =
+    opts?.relDir !== undefined
+      ? opts.relDir.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+      : undefined;
   return text.replace(/\[\[([^\[\]]+?)\]\]/g, (full, inner: string) => {
     const pipe = inner.indexOf('|');
     const target = pipe >= 0 ? inner.slice(0, pipe) : inner;
@@ -1691,6 +1763,19 @@ function rewriteWikiLinks(text: string, oldBase: string, newBase: string): strin
     if (bare.trim().toLowerCase() !== oldLc) {
       return full;
     }
+    if (dirPart) {
+      // Folder-qualified link: only rewrite when it points at the renamed
+      // note's folder, not some other note that happens to share its name.
+      if (relDirLc !== undefined) {
+        const linkDirLc = dirPart.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+        if (linkDirLc !== relDirLc) {
+          return full;
+        }
+      }
+    } else if (opts?.bareNameUnique === false) {
+      // Another note has the same name; a bare link is ambiguous, leave it.
+      return full;
+    }
     const rebuilt = newBase + (hasMd ? '.md' : '');
     return `[[${dirPart}${rebuilt}${sub}${alias}]]`;
   });
@@ -1703,6 +1788,7 @@ function updateOwnContent(
   oldBase: string,
   newBase: string,
   renaming: boolean,
+  linkOpts?: WikiLinkRenameOpts,
 ): string {
   let out = text;
 
@@ -1724,7 +1810,7 @@ function updateOwnContent(
   }
 
   if (renaming) {
-    out = rewriteWikiLinks(out, oldBase, newBase);
+    out = rewriteWikiLinks(out, oldBase, newBase, linkOpts);
   }
   return out;
 }
@@ -1869,7 +1955,11 @@ async function moveInto(srcPath: string, destDir: string): Promise<void> {
   }
 }
 
-export async function updateTOC(dirPath: string): Promise<void> {
+export function updateTOC(dirPath: string): Promise<void> {
+  return withIndexLock(() => updateTOCImpl(dirPath));
+}
+
+async function updateTOCImpl(dirPath: string): Promise<void> {
   try {
     const stat = await fsp.stat(dirPath);
     if (!stat.isDirectory()) { return; }
@@ -2218,7 +2308,11 @@ export async function checkAndPromptMigration(context: vscode.ExtensionContext):
   }
 }
 
-export async function updateMasterTOC(rootDir: string): Promise<void> {
+export function updateMasterTOC(rootDir: string): Promise<void> {
+  return withIndexLock(() => updateMasterTOCImpl(rootDir));
+}
+
+async function updateMasterTOCImpl(rootDir: string): Promise<void> {
   try {
     const stat = await fsp.stat(rootDir);
     if (!stat.isDirectory()) { return; }
@@ -2427,7 +2521,11 @@ export async function updateMasterTOC(rootDir: string): Promise<void> {
 }
 
 
-export async function updateTasksDashboard(rootDir: string): Promise<void> {
+export function updateTasksDashboard(rootDir: string): Promise<void> {
+  return withIndexLock(() => updateTasksDashboardImpl(rootDir));
+}
+
+async function updateTasksDashboardImpl(rootDir: string): Promise<void> {
   try {
     const stat = await fsp.stat(rootDir);
     if (!stat.isDirectory()) { return; }

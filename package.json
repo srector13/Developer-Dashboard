@@ -813,11 +813,12 @@
           "default": "chrome",
           "enum": [
             "chrome",
+            "auto",
             "weasyprint",
             "wkhtmltopdf",
             "prince"
           ],
-          "markdownDescription": "PDF engine used for export. `chrome` uses a headless Chrome/Chromium browser to export high-fidelity PDFs (automatically renders Mermaid and preserves CSS). `weasyprint`, `wkhtmltopdf`, and `prince` are lightweight Pandoc alternatives."
+          "markdownDescription": "PDF engine used for export. `chrome` uses a headless Chrome/Chromium browser to export high-fidelity PDFs (automatically renders Mermaid and preserves CSS). `auto` tries the lightweight Pandoc engines in order (WeasyPrint → wkhtmltopdf → Prince) and uses the first one installed. Or pick one of them explicitly."
         },
         "markdownNotebook.mermaidCliPath": {
           "type": "string",

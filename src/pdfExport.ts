@@ -153,7 +153,7 @@ async function prerenderMermaid(
 
   const tmpDir = await fsp.mkdtemp(path.join(require('os').tmpdir(), 'nb-mermaid-'));
   let index = 0;
-  const dark = (cfg.get<string>('markdownNotebook.previewTheme', 'github') || '').includes('dark');
+  const dark = (cfg.get<string>('markdownNotebook.exportTheme', 'github') || '').includes('dark');
   const replacements: Array<{ match: string; svg: string }> = [];
 
   let m: RegExpExecArray | null;
@@ -189,6 +189,15 @@ async function loadThemeCss(
   context: vscode.ExtensionContext,
   cfg: vscode.WorkspaceConfiguration,
 ): Promise<string> {
+  const baseCss = `.mermaid-svg{text-align:center;margin:12px 0;}\n.mermaid-svg svg{max-width:100%;height:auto;}\na[href$=".toc.md"], a[href$=".dashboard.md"] { display: none !important; }\n.mermaid { display: flex; justify-content: center; margin: 12px 0; }\n.mermaid svg { max-width: 100%; height: auto !important; }\n@media print {\n  @page {\n    margin: 0;\n  }\n  body {\n    padding: 20mm;\n    -webkit-print-color-adjust: exact !important;\n    print-color-adjust: exact !important;\n  }\n}`;
+
+  const theme = cfg.get<string>('markdownNotebook.exportTheme', 'github');
+  if (theme === 'off') {
+    // No GitHub theme: keep only the layout/print rules so diagrams and page
+    // margins still come out right.
+    return `<style>\n${baseCss}\n</style>`;
+  }
+
   const cssPath = path.join(context.extensionPath, 'media', 'github-markdown.css');
   let css = '';
   try {
@@ -198,10 +207,9 @@ async function loadThemeCss(
   }
   // The CSS is scoped to body.notebook-github-theme; for export we force that
   // class and pick light/dark per the setting.
-  const theme = cfg.get<string>('markdownNotebook.exportTheme', 'github');
   const forceDark = theme.includes('dark');
   const bodyClass = forceDark ? 'vscode-dark notebook-github-theme' : 'notebook-github-theme';
-  return `<style>\n${css}\n.mermaid-svg{text-align:center;margin:12px 0;}\n.mermaid-svg svg{max-width:100%;height:auto;}\na[href$=".toc.md"], a[href$=".dashboard.md"] { display: none !important; }\n.mermaid { display: flex; justify-content: center; margin: 12px 0; }\n.mermaid svg { max-width: 100%; height: auto !important; }\n@media print {\n  @page {\n    margin: 0;\n  }\n  body {\n    padding: 20mm;\n    -webkit-print-color-adjust: exact !important;\n    print-color-adjust: exact !important;\n  }\n}\n</style>\n<script>document.addEventListener('DOMContentLoaded', () => { document.body.className='${bodyClass}'; });</script>`;
+  return `<style>\n${css}\n${baseCss}\n</style>\n<script>document.addEventListener('DOMContentLoaded', () => { document.body.className='${bodyClass}'; });</script>`;
 }
 
 async function pandocToHtml(
@@ -248,7 +256,7 @@ async function pandocToPdf(
   cfg: vscode.WorkspaceConfiguration,
 ): Promise<void> {
   const variant = cfg.get<string>('pandocToMarkdown.markdownVariant', 'gfm');
-  const engine = cfg.get<string>('markdownNotebook.pdfEngine', 'auto');
+  const engine = cfg.get<string>('markdownNotebook.pdfEngine', 'chrome');
   const headerFile = path.join(require('os').tmpdir(), `nb-head-${Date.now()}.html`);
   await fsp.writeFile(headerFile, headerHtml, 'utf8');
 
@@ -429,7 +437,8 @@ async function chromeToPdf(
 
   // Read the actual exportTheme configuration setting directly to evaluate forceDark
   const exportTheme = vscode.workspace.getConfiguration().get<string>('markdownNotebook.exportTheme', 'github');
-  const forceDark = exportTheme.includes('dark');
+  const themeOff = exportTheme === 'off';
+  const forceDark = !themeOff && exportTheme.includes('dark');
 
   let browser: any;
   try {
@@ -448,15 +457,17 @@ async function chromeToPdf(
     await page.goto(vscode.Uri.file(tempHtmlPath).toString(), { waitUntil: 'networkidle0' });
 
     // Explicitly add body classes in Puppeteer to ensure style rules are immediately applied
-    await page.evaluate((isDark: any) => {
+    await page.evaluate((opts: any) => {
       const doc = (globalThis as any).document;
-      doc.body.classList.add('notebook-github-theme');
-      if (isDark) {
+      if (opts.applyTheme) {
+        doc.body.classList.add('notebook-github-theme');
+      }
+      if (opts.isDark) {
         doc.body.classList.add('vscode-dark');
       } else {
         doc.body.classList.remove('vscode-dark');
       }
-    }, forceDark);
+    }, { applyTheme: !themeOff, isDark: forceDark });
 
     // 4. Inject and render Mermaid if there are any mermaid blocks in the DOM
     const hasMermaid = await page.evaluate(() => {
