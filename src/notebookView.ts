@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import { promptMetadata } from './metadataPrompt';
+import { invalidFolderNameReason } from './notebookFs';
 
 const fsp = fs.promises;
 
@@ -507,7 +508,11 @@ async function scanPinned(
     } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) {
       const meta = await readMeta(full);
       if (meta.pinned) {
-        found.push(await makePage(full, entry.name, dailyRegexes, collapseVersion));
+        const page = await makePage(full, entry.name, dailyRegexes, collapseVersion);
+        // The same note also appears as a child of its section; tree item ids
+        // must be unique, so the pinned copy gets its own id.
+        page.id = `${page.id}-pinned`;
+        found.push(page);
       }
     }
   }
@@ -1130,9 +1135,9 @@ async function newSection(node: NoteNode | undefined, provider: NotebookProvider
   const name = await vscode.window.showInputBox({
     prompt: 'Name for the new section',
     placeHolder: 'e.g. Projects',
-    validateInput: (v) => (/[\\/:*?"<>|]/.test(v) ? 'Name contains invalid characters.' : undefined),
+    validateInput: (v) => invalidFolderNameReason(v),
   });
-  if (!name) {
+  if (!name || invalidFolderNameReason(name)) {
     return;
   }
   const newDirPath = path.join(parentDir, name.trim());
@@ -1612,9 +1617,9 @@ async function renameSection(node: NoteNode | undefined, provider: NotebookProvi
     return;
   }
 
-  // Simple validation for invalid folder name characters
-  if (/[\\/:*?"<>|]/.test(newDirName)) {
-    vscode.window.showErrorMessage('Notebook: folder name contains invalid characters.');
+  const nameError = invalidFolderNameReason(newDirName);
+  if (nameError) {
+    vscode.window.showErrorMessage(`Notebook: ${nameError}`);
     return;
   }
 
@@ -1880,8 +1885,14 @@ class NotebookDnD implements vscode.TreeDragAndDropController<NoteNode> {
     if (!item) {
       const uriList = dataTransfer.get('text/uri-list');
       if (uriList) {
-        const uriStrings = uriList.value as string;
-        const uris = uriStrings.split(/\r?\n/).filter(s => s.trim().length > 0).map(s => vscode.Uri.parse(s));
+        // Drops from outside the tree (OS Explorer, editor tabs) only expose
+        // the uri-list via asString(); .value is not a string there.
+        const uriStrings = await uriList.asString();
+        const uris = uriStrings
+          .split(/\r?\n/)
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0 && !s.startsWith('#'))
+          .map((s) => vscode.Uri.parse(s));
         
         let destDir: string | undefined;
         if (!target) {

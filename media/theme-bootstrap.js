@@ -4,23 +4,40 @@
 // Also injects and manages the Page Width and Theme Controller toolbar.
 (function () {
   'use strict';
+
+  // Settings are injected into the rendered HTML by the extension's
+  // markdown-it plugin (a hidden #notebook-preview-data element).
+  function readSettings() {
+    var el = document.getElementById('notebook-preview-data');
+    if (el) {
+      try {
+        return JSON.parse(el.getAttribute('data-settings') || '{}');
+      } catch (e) {
+        /* fall through */
+      }
+    }
+    return {};
+  }
+
   function apply() {
     if (!document.body) {
       setTimeout(apply, 10);
       return;
     }
+    var settings = readSettings();
 
     // Honor the markdownNotebook.previewTheme setting: 'off' leaves the stock
     // VS Code preview untouched; 'github-dark' forces the dark variant unless
     // the user picked something else from the in-preview toolbar.
-    var settingTheme = (window.notebookSettings && window.notebookSettings.previewTheme) || 'github';
+    var settingTheme = settings.previewTheme || 'github';
     if (settingTheme === 'off') {
+      document.body.classList.remove('notebook-github-theme');
       return;
     }
     document.body.classList.add('notebook-github-theme');
 
     // Apply layout width constraints from local storage preference or default settings
-    var defaultWidth = (window.notebookSettings && window.notebookSettings.defaultPageWidth) || 'standard';
+    var defaultWidth = settings.defaultPageWidth || 'standard';
     var currentWidthMode = localStorage.getItem('notebook-width-mode') || defaultWidth;
     document.body.classList.remove('notebook-width-standard', 'notebook-width-wide', 'notebook-width-full');
     document.body.classList.add('notebook-width-' + currentWidthMode);

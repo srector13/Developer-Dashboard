@@ -377,9 +377,19 @@ async function getChromePath(context: vscode.ExtensionContext): Promise<string> 
     // continue
   }
 
-  // 3. Check if we already have a downloaded Chrome in persistent cache
+  // 3. Check if we already have a downloaded Chrome in persistent cache.
+  // Use the Chrome build the installed puppeteer-core is pinned to — driving
+  // any other version is unsupported by puppeteer.
   const cacheDir = path.join(context.globalStorageUri.fsPath, '.browser-cache');
-  const buildId = '120.0.6099.109'; // A reliable, specific Chrome stable build ID
+  let buildId = '149.0.7827.22'; // fallback: puppeteer-core 25.x's pinned build
+  try {
+    const pup: any = await import('puppeteer-core');
+    if (pup.PUPPETEER_REVISIONS?.chrome) {
+      buildId = pup.PUPPETEER_REVISIONS.chrome;
+    }
+  } catch {
+    /* keep fallback */
+  }
   const cachedPath = browsers.computeExecutablePath({
     cacheDir: cacheDir,
     browser: browsers.Browser.CHROME,

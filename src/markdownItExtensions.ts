@@ -8,7 +8,40 @@ export function extendMarkdownIt(md: MarkdownIt): MarkdownIt {
   addTaskLists(md);
   addMark(md);
   addLinkTargets(md);
+  addPreviewData(md);
   return md;
+}
+
+// ── Extension → preview data channel ──
+// The preview webview can't receive messages from the extension directly, so
+// dynamic data rides along in the rendered HTML as data attributes on a hidden
+// element, which the preview scripts (theme-bootstrap.js, mermaid-preview.js)
+// read from the DOM.
+
+let previewScrollTarget: { line: number; timestamp: number } | undefined;
+
+/** Ask the preview to scroll to a source line on its next render. */
+export function setPreviewScrollTarget(line: number): void {
+  previewScrollTarget = { line, timestamp: Date.now() };
+}
+
+function addPreviewData(md: MarkdownIt): void {
+  md.core.ruler.push('notebook-preview-data', (state: any) => {
+    const cfg = vscode.workspace.getConfiguration('markdownNotebook');
+    const settings = {
+      defaultPageWidth: cfg.get<string>('defaultPageWidth', 'standard'),
+      defaultMermaidZoom: Number(cfg.get<number>('defaultMermaidZoom', 100)) || 100,
+      previewTheme: cfg.get<string>('previewTheme', 'github'),
+    };
+    const scrollAttr = previewScrollTarget
+      ? ` data-scroll-target="${escapeHtml(JSON.stringify(previewScrollTarget))}"`
+      : '';
+    const token = new state.Token('html_block', '', 0);
+    token.content = `<div id="notebook-preview-data" style="display:none" data-settings="${escapeHtml(
+      JSON.stringify(settings),
+    )}"${scrollAttr}></div>\n`;
+    state.tokens.push(token);
+  });
 }
 
 /**

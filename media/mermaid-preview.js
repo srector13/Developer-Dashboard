@@ -82,7 +82,15 @@
     var toolbar = document.createElement('div');
     toolbar.className = 'mermaid-actions';
 
-    var defaultZoom = (window.notebookSettings && window.notebookSettings.defaultMermaidZoom) || 100;
+    var settingsEl = document.getElementById('notebook-preview-data');
+    var defaultZoom = 100;
+    if (settingsEl) {
+      try {
+        defaultZoom = JSON.parse(settingsEl.getAttribute('data-settings') || '{}').defaultMermaidZoom || 100;
+      } catch (e) {
+        /* keep default */
+      }
+    }
     var zoomLevel = defaultZoom / 100;
     var svg = el.querySelector('svg');
     var baseWidth = 0;
@@ -280,41 +288,44 @@
   // VS Code dispatches this after it updates preview content.
   window.addEventListener('vscode.markdown.updateContent', renderAll);
 
-  // Dynamic Scroll to Line Polling for Outline Navigation without tab-switching
-  var mediaBaseUri = '';
-  var scripts = document.getElementsByTagName('script');
-  for (var idx = 0; idx < scripts.length; idx++) {
-    var src = scripts[idx].src || '';
-    if (src.indexOf('mermaid-preview.js') !== -1) {
-      mediaBaseUri = src.replace('mermaid-preview.js', '');
-      break;
+  // Outline → preview scrolling: the extension stamps the target line into the
+  // rendered HTML (data-scroll-target on #notebook-preview-data) and triggers a
+  // re-render, so we just check for a fresh target after each content update.
+  var lastScrollTimestamp = 0;
+  function checkScrollTarget() {
+    var dataEl = document.getElementById('notebook-preview-data');
+    if (!dataEl) {
+      return;
+    }
+    var raw = dataEl.getAttribute('data-scroll-target');
+    if (!raw) {
+      return;
+    }
+    var target;
+    try {
+      target = JSON.parse(raw);
+    } catch (e) {
+      return;
+    }
+    // Ignore already-handled targets and stale ones left over in the HTML
+    // (e.g. when a preview is reopened long after the outline click).
+    if (!target || target.timestamp <= lastScrollTimestamp || Date.now() - target.timestamp > 10000) {
+      return;
+    }
+    lastScrollTimestamp = target.timestamp;
+    if (target.line >= 0) {
+      // VS Code injects data-line attributes into Markdown preview elements
+      var el = document.querySelector('[data-line="' + target.line + '"]');
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
     }
   }
 
-  var lastTimestamp = 0;
-  if (mediaBaseUri) {
-    setInterval(function () {
-      var old = document.getElementById('notebook-scroll-script');
-      if (old) {
-        old.parentNode.removeChild(old);
-      }
-      var script = document.createElement('script');
-      script.id = 'notebook-scroll-script';
-      script.src = mediaBaseUri + 'scroll-target.js?t=' + Date.now();
-      script.onload = function () {
-        if (window.notebookScrollTarget && window.notebookScrollTarget.timestamp > lastTimestamp) {
-          lastTimestamp = window.notebookScrollTarget.timestamp;
-          var line = window.notebookScrollTarget.line;
-          if (line >= 0) {
-            // VS Code injects data-line attributes into Markdown preview elements
-            var el = document.querySelector('[data-line="' + line + '"]');
-            if (el) {
-              el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            }
-          }
-        }
-      };
-      document.body.appendChild(script);
-    }, 200);
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', checkScrollTarget);
+  } else {
+    checkScrollTarget();
   }
+  window.addEventListener('vscode.markdown.updateContent', checkScrollTarget);
 })();

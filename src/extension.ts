@@ -6,7 +6,7 @@ import { promisify } from 'util';
 import { registerNotebook, resolveRoot, checkAndPromptMigration, scheduleIndexUpdate } from './notebookView';
 import { registerPasteImport } from './pasteImport';
 import { pickDestination } from './notebookFs';
-import { extendMarkdownIt } from './markdownItExtensions';
+import { extendMarkdownIt, setPreviewScrollTarget } from './markdownItExtensions';
 import { registerPdfExport } from './pdfExport';
 import { OutlineTreeDataProvider, OutlineNode } from './outlineView';
 import { promptMetadata, NoteMetadata } from './metadataPrompt';
@@ -100,6 +100,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.window.onDidChangeTextEditorVisibleRanges((e) => {
       if (e.textEditor.document.languageId !== 'markdown') { return; }
+      if (e.visibleRanges.length === 0) { return; }
       const firstVisibleLine = e.visibleRanges[0].start.line;
       updateActiveHeading(firstVisibleLine);
     })
@@ -187,13 +188,13 @@ export function activate(context: vscode.ExtensionContext) {
 
       let targetUri = uri;
       if (targetFilePath && typeof targetFilePath === 'string') {
-        const currentDir = path.dirname(uri.fsPath);
-        const decodedPath = targetFilePath.split('/').map(decodeURIComponent).join(path.sep);
-        targetUri = vscode.Uri.file(path.resolve(currentDir, decodedPath));
+        const resolved = resolveLinkedNote(uri, targetFilePath);
+        if (!resolved) {
+          vscode.window.showWarningMessage('Notebook: the linked note is outside the notebook.');
+          return;
+        }
+        targetUri = resolved;
       }
-
-      // DEBUG
-      // vscode.window.showInformationMessage(`ToggleTask: uri=${uri.fsPath}, target=${targetFilePath}, line=${line}, targetUri=${targetUri.fsPath}`);
 
       try {
         const doc = await vscode.workspace.openTextDocument(targetUri);
@@ -259,9 +260,12 @@ export function activate(context: vscode.ExtensionContext) {
 
       let targetUri = uri;
       if (targetFilePath && typeof targetFilePath === 'string') {
-        const currentDir = path.dirname(uri.fsPath);
-        const decodedPath = targetFilePath.split('/').map(decodeURIComponent).join(path.sep);
-        targetUri = vscode.Uri.file(path.resolve(currentDir, decodedPath));
+        const resolved = resolveLinkedNote(uri, targetFilePath);
+        if (!resolved) {
+          vscode.window.showWarningMessage('Notebook: the linked note is outside the notebook.');
+          return;
+        }
+        targetUri = resolved;
       }
 
       try {
@@ -315,17 +319,10 @@ export function activate(context: vscode.ExtensionContext) {
       const cfg = vscode.workspace.getConfiguration('markdownNotebook');
       const alwaysPreview = cfg.get<boolean>('alwaysShowPreview', false);
 
-      // Always write scroll command target to media/scroll-target.js
-      const scrollFile = path.join(context.extensionPath, 'media', 'scroll-target.js');
-      try {
-        await fsp.writeFile(
-          scrollFile,
-          `window.notebookScrollTarget = { line: ${lineIndex}, timestamp: ${Date.now()} };`,
-          'utf8'
-        );
-      } catch {
-        /* ignore */
-      }
+      // Hand the target line to any open preview: it rides along in the
+      // rendered HTML, so force a re-render and the preview script scrolls.
+      setPreviewScrollTarget(lineIndex);
+      vscode.commands.executeCommand('markdown.preview.refresh');
 
       // If alwaysShowPreview is active, we scroll preview exclusively and never focus/expose raw markdown
       if (alwaysPreview) {
@@ -395,8 +392,8 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.tabGroups.onDidChangeTabs(handleTabChange)
   );
 
-  // Synchronize dynamic preview settings and editor associations
-  writePreviewSettings(context);
+  // Synchronize editor associations, and re-render previews when settings
+  // they depend on change (preview settings ride along in the rendered HTML).
   syncEditorAssociations();
 
   context.subscriptions.push(
@@ -406,7 +403,7 @@ export function activate(context: vscode.ExtensionContext) {
         e.affectsConfiguration('markdownNotebook.defaultMermaidZoom') ||
         e.affectsConfiguration('markdownNotebook.previewTheme')
       ) {
-        writePreviewSettings(context);
+        vscode.commands.executeCommand('markdown.preview.refresh');
       }
       if (e.affectsConfiguration('markdownNotebook.alwaysShowPreview')) {
         syncEditorAssociations();
@@ -1008,26 +1005,6 @@ async function reportResults(results: Outcome[], cfg: vscode.WorkspaceConfigurat
   }
 }
 
-async function writePreviewSettings(context: vscode.ExtensionContext): Promise<void> {
-  const cfg = vscode.workspace.getConfiguration('markdownNotebook');
-  const pageWidth = cfg.get<string>('defaultPageWidth', 'standard');
-  const mermaidZoom = cfg.get<number>('defaultMermaidZoom', 100);
-  const previewTheme = cfg.get<string>('previewTheme', 'github');
-
-  const filePath = path.join(context.extensionPath, 'media', 'preview-settings.js');
-  const content = `window.notebookSettings = {
-  defaultPageWidth: ${JSON.stringify(pageWidth)},
-  defaultMermaidZoom: ${JSON.stringify(Number(mermaidZoom) || 100)},
-  previewTheme: ${JSON.stringify(previewTheme)}
-};`;
-
-  try {
-    await fsp.writeFile(filePath, content, 'utf8');
-  } catch {
-    /* ignore */
-  }
-}
-
 async function syncEditorAssociations(): Promise<void> {
   const cfg = vscode.workspace.getConfiguration('markdownNotebook');
   const alwaysPreview = cfg.get<boolean>('alwaysShowPreview', false);
@@ -1035,19 +1012,46 @@ async function syncEditorAssociations(): Promise<void> {
   const workbenchConfig = vscode.workspace.getConfiguration();
   const associations = workbenchConfig.get<any>('workbench.editorAssociations') || {};
 
-  if (alwaysPreview) {
-    if (associations['*.md'] !== 'vscode.markdown.preview.editor') {
-      const updated = { ...associations, '*.md': 'vscode.markdown.preview.editor' };
-      await workbenchConfig.update('workbench.editorAssociations', updated, vscode.ConfigurationTarget.Workspace);
+  try {
+    if (alwaysPreview) {
+      if (associations['*.md'] !== 'vscode.markdown.preview.editor') {
+        const updated = { ...associations, '*.md': 'vscode.markdown.preview.editor' };
+        await workbenchConfig.update('workbench.editorAssociations', updated, vscode.ConfigurationTarget.Workspace);
+      }
+    } else {
+      if (associations['*.md'] === 'vscode.markdown.preview.editor') {
+        const updated = { ...associations };
+        delete updated['*.md'];
+        const finalVal = Object.keys(updated).length ? updated : undefined;
+        await workbenchConfig.update('workbench.editorAssociations', finalVal, vscode.ConfigurationTarget.Workspace);
+      }
     }
-  } else {
-    if (associations['*.md'] === 'vscode.markdown.preview.editor') {
-      const updated = { ...associations };
-      delete updated['*.md'];
-      const finalVal = Object.keys(updated).length ? updated : undefined;
-      await workbenchConfig.update('workbench.editorAssociations', finalVal, vscode.ConfigurationTarget.Workspace);
-    }
+  } catch {
+    // Updating workspace settings fails when no folder is open; nothing to sync then.
   }
+}
+
+/**
+ * Resolve a relative note path coming from preview content (e.g. a task link
+ * in a generated TOC) against the current note. Returns undefined when the
+ * path is malformed or escapes the notebook, since preview content must not
+ * be able to direct edits at arbitrary files.
+ */
+function resolveLinkedNote(baseUri: vscode.Uri, targetFilePath: string): vscode.Uri | undefined {
+  let decodedPath: string;
+  try {
+    decodedPath = targetFilePath.split('/').map(decodeURIComponent).join(path.sep);
+  } catch {
+    return undefined;
+  }
+  const resolved = path.resolve(path.dirname(baseUri.fsPath), decodedPath);
+  const root = resolveRoot();
+  const boundary = root ? root.fsPath : path.dirname(baseUri.fsPath);
+  const rel = path.relative(boundary, resolved);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    return undefined;
+  }
+  return vscode.Uri.file(resolved);
 }
 
 async function findFileByName(rootPath: string, targetName: string): Promise<vscode.Uri | undefined> {
