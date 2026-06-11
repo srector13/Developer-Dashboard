@@ -171,15 +171,18 @@
 
       if (activeLine >= 0) {
         var commandUri = 'command:markdownNotebook.outline.previewScrolled?' + encodeURIComponent(JSON.stringify([activeLine]));
-        var iframe = document.createElement('iframe');
-        iframe.style.display = 'none';
-        iframe.src = commandUri;
-        document.body.appendChild(iframe);
-        setTimeout(function () {
-          if (iframe.parentNode) {
-            iframe.parentNode.removeChild(iframe);
-          }
-        }, 100);
+        var triggerLink = document.createElement('a');
+        triggerLink.href = commandUri;
+        triggerLink.style.display = 'none';
+        document.body.appendChild(triggerLink);
+        
+        // Prevent default browser navigation to stop the preview from blanking out
+        triggerLink.addEventListener('click', function (e) {
+          e.preventDefault();
+        });
+        
+        triggerLink.click();
+        document.body.removeChild(triggerLink);
       }
     }, 150);
   });
