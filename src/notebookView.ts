@@ -136,40 +136,19 @@ export class NotebookProvider implements vscode.TreeDataProvider<NoteNode> {
           const tag = this.activeTagFilter;
           const tagLower = tag.toLowerCase();
 
-          const filteredSecs: NoteNode[] = [];
-          for (const sec of sections) {
-            if (await hasPagesWithTag(sec.fsPath, tag, ignore)) {
-              filteredSecs.push(sec);
-            }
-          }
-          sections = filteredSecs;
+          const sectionFilterResults = await Promise.all(
+            sections.map(sec => hasPagesWithTag(sec.fsPath, tag, ignore))
+          );
+          sections = sections.filter((_, i) => sectionFilterResults[i]);
 
-          const filteredPages: NoteNode[] = [];
-          for (const p of pages) {
-            const meta = await readMeta(p.fsPath);
-            if (meta.tags.map(t => t.toLowerCase()).includes(tagLower)) {
-              filteredPages.push(p);
-            }
-          }
-          pages = filteredPages;
+          const pageMetas = await Promise.all(pages.map(p => readMeta(p.fsPath)));
+          pages = pages.filter((_, i) => pageMetas[i].tags.map(t => t.toLowerCase()).includes(tagLower));
 
-          const filteredPinned: NoteNode[] = [];
-          for (const p of deeperPinned) {
-            const meta = await readMeta(p.fsPath);
-            if (meta.tags.map(t => t.toLowerCase()).includes(tagLower)) {
-              filteredPinned.push(p);
-            }
-          }
-          deeperPinned = filteredPinned;
+          const pinnedMetas = await Promise.all(deeperPinned.map(p => readMeta(p.fsPath)));
+          deeperPinned = deeperPinned.filter((_, i) => pinnedMetas[i].tags.map(t => t.toLowerCase()).includes(tagLower));
 
-          const filteredNonPinned: NoteNode[] = [];
-          for (const p of nonPinned) {
-            const meta = await readMeta(p.fsPath);
-            if (meta.tags.map(t => t.toLowerCase()).includes(tagLower)) {
-              filteredNonPinned.push(p);
-            }
-          }
-          nonPinned = filteredNonPinned;
+          const nonPinnedMetas = await Promise.all(nonPinned.map(p => readMeta(p.fsPath)));
+          nonPinned = nonPinned.filter((_, i) => nonPinnedMetas[i].tags.map(t => t.toLowerCase()).includes(tagLower));
         }
 
         return [
@@ -188,22 +167,13 @@ export class NotebookProvider implements vscode.TreeDataProvider<NoteNode> {
         const tag = this.activeTagFilter;
         const tagLower = tag.toLowerCase();
 
-        const filteredSecs: NoteNode[] = [];
-        for (const sec of sections) {
-          if (await hasPagesWithTag(sec.fsPath, tag, ignore)) {
-            filteredSecs.push(sec);
-          }
-        }
-        sections = filteredSecs;
+        const sectionFilterResults = await Promise.all(
+          sections.map(sec => hasPagesWithTag(sec.fsPath, tag, ignore))
+        );
+        sections = sections.filter((_, i) => sectionFilterResults[i]);
 
-        const filteredPages: NoteNode[] = [];
-        for (const p of pages) {
-          const meta = await readMeta(p.fsPath);
-          if (meta.tags.map(t => t.toLowerCase()).includes(tagLower)) {
-            filteredPages.push(p);
-          }
-        }
-        pages = filteredPages;
+        const pageMetas = await Promise.all(pages.map(p => readMeta(p.fsPath)));
+        pages = pages.filter((_, i) => pageMetas[i].tags.map(t => t.toLowerCase()).includes(tagLower));
       }
 
       return [...sections, ...(await orderPages(element.fsPath, pages))];
@@ -340,38 +310,50 @@ async function readFolder(
     return { sections: [], pages: [] };
   }
 
+  const validEntries = entries.filter(e => !e.name.startsWith('.'));
+
+  const results = await Promise.all(
+    validEntries.map(async (entry) => {
+      const full = path.join(dir, entry.name);
+
+      if (entry.isDirectory()) {
+        if (ignore.has(entry.name.toLowerCase())) {
+          return null;
+        }
+        const label = prettyName(entry.name);
+        const childCount = await countPages(full, ignore);
+        const collapsibleState = childCount > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None;
+        
+        const node = new NoteNode(full, 'section', label, collapsibleState, undefined, collapseVersion);
+        node.iconPath = getSectionIcon(entry.name);
+        node.contextValue = 'section';
+        node.command = {
+          command: 'markdownNotebook.openDashboard',
+          title: 'Open Table of Contents',
+          arguments: [node],
+        };
+        if (childCount > 0) {
+          node.description = String(childCount);
+        }
+        node.tooltip = full;
+        return { kind: 'section' as const, node };
+      } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) {
+        const node = await makePage(full, entry.name, dailyRegexes, collapseVersion);
+        return { kind: 'page' as const, node };
+      }
+      return null;
+    })
+  );
+
   const sections: NoteNode[] = [];
   const pages: NoteNode[] = [];
 
-  for (const entry of entries) {
-    if (entry.name.startsWith('.')) {
-      continue;
-    }
-    const full = path.join(dir, entry.name);
-
-    if (entry.isDirectory()) {
-      if (ignore.has(entry.name.toLowerCase())) {
-        continue;
-      }
-      const label = prettyName(entry.name);
-      const childCount = await countPages(full, ignore);
-      const collapsibleState = childCount > 0 ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None;
-      
-      const node = new NoteNode(full, 'section', label, collapsibleState, undefined, collapseVersion);
-      node.iconPath = getSectionIcon(entry.name);
-      node.contextValue = 'section';
-      node.command = {
-        command: 'markdownNotebook.openDashboard',
-        title: 'Open Table of Contents',
-        arguments: [node],
-      };
-      if (childCount > 0) {
-        node.description = String(childCount);
-      }
-      node.tooltip = full;
-      sections.push(node);
-    } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) {
-      pages.push(await makePage(full, entry.name, dailyRegexes, collapseVersion));
+  for (const res of results) {
+    if (!res) { continue; }
+    if (res.kind === 'section') {
+      sections.push(res.node);
+    } else {
+      pages.push(res.node);
     }
   }
 
@@ -505,33 +487,37 @@ async function scanPinned(
     return [];
   }
 
-  const found: NoteNode[] = [];
-  for (const entry of entries) {
-    if (entry.name.startsWith('.')) {
-      continue;
-    }
-    budget.count++;
-    if (budget.count > PINNED_SCAN_BUDGET) {
-      break;
-    }
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (ignore.has(entry.name.toLowerCase())) {
-        continue;
-      }
-      found.push(...(await scanPinned(full, ignore, dailyRegexes, budget, depth + 1, collapseVersion)));
-    } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) {
-      const meta = await readMeta(full);
-      if (meta.pinned) {
-        const page = await makePage(full, entry.name, dailyRegexes, collapseVersion);
-        // The same note also appears as a child of its section; tree item ids
-        // must be unique, so the pinned copy gets its own id.
-        page.id = `${page.id}-pinned`;
-        found.push(page);
-      }
-    }
+  const validEntries = entries.filter(e => {
+    if (e.name.startsWith('.')) { return false; }
+    if (e.isDirectory() && ignore.has(e.name.toLowerCase())) { return false; }
+    return true;
+  });
+
+  budget.count += validEntries.length;
+  if (budget.count > PINNED_SCAN_BUDGET) {
+    const allowed = PINNED_SCAN_BUDGET - (budget.count - validEntries.length);
+    if (allowed <= 0) { return []; }
+    validEntries.length = allowed;
   }
-  return found;
+
+  const results = await Promise.all(
+    validEntries.map(async (entry) => {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        return scanPinned(full, ignore, dailyRegexes, budget, depth + 1, collapseVersion);
+      } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) {
+        const meta = await readMeta(full);
+        if (meta.pinned) {
+          const page = await makePage(full, entry.name, dailyRegexes, collapseVersion);
+          page.id = `${page.id}-pinned`;
+          return [page];
+        }
+      }
+      return [];
+    })
+  );
+
+  return results.flat();
 }
 
 async function countPages(dir: string, ignore: Set<string>): Promise<number> {
@@ -568,22 +554,21 @@ async function hasPagesWithTag(dirPath: string, tag: string, ignore: Set<string>
   } catch {
     return false;
   }
-  for (const entry of entries) {
-    if (entry.name.startsWith('.')) { continue; }
-    const full = path.join(dirPath, entry.name);
-    if (entry.isDirectory()) {
-      if (ignore.has(entry.name.toLowerCase())) { continue; }
-      if (await hasPagesWithTag(full, tag, ignore, depth + 1)) {
-        return true;
+  const results = await Promise.all(
+    entries.map(async (entry) => {
+      if (entry.name.startsWith('.')) { return false; }
+      const full = path.join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        if (ignore.has(entry.name.toLowerCase())) { return false; }
+        return hasPagesWithTag(full, tag, ignore, depth + 1);
+      } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md') && entry.name !== '.toc.md') {
+        const meta = await readMeta(full);
+        return meta.tags.map(t => t.toLowerCase()).includes(tag.toLowerCase());
       }
-    } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md') && entry.name !== '.toc.md') {
-      const meta = await readMeta(full);
-      if (meta.tags.map(t => t.toLowerCase()).includes(tag.toLowerCase())) {
-        return true;
-      }
-    }
-  }
-  return false;
+      return false;
+    })
+  );
+  return results.some(r => r);
 }
 
 async function parseNoteFile(full: string, mtimeMs: number): Promise<NoteCacheEntry> {
@@ -894,14 +879,13 @@ let progressResolver: (() => void) | undefined;
 function withIndexLock<T>(fn: () => Promise<T>): Promise<T> {
   activeLocksCount++;
   if (activeLocksCount === 1) {
+    const progressPromise = new Promise<void>((resolve) => {
+      progressResolver = resolve;
+    });
     vscode.window.withProgress({
       location: vscode.ProgressLocation.Window,
       title: "Notebook: Syncing..."
-    }, () => {
-      return new Promise<void>((resolve) => {
-        progressResolver = resolve;
-      });
-    });
+    }, () => progressPromise);
   }
 
   const run = indexLock.then(fn, fn);
@@ -935,9 +919,9 @@ function dirChainToRoot(startDir: string, rootDir: string): string[] {
 // Helper to update TOCs up the chain
 export async function updateTOCsUpToRoot(startDir: string, rootDir: string) {
   await withIndexLock(async () => {
-    for (const dir of dirChainToRoot(startDir, rootDir)) {
-      await updateTOCImpl(dir);
-    }
+    await Promise.all(
+      dirChainToRoot(startDir, rootDir).map((dir) => updateTOCImpl(dir))
+    );
   });
 }
 
@@ -972,11 +956,11 @@ export function scheduleIndexUpdate(startDir: string, rootDir: string, onDone?: 
           chain.add(c);
         }
       }
-      for (const dir of chain) {
-        await updateTOCImpl(dir);
-      }
-      await updateMasterTOCImpl(root);
-      await updateTasksDashboardImpl(root);
+      await Promise.all([...chain].map((dir) => updateTOCImpl(dir)));
+      await Promise.all([
+        updateMasterTOCImpl(root),
+        updateTasksDashboardImpl(root)
+      ]);
     })
       .catch((err) => console.error('Notebook: index update failed:', err))
       .finally(() => {
@@ -2042,7 +2026,8 @@ async function listMarkdown(dir: string, ignore: Set<string>, depth = 0): Promis
   } catch {
     return [];
   }
-  const out: string[] = [];
+  const promises: Promise<string[]>[] = [];
+  const files: string[] = [];
   for (const e of entries) {
     if (e.name.startsWith('.')) {
       continue;
@@ -2050,13 +2035,17 @@ async function listMarkdown(dir: string, ignore: Set<string>, depth = 0): Promis
     const full = path.join(dir, e.name);
     if (e.isDirectory()) {
       if (!ignore.has(e.name.toLowerCase())) {
-        out.push(...(await listMarkdown(full, ignore, depth + 1)));
+        promises.push(listMarkdown(full, ignore, depth + 1));
       }
     } else if (e.isFile() && e.name.toLowerCase().endsWith('.md')) {
-      out.push(full);
+      files.push(full);
     }
   }
-  return out;
+  const subResults = await Promise.all(promises);
+  for (const list of subResults) {
+    files.push(...list);
+  }
+  return files;
 }
 
 // ───────────────────────── Drag & drop ─────────────────────────
@@ -2213,21 +2202,27 @@ async function updateTOCImpl(dirPath: string): Promise<void> {
 
   // Scan tasks under this folder (recursively) first, so we can calculate total tasks and completion rate recursively
   const files = await listMarkdown(dirPath, ignore);
-  const sectionTasks: { notePath: string; noteTitle: string; text: string; line: number; completed: boolean }[] = [];
   const dailyRegexes = getDailyRegexes(cfg);
 
-  for (const file of files) {
-    const baseName = path.basename(file).toLowerCase();
-    if (baseName === '.toc.md' || baseName === '.tasks.md') {
-      continue;
-    }
-    const noteData = await getNoteData(file);
-    const title = computeDisplayTitle(path.basename(file), noteData.meta, dailyRegexes);
+  const filesNoteData = await Promise.all(
+    files.map(async (file) => {
+      const baseName = path.basename(file).toLowerCase();
+      if (baseName === '.toc.md' || baseName === '.tasks.md') {
+        return null;
+      }
+      const noteData = await getNoteData(file);
+      const title = computeDisplayTitle(path.basename(file), noteData.meta, dailyRegexes);
+      return { file, noteData, title };
+    })
+  );
 
-    for (const t of noteData.tasks) {
+  const sectionTasks: { notePath: string; noteTitle: string; text: string; line: number; completed: boolean }[] = [];
+  for (const item of filesNoteData) {
+    if (!item) { continue; }
+    for (const t of item.noteData.tasks) {
       sectionTasks.push({
-        notePath: file,
-        noteTitle: title,
+        notePath: item.file,
+        noteTitle: item.title,
         text: t.text,
         line: t.line,
         completed: t.completed
@@ -2241,20 +2236,19 @@ async function updateTOCImpl(dirPath: string): Promise<void> {
   const completionRate = totalTasks > 0 ? Math.round((totalCompleted / totalTasks) * 100) : 0;
 
   // Calculate pages list directly in this folder
-  let totalPages = 0;
-  const pageItems: { name: string; title: string }[] = [];
-
-  for (const page of pages) {
-    totalPages++;
-    let title = prettyName(page);
-    try {
-      const meta = await readMeta(path.join(dirPath, page));
-      title = computeDisplayTitle(page, meta, dailyRegexes);
-    } catch {
-      /* ignore */
-    }
-    pageItems.push({ name: page, title });
-  }
+  const pageItems = await Promise.all(
+    pages.map(async (page) => {
+      let title = prettyName(page);
+      try {
+        const meta = await readMeta(path.join(dirPath, page));
+        title = computeDisplayTitle(page, meta, dailyRegexes);
+      } catch {
+        /* ignore */
+      }
+      return { name: page, title };
+    })
+  );
+  const totalPages = pageItems.length;
 
   // Sort pageItems based on their display title
   pageItems.sort((a, b) => collator.compare(a.title, b.title));
@@ -2562,21 +2556,27 @@ async function updateMasterTOCImpl(rootDir: string): Promise<void> {
 
   // Scan tasks under this root folder (recursively) first, so we can calculate total tasks and completion rate recursively
   const files = await listMarkdown(rootDir, ignore);
-  const notebookTasks: { notePath: string; noteTitle: string; text: string; line: number; completed: boolean }[] = [];
   const dailyRegexes = getDailyRegexes(cfg);
 
-  for (const file of files) {
-    const baseName = path.basename(file).toLowerCase();
-    if (baseName === '.toc.md' || baseName === '.tasks.md') {
-      continue;
-    }
-    const noteData = await getNoteData(file);
-    const title = computeDisplayTitle(path.basename(file), noteData.meta, dailyRegexes);
+  const filesNoteData = await Promise.all(
+    files.map(async (file) => {
+      const baseName = path.basename(file).toLowerCase();
+      if (baseName === '.toc.md' || baseName === '.tasks.md') {
+        return null;
+      }
+      const noteData = await getNoteData(file);
+      const title = computeDisplayTitle(path.basename(file), noteData.meta, dailyRegexes);
+      return { file, noteData, title };
+    })
+  );
 
-    for (const t of noteData.tasks) {
+  const notebookTasks: { notePath: string; noteTitle: string; text: string; line: number; completed: boolean }[] = [];
+  for (const item of filesNoteData) {
+    if (!item) { continue; }
+    for (const t of item.noteData.tasks) {
       notebookTasks.push({
-        notePath: file,
-        noteTitle: title,
+        notePath: item.file,
+        noteTitle: item.title,
         text: t.text,
         line: t.line,
         completed: t.completed
@@ -2598,18 +2598,18 @@ async function updateMasterTOCImpl(rootDir: string): Promise<void> {
   }
 
   // Process root pages and compute normalized display titles
-  const rootPageItems: { name: string; title: string }[] = [];
-
-  for (const page of rootPages) {
-    globalTotalPages++;
-    const full = path.join(rootDir, page);
-    let title = prettyName(page);
-    try {
-      const meta = await readMeta(full);
-      title = computeDisplayTitle(page, meta, dailyRegexes);
-    } catch { /* ignore */ }
-    rootPageItems.push({ name: page, title });
-  }
+  const rootPageItems = await Promise.all(
+    rootPages.map(async (page) => {
+      const full = path.join(rootDir, page);
+      let title = prettyName(page);
+      try {
+        const meta = await readMeta(full);
+        title = computeDisplayTitle(page, meta, dailyRegexes);
+      } catch { /* ignore */ }
+      return { name: page, title };
+    })
+  );
+  globalTotalPages += rootPageItems.length;
 
   // Sort rootPageItems based on their display title
   rootPageItems.sort((a, b) => collator.compare(a.title, b.title));
@@ -2713,34 +2713,39 @@ async function updateTasksDashboardImpl(rootDir: string): Promise<void> {
   const dailyRegexes = getDailyRegexes(cfg);
 
   const files = await listMarkdown(rootDir, ignore);
-  const taskMap = new Map<string, { notePath: string; noteTitle: string; text: string; line: number; completed: boolean }[]>();
 
+  const filesNoteData = await Promise.all(
+    files.map(async (file) => {
+      const baseName = path.basename(file).toLowerCase();
+      if (baseName === '.toc.md' || baseName === '.tasks.md') {
+        return null;
+      }
+      const noteData = await getNoteData(file);
+      const title = computeDisplayTitle(path.basename(file), noteData.meta, dailyRegexes);
+      const relativeDir = path.relative(rootDir, path.dirname(file)) || 'General Notes';
+      return { file, noteData, title, relativeDir };
+    })
+  );
+
+  const taskMap = new Map<string, { notePath: string; noteTitle: string; text: string; line: number; completed: boolean }[]>();
   let totalOpen = 0;
   let totalCompleted = 0;
 
-  for (const file of files) {
-    const baseName = path.basename(file).toLowerCase();
-    if (baseName === '.toc.md' || baseName === '.tasks.md') {
-      continue;
-    }
-
-    const noteData = await getNoteData(file);
-    const title = computeDisplayTitle(path.basename(file), noteData.meta, dailyRegexes);
-    const relativeDir = path.relative(rootDir, path.dirname(file)) || 'General Notes';
-
-    for (const t of noteData.tasks) {
+  for (const item of filesNoteData) {
+    if (!item) { continue; }
+    for (const t of item.noteData.tasks) {
       if (t.completed) {
         totalCompleted++;
       } else {
         totalOpen++;
       }
 
-      if (!taskMap.has(relativeDir)) {
-        taskMap.set(relativeDir, []);
+      if (!taskMap.has(item.relativeDir)) {
+        taskMap.set(item.relativeDir, []);
       }
-      taskMap.get(relativeDir)!.push({
-        notePath: file,
-        noteTitle: title,
+      taskMap.get(item.relativeDir)!.push({
+        notePath: item.file,
+        noteTitle: item.title,
         text: t.text,
         line: t.line,
         completed: t.completed
