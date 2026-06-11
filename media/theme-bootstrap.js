@@ -187,8 +187,21 @@
 
       if (activeLine >= 0) {
         var commandUri = 'command:markdownNotebook.outline.previewScrolled?' + encodeURIComponent(JSON.stringify([activeLine]));
+        
+        // Ensure a hidden iframe exists to catch any browser default navigation
+        // in case event propagation is stopped by VS Code's capture-phase listeners
+        var dispatchFrame = document.getElementById('notebook-command-dispatch-frame');
+        if (!dispatchFrame) {
+          dispatchFrame = document.createElement('iframe');
+          dispatchFrame.id = 'notebook-command-dispatch-frame';
+          dispatchFrame.name = 'notebook-command-dispatch-frame';
+          dispatchFrame.style.display = 'none';
+          document.body.appendChild(dispatchFrame);
+        }
+
         var triggerLink = document.createElement('a');
         triggerLink.href = commandUri;
+        triggerLink.target = 'notebook-command-dispatch-frame';
         triggerLink.style.display = 'none';
         document.body.appendChild(triggerLink);
         
