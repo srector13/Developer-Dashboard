@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { registerNotebook, resolveRoot, checkAndPromptMigration, scheduleIndexUpdate } from './notebookView';
+import { registerNotebook, resolveRoot, checkAndPromptMigration, scheduleIndexUpdate, DEFAULT_IGNORE } from './notebookView';
 import { registerPasteImport } from './pasteImport';
 import { pickDestination } from './notebookFs';
 import { extendMarkdownIt, setPreviewScrollTarget } from './markdownItExtensions';
@@ -431,7 +431,15 @@ export function activate(context: vscode.ExtensionContext) {
             const relative = path.relative(root.fsPath, filePath);
             const isInside = relative && !relative.startsWith('..') && !path.isAbsolute(relative);
             if (isInside) {
-              scheduleIndexUpdate(path.dirname(filePath), root.fsPath);
+              const cfg = vscode.workspace.getConfiguration('markdownNotebook');
+              const ignore = new Set(
+                (cfg.get<string[]>('ignoreFolders', DEFAULT_IGNORE) ?? DEFAULT_IGNORE).map((s) => s.toLowerCase()),
+              );
+              const parts = relative.toLowerCase().split(/[/\\]/);
+              const isIgnored = parts.some(part => ignore.has(part) || part.startsWith('.'));
+              if (!isIgnored) {
+                scheduleIndexUpdate(path.dirname(filePath), root.fsPath);
+              }
             }
           }
         }

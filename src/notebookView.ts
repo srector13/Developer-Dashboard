@@ -6,7 +6,7 @@ import { invalidFolderNameReason } from './notebookFs';
 
 const fsp = fs.promises;
 
-const DEFAULT_IGNORE = ['_media', 'attachments', 'templates', 'node_modules', '.git', '.vscode'];
+export const DEFAULT_IGNORE = ['_media', 'attachments', 'templates', 'node_modules', '.git', '.vscode'];
 const MAX_PARSE_BYTES = 512 * 1024; // don't slurp huge files just to read a title
 const PINNED_SCAN_BUDGET = 2000; // safety cap on the recursive pinned scan
 const ORDER_FILE = '.notebook-order'; // per-folder manual ordering sidecar
@@ -586,17 +586,14 @@ async function hasPagesWithTag(dirPath: string, tag: string, ignore: Set<string>
   return false;
 }
 
-async function readMeta(full: string): Promise<NoteMeta> {
+async function parseNoteFile(full: string, mtimeMs: number): Promise<NoteCacheEntry> {
   const meta: NoteMeta = { pinned: false, tags: [], openTasks: 0, completedTasks: 0 };
+  const tasks: ParsedTask[] = [];
   let content = '';
   try {
-    const stat = await fsp.stat(full);
-    if (stat.size > MAX_PARSE_BYTES) {
-      return meta;
-    }
     content = await fsp.readFile(full, 'utf8');
   } catch {
-    return meta;
+    return { mtimeMs, meta, tasks };
   }
 
   // Frontmatter block.
@@ -630,13 +627,60 @@ async function readMeta(full: string): Promise<NoteMeta> {
     }
   }
 
-  const tasks = content.match(/^[ \t]*[-*]\s+\[ \]/gm);
-  meta.openTasks = tasks ? tasks.length : 0;
+  const lines = content.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const lineText = lines[i];
+    const matchOpen = lineText.match(/^[ \t]*[-*]\s+\[ \](.*)$/);
+    const matchClosed = lineText.match(/^[ \t]*[-*]\s+\[[xX]\](.*)$/);
 
-  const completed = content.match(/^[ \t]*[-*]\s+\[[xX]\]/gm);
-  meta.completedTasks = completed ? completed.length : 0;
+    if (matchOpen || matchClosed) {
+      const completed = !!matchClosed;
+      const textStr = (matchOpen ? matchOpen[1] : matchClosed![1]).trim();
+      if (!textStr) { continue; }
+      
+      tasks.push({
+        text: textStr,
+        line: i + 1,
+        completed
+      });
+    }
+  }
 
-  return meta;
+  meta.openTasks = tasks.filter(t => !t.completed).length;
+  meta.completedTasks = tasks.filter(t => t.completed).length;
+
+  return { mtimeMs, meta, tasks };
+}
+
+async function getNoteData(full: string): Promise<NoteCacheEntry> {
+  try {
+    const stat = await fsp.stat(full);
+    if (stat.size > MAX_PARSE_BYTES) {
+      return {
+        mtimeMs: stat.mtimeMs,
+        meta: { pinned: false, tags: [], openTasks: 0, completedTasks: 0 },
+        tasks: []
+      };
+    }
+    const cached = noteCache.get(full);
+    if (cached && cached.mtimeMs === stat.mtimeMs) {
+      return cached;
+    }
+    const parsed = await parseNoteFile(full, stat.mtimeMs);
+    noteCache.set(full, parsed);
+    return parsed;
+  } catch {
+    return {
+      mtimeMs: 0,
+      meta: { pinned: false, tags: [], openTasks: 0, completedTasks: 0 },
+      tasks: []
+    };
+  }
+}
+
+async function readMeta(full: string): Promise<NoteMeta> {
+  const data = await getNoteData(full);
+  return data.meta;
 }
 
 function sortPages(pages: NoteNode[]): NoteNode[] {
@@ -827,13 +871,49 @@ export function resolveRoot(): vscode.Uri | undefined {
 }
 
 // ───────────────────────── Index regeneration (TOCs, dashboard) ─────────────────────────
+interface ParsedTask {
+  text: string;
+  line: number;
+  completed: boolean;
+}
+
+interface NoteCacheEntry {
+  mtimeMs: number;
+  meta: NoteMeta;
+  tasks: ParsedTask[];
+}
+
+const noteCache = new Map<string, NoteCacheEntry>();
+
 // Every write to .toc.md / .tasks.md goes through a single lock so concurrent
 // triggers (file watchers, saves, renames) can't interleave writes to the same file.
 let indexLock: Promise<unknown> = Promise.resolve();
+let activeLocksCount = 0;
+let progressResolver: (() => void) | undefined;
+
 function withIndexLock<T>(fn: () => Promise<T>): Promise<T> {
+  activeLocksCount++;
+  if (activeLocksCount === 1) {
+    vscode.window.withProgress({
+      location: vscode.ProgressLocation.Window,
+      title: "Notebook: Syncing..."
+    }, () => {
+      return new Promise<void>((resolve) => {
+        progressResolver = resolve;
+      });
+    });
+  }
+
   const run = indexLock.then(fn, fn);
   indexLock = run.catch(() => undefined);
-  return run;
+
+  return run.finally(() => {
+    activeLocksCount--;
+    if (activeLocksCount === 0 && progressResolver) {
+      progressResolver();
+      progressResolver = undefined;
+    }
+  });
 }
 
 function dirChainToRoot(startDir: string, rootDir: string): string[] {
@@ -1115,29 +1195,45 @@ export function registerNotebook(context: vscode.ExtensionContext): void {
       return;
     }
 
+    const cfg = vscode.workspace.getConfiguration('markdownNotebook');
+    const ignore = new Set(
+      (cfg.get<string[]>('ignoreFolders', DEFAULT_IGNORE) ?? DEFAULT_IGNORE).map((s) => s.toLowerCase()),
+    );
+
+    const isIgnored = (uriPath: string) => {
+      const relative = path.relative(root.fsPath, uriPath);
+      const parts = relative.toLowerCase().split(/[/\\]/);
+      return parts.some(part => ignore.has(part) || part.startsWith('.'));
+    };
+
     const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, '**/*.md'));
     watcher.onDidCreate((uri) => {
       const base = path.basename(uri.fsPath);
       if (base.startsWith('.')) { return; }
+      if (isIgnored(uri.fsPath)) { return; }
       scheduleIndexUpdate(path.dirname(uri.fsPath), root.fsPath, refresh);
     });
     watcher.onDidDelete((uri) => {
       const base = path.basename(uri.fsPath);
       if (base.startsWith('.')) { return; }
+      if (isIgnored(uri.fsPath)) { return; }
       scheduleIndexUpdate(path.dirname(uri.fsPath), root.fsPath, refresh);
     });
     watcher.onDidChange((uri) => {
       const base = path.basename(uri.fsPath);
       if (base.startsWith('.')) { return; }
+      if (isIgnored(uri.fsPath)) { return; }
       scheduleIndexUpdate(path.dirname(uri.fsPath), root.fsPath, refresh);
     });
     watcherDisposables.push(watcher);
 
     const folderWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, '**/'));
     folderWatcher.onDidCreate((uri) => {
+      if (isIgnored(uri.fsPath)) { return; }
       scheduleIndexUpdate(uri.fsPath, root.fsPath, refresh);
     });
     folderWatcher.onDidDelete((uri) => {
+      if (isIgnored(uri.fsPath)) { return; }
       scheduleIndexUpdate(path.dirname(uri.fsPath), root.fsPath, refresh);
     });
     watcherDisposables.push(folderWatcher);
@@ -2125,37 +2221,17 @@ async function updateTOCImpl(dirPath: string): Promise<void> {
     if (baseName === '.toc.md' || baseName === '.tasks.md') {
       continue;
     }
-    let fileContent = '';
-    try {
-      fileContent = await fsp.readFile(file, 'utf8');
-    } catch {
-      continue;
-    }
-    const meta = await readMeta(file);
-    const title = computeDisplayTitle(path.basename(file), meta, dailyRegexes);
+    const noteData = await getNoteData(file);
+    const title = computeDisplayTitle(path.basename(file), noteData.meta, dailyRegexes);
 
-    const lines = fileContent.split(/\r?\n/);
-    for (let i = 0; i < lines.length; i++) {
-      const lineText = lines[i];
-      const matchOpen = lineText.match(/^[ \t]*[-*]\s+\[ \](.*)$/);
-      const matchClosed = lineText.match(/^[ \t]*[-*]\s+\[[xX]\](.*)$/);
-
-      if (matchOpen || matchClosed) {
-        const completed = !!matchClosed;
-        const textStr = (matchOpen ? matchOpen[1] : matchClosed![1]).trim();
-        if (!textStr) { continue; }
-        
-        const relativeFilePath = path.relative(dirPath, file);
-        const encodedPath = relativeFilePath.split(path.sep).map(encodeURIComponent).join('/');
-
-        sectionTasks.push({
-          notePath: file,
-          noteTitle: title,
-          text: textStr,
-          line: i + 1,
-          completed
-        });
-      }
+    for (const t of noteData.tasks) {
+      sectionTasks.push({
+        notePath: file,
+        noteTitle: title,
+        text: t.text,
+        line: t.line,
+        completed: t.completed
+      });
     }
   }
 
@@ -2494,37 +2570,17 @@ async function updateMasterTOCImpl(rootDir: string): Promise<void> {
     if (baseName === '.toc.md' || baseName === '.tasks.md') {
       continue;
     }
-    let fileContent = '';
-    try {
-      fileContent = await fsp.readFile(file, 'utf8');
-    } catch {
-      continue;
-    }
-    const meta = await readMeta(file);
-    const title = computeDisplayTitle(path.basename(file), meta, dailyRegexes);
+    const noteData = await getNoteData(file);
+    const title = computeDisplayTitle(path.basename(file), noteData.meta, dailyRegexes);
 
-    const lines = fileContent.split(/\r?\n/);
-    for (let i = 0; i < lines.length; i++) {
-      const lineText = lines[i];
-      const matchOpen = lineText.match(/^[ \t]*[-*]\s+\[ \](.*)$/);
-      const matchClosed = lineText.match(/^[ \t]*[-*]\s+\[[xX]\](.*)$/);
-
-      if (matchOpen || matchClosed) {
-        const completed = !!matchClosed;
-        const textStr = (matchOpen ? matchOpen[1] : matchClosed![1]).trim();
-        if (!textStr) { continue; }
-        
-        const relativeFilePath = path.relative(rootDir, file);
-        const encodedPath = relativeFilePath.split(path.sep).map(encodeURIComponent).join('/');
-
-        notebookTasks.push({
-          notePath: file,
-          noteTitle: title,
-          text: textStr,
-          line: i + 1,
-          completed
-        });
-      }
+    for (const t of noteData.tasks) {
+      notebookTasks.push({
+        notePath: file,
+        noteTitle: title,
+        text: t.text,
+        line: t.line,
+        completed: t.completed
+      });
     }
   }
 
@@ -2668,46 +2724,27 @@ async function updateTasksDashboardImpl(rootDir: string): Promise<void> {
       continue;
     }
 
-    let content = '';
-    try {
-      content = await fsp.readFile(file, 'utf8');
-    } catch {
-      continue;
-    }
-
-    const meta = await readMeta(file);
-    const title = computeDisplayTitle(path.basename(file), meta, dailyRegexes);
-
-    const lines = content.split(/\r?\n/);
+    const noteData = await getNoteData(file);
+    const title = computeDisplayTitle(path.basename(file), noteData.meta, dailyRegexes);
     const relativeDir = path.relative(rootDir, path.dirname(file)) || 'General Notes';
 
-    for (let i = 0; i < lines.length; i++) {
-      const lineText = lines[i];
-      const matchOpen = lineText.match(/^[ \t]*[-*]\s+\[ \](.*)$/);
-      const matchClosed = lineText.match(/^[ \t]*[-*]\s+\[[xX]\](.*)$/);
-
-      if (matchOpen || matchClosed) {
-        const completed = !!matchClosed;
-        const textStr = (matchOpen ? matchOpen[1] : matchClosed![1]).trim();
-        if (!textStr) { continue; } // skip empty checklists
-
-        if (completed) {
-          totalCompleted++;
-        } else {
-          totalOpen++;
-        }
-
-        if (!taskMap.has(relativeDir)) {
-          taskMap.set(relativeDir, []);
-        }
-        taskMap.get(relativeDir)!.push({
-          notePath: file,
-          noteTitle: title,
-          text: textStr,
-          line: i + 1,
-          completed
-        });
+    for (const t of noteData.tasks) {
+      if (t.completed) {
+        totalCompleted++;
+      } else {
+        totalOpen++;
       }
+
+      if (!taskMap.has(relativeDir)) {
+        taskMap.set(relativeDir, []);
+      }
+      taskMap.get(relativeDir)!.push({
+        notePath: file,
+        noteTitle: title,
+        text: t.text,
+        line: t.line,
+        completed: t.completed
+      });
     }
   }
 

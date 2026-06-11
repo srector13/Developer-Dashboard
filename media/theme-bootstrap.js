@@ -5,6 +5,22 @@
 (function () {
   'use strict';
 
+  // Prevent default browser navigation for programmatic command clicks to stop the preview from blanking out.
+  // We use a capture-phase listener on window because VS Code's click interceptors or page lifecycle transitions
+  // can bypass local target/bubble-phase listeners during layout updates and config reloads.
+  window.addEventListener('click', function (e) {
+    if (e.isTrusted === false) {
+      var target = e.target;
+      while (target && target !== document.body) {
+        if (target.tagName === 'A' && target.href && target.href.indexOf('command:') !== -1) {
+          e.preventDefault();
+          break;
+        }
+        target = target.parentNode;
+      }
+    }
+  }, true);
+
   // Settings are injected into the rendered HTML by the extension's
   // markdown-it plugin (a hidden #notebook-preview-data element).
   function readSettings() {
@@ -175,11 +191,6 @@
         triggerLink.href = commandUri;
         triggerLink.style.display = 'none';
         document.body.appendChild(triggerLink);
-        
-        // Prevent default browser navigation to stop the preview from blanking out
-        triggerLink.addEventListener('click', function (e) {
-          e.preventDefault();
-        });
         
         triggerLink.click();
         document.body.removeChild(triggerLink);
