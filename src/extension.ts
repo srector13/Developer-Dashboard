@@ -11,6 +11,7 @@ import { registerPdfExport } from './pdfExport';
 import { OutlineTreeDataProvider, OutlineNode } from './outlineView';
 import { promptMetadata, NoteMetadata, localDateKey } from './metadataPrompt';
 import { registerInsertCommands } from './editorToolbar';
+import { ScratchpadViewProvider } from './scratchpadView';
 
 const execFileAsync = promisify(execFile);
 const fsp = fs.promises;
@@ -78,6 +79,59 @@ export function activate(context: vscode.ExtensionContext) {
     treeDataProvider: outlineProvider
   });
   context.subscriptions.push(outlineTreeView);
+
+  // Quick Scratchpad Panel
+  const scratchpadProvider = new ScratchpadViewProvider(context.extensionUri);
+  const scratchpadView = vscode.window.registerWebviewViewProvider(
+    ScratchpadViewProvider.viewType,
+    scratchpadProvider
+  );
+  context.subscriptions.push(scratchpadView);
+
+  // Command to focus scratchpad
+  context.subscriptions.push(
+    vscode.commands.registerCommand('markdownNotebook.scratchpad.focus', () => {
+      scratchpadProvider.focus();
+    })
+  );
+
+  // Command to append single line notes
+  context.subscriptions.push(
+    vscode.commands.registerCommand('markdownNotebook.scratchpad.append', async () => {
+      const input = await vscode.window.showInputBox({
+        prompt: 'Append a quick note to scratchpad',
+        placeHolder: 'e.g. Remember to review PR-102'
+      });
+      if (input && input.trim()) {
+        const root = resolveRoot();
+        if (!root) {
+          vscode.window.showErrorMessage('Notebook: open a folder first.');
+          return;
+        }
+        const fileSetting = vscode.workspace.getConfiguration('markdownNotebook').get<string>('scratchpadFile', 'scratchpad.md');
+        const scratchpadUri = vscode.Uri.joinPath(root, (fileSetting || 'scratchpad.md').trim());
+        
+        let existingText = '';
+        try {
+          const data = await vscode.workspace.fs.readFile(scratchpadUri);
+          existingText = new TextDecoder().decode(data);
+        } catch {}
+
+        let newText = existingText;
+        if (newText.length > 0 && !newText.endsWith('\n')) {
+          newText += '\n';
+        }
+        newText += input.trim() + '\n';
+
+        try {
+          await vscode.workspace.fs.writeFile(scratchpadUri, new TextEncoder().encode(newText));
+          vscode.window.showInformationMessage('Quick note appended to scratchpad!');
+        } catch (err) {
+          vscode.window.showErrorMessage(`Scratchpad: Failed to append note: ${String(err)}`);
+        }
+      }
+    })
+  );
 
   // Helper to update active outline heading and trigger tree view refresh/reveal
   const updateActiveHeading = (line: number) => {

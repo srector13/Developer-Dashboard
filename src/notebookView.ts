@@ -1316,11 +1316,11 @@ async function newSection(node: NoteNode | undefined, provider: NotebookProvider
   provider.refresh();
 }
 
-async function newDailyNote(provider: NotebookProvider): Promise<void> {
+export async function getOrCreateDailyNoteUri(provider?: NotebookProvider): Promise<{ targetUri: vscode.Uri, cursorOffset: number } | undefined> {
   const root = resolveRoot();
   if (!root) {
     vscode.window.showErrorMessage('Notebook: open a folder first.');
-    return;
+    return undefined;
   }
 
   const dailyDir = path.join(root.fsPath, 'Daily');
@@ -1328,7 +1328,7 @@ async function newDailyNote(provider: NotebookProvider): Promise<void> {
     await fsp.mkdir(dailyDir, { recursive: true });
   } catch (err) {
     vscode.window.showErrorMessage(`Notebook: could not create Daily folder (${String(err)}).`);
-    return;
+    return undefined;
   }
 
   const now = new Date();
@@ -1339,9 +1339,7 @@ async function newDailyNote(provider: NotebookProvider): Promise<void> {
   const targetUri = vscode.Uri.file(filePath);
 
   if (await exists(filePath)) {
-    // If it already exists, just open it!
-    await vscode.commands.executeCommand('markdownNotebook.openPage', targetUri);
-    return;
+    return { targetUri, cursorOffset: -1 };
   }
 
   // Check if daily template exists in templatesFolder
@@ -1397,10 +1395,21 @@ async function newDailyNote(provider: NotebookProvider): Promise<void> {
     await updateTasksDashboard(root.fsPath);
   } catch (err) {
     vscode.window.showErrorMessage(`Notebook: could not create daily note (${String(err)}).`);
-    return;
+    return undefined;
   }
 
-  provider.refresh();
+  if (provider) {
+    provider.refresh();
+  }
+  return { targetUri, cursorOffset };
+}
+
+async function newDailyNote(provider: NotebookProvider): Promise<void> {
+  const result = await getOrCreateDailyNoteUri(provider);
+  if (!result) {
+    return;
+  }
+  const { targetUri, cursorOffset } = result;
 
   const cfg = vscode.workspace.getConfiguration('markdownNotebook');
   const alwaysPreview = cfg.get<boolean>('alwaysShowPreview', false);
@@ -1574,9 +1583,36 @@ function applyTemplate(raw: string, title: string): { text: string; cursorOffset
     day: pad(now.getDate()),
     weekday: now.toLocaleDateString('en-US', { weekday: 'long' }),
   };
-  let text = raw.replace(/\{\{(\w+)\}\}/g, (m, key: string) =>
-    key === 'cursor' ? m : key in values ? values[key] : m,
-  );
+
+  const fmMatch = raw.match(/^(---\r?\n[\s\S]*?\r?\n---)(?=[ \t]*(?:\r?\n|$))/);
+  let text = '';
+  if (fmMatch) {
+    let fm = fmMatch[1];
+    const body = raw.slice(fm.length);
+
+    // Replace in frontmatter: check if quoted or not, and use yamlValue for unquoted values
+    fm = fm.replace(/(["']?)\{\{(\w+)\}\}\1/g, (m, quote, key: string) => {
+      if (key === 'cursor') { return m; }
+      if (key in values) {
+        const val = values[key];
+        return quote ? quote + val + quote : yamlValue(val);
+      }
+      return m;
+    });
+
+    // Replace in body: normal replacement
+    const replacedBody = body.replace(/\{\{(\w+)\}\}/g, (m, key: string) =>
+      key === 'cursor' ? m : key in values ? values[key] : m
+    );
+
+    text = fm + replacedBody;
+  } else {
+    // No frontmatter, normal replacement throughout
+    text = raw.replace(/\{\{(\w+)\}\}/g, (m, key: string) =>
+      key === 'cursor' ? m : key in values ? values[key] : m
+    );
+  }
+
   let cursorOffset = text.indexOf('{{cursor}}');
   if (cursorOffset >= 0) {
     text = text.slice(0, cursorOffset) + text.slice(cursorOffset + '{{cursor}}'.length);
@@ -2006,7 +2042,7 @@ function parseTitle(text: string): string | undefined {
   return h1 ? h1[1].trim() : undefined;
 }
 
-function yamlValue(s: string): string {
+export function yamlValue(s: string): string {
   // Quote anything YAML could misread: flow/comment/quote characters anywhere,
   // indicator characters at the start, surrounding whitespace, or emptiness.
   return /[:#\[\]{}",'`]|^[\s\-*&?>|%@!]|\s$|^$/.test(s) ? JSON.stringify(s) : s;

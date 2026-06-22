@@ -289,6 +289,16 @@
         "title": "Show Source (Markdown)",
         "category": "Format",
         "icon": "$(code)"
+      },
+      {
+        "command": "markdownNotebook.scratchpad.focus",
+        "title": "Focus Quick Scratchpad",
+        "category": "Notebook"
+      },
+      {
+        "command": "markdownNotebook.scratchpad.append",
+        "title": "Append Quick Note...",
+        "category": "Notebook"
       }
     ],
     "viewsContainers": {
@@ -306,6 +316,12 @@
           "id": "markdownNotebook.view",
           "name": "Notebook",
           "icon": "resources/notebook.svg"
+        },
+        {
+          "type": "webview",
+          "id": "markdownNotebook.scratchpad",
+          "name": "Quick Scratchpad",
+          "icon": "resources/edit.svg"
         },
         {
           "id": "markdownNotebook.outline",
@@ -837,6 +853,16 @@
           "default": "mmdc",
           "scope": "machine-overridable",
           "markdownDescription": "Path to the mermaid-cli (`mmdc`) executable, used to render Mermaid diagrams when exporting to PDF/HTML. Install with `npm i -g @mermaid-js/mermaid-cli`. The live preview renders Mermaid without this."
+        },
+        "markdownNotebook.scratchpadFile": {
+          "type": "string",
+          "default": "scratchpad.md",
+          "markdownDescription": "Path to the scratchpad backing file, relative to the notebook root. Defaults to `scratchpad.md`."
+        },
+        "markdownNotebook.scratchpadAppendFormat": {
+          "type": "string",
+          "default": "* **[{time}]** {content}",
+          "markdownDescription": "Format used when appending scratchpad contents to the Daily Note. Supports `{time}` and `{content}`."
         }
       }
     }
