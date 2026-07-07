@@ -301,7 +301,7 @@
           <div id="editor-pane" class="pane">
             <div class="editor-wrapper">
               <div class="line-numbers" id="line-numbers"></div>
-              <textarea id="note-editor" oninput="handleEditorInput()" onkeydown="handleEditorKeys(event)" placeholder="Type Markdown here..."></textarea>
+              <textarea id="note-editor" oninput="handleEditorInput()" onkeydown="handleEditorKeys(event)" onscroll="syncEditorScroll()" placeholder="Type Markdown here..."></textarea>
             </div>
           </div>
 

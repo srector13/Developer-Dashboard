@@ -735,6 +735,16 @@ function updateLineNumbers() {
     html += `<div>${i}</div>`;
   }
   lineNumbers.innerHTML = html;
+  syncEditorScroll(); // rebuilding the gutter resets its scroll position
+}
+
+// Keep the line-number gutter aligned with the textarea's scroll position
+function syncEditorScroll() {
+  const textarea = document.getElementById('note-editor');
+  const lineNumbers = document.getElementById('line-numbers');
+  if (textarea && lineNumbers) {
+    lineNumbers.scrollTop = textarea.scrollTop;
+  }
 }
 
 // Auto save active note
