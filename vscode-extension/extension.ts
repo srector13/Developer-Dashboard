@@ -81,7 +81,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(outlineTreeView);
 
   // Quick Scratchpad Panel
-  const scratchpadProvider = new ScratchpadViewProvider(context.extensionUri);
+  const scratchpadProvider = new ScratchpadViewProvider(context.extensionUri, context.workspaceState);
   const scratchpadView = vscode.window.registerWebviewViewProvider(
     ScratchpadViewProvider.viewType,
     scratchpadProvider
