@@ -31,14 +31,17 @@
     },
     "files": [
       "out/**/*",
-      "renderer/**/*"
+      "renderer/**/*",
+      "build/icon.png"
     ],
     "mac": {
       "target": "zip",
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.png"
     },
     "win": {
-      "target": "portable"
+      "target": "portable",
+      "icon": "build/icon.png"
     }
   }
 }

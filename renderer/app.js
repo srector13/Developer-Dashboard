@@ -39,16 +39,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // File watcher setup (auto refresh)
   window.api.onFilesChanged(async () => {
-    console.log('Files changed, refreshing tree...');
     await refreshNotebook(false); // refresh tree without resetting active note
   });
-
-  // Setup Mermaid toggle orientation listener
-  window.api.onFilesChanged(() => {}); // clear/keep subscriptions tidy
-  
-  // Custom IPC event from main process to toggle mermaid orientation
-  // We register it via normal preload but let's handle the toggle message:
-  navigator.serviceWorker || ipcListenerSetup();
 
   // Initialize Mermaid
   if (window.mermaid) {
@@ -74,7 +66,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         labelBoxBkgColor: '#161b22',
         labelBoxBorderColor: 'rgba(240, 246, 252, 0.1)',
         labelTextColor: '#c9d1d9',
-        loopLimitColor: '#bc8cff',
+        loopLimitColor: '#39c5cf',
         successColor: '#3fb950',
         errorColor: '#f85149',
       }
@@ -109,20 +101,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     });
   });
-});
-
-function ipcListenerSetup() {
-  // We can listen to specific messages directly in the web page or via preload
-  // Let's hook the toggler:
-  const { ipcRenderer } = require && require('electron') || {};
-  // If not direct, we handle it in app.js. The main process sends 'perform-mermaid-toggle'
-  // In preload we can handle it, or listen to window events.
-  // Actually, we can intercept it since we defined IPC handlers in preload.
-}
-
-// Recurrent file watch event channel fallback listener
-window.addEventListener('message', event => {
-  // We can pass custom IPC messages through window.postMessage from preload if needed
 });
 
 // Setup keyboard shortcuts inside document
@@ -164,7 +142,8 @@ async function refreshNotebook(resetActiveNote = false) {
   // Load tree
   treeData = await window.api.getNotebookTree(notebookRoot, activeTagFilter);
   
-  // Build global tag list and search tags
+  // Build global tag list and search tags (rebuilt from scratch so removed tags disappear)
+  tagSet.clear();
   scanGlobalTags(treeData);
   
   // Render sidebar tree
@@ -272,24 +251,24 @@ function generateTreeHTML(node, depth) {
       html += `
         <div class="tree-section">
           <div class="tree-node ${isActiveFolder ? 'active' : ''}" style="padding-left: ${depth * 12 + 12}px;">
-            <span class="tree-node-chevron ${isExpanded ? '' : 'collapsed'}" onclick="event.stopPropagation(); toggleFolderCollapse('${node.relPath}')">
+            <span class="tree-node-chevron ${isExpanded ? '' : 'collapsed'}" onclick="event.stopPropagation(); toggleFolderCollapse(${jsArg(node.relPath)})">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
             </span>
-            <div class="tree-node-content" onclick="openSection('${node.relPath}', '${node.fsPath}')">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--accent-purple);"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-              <span class="tree-node-label" style="font-weight: 500;">${node.name}</span>
+            <div class="tree-node-content" onclick="openSection(${jsArg(node.relPath)}, ${jsArg(node.fsPath)})">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--accent-teal);"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              <span class="tree-node-label" style="font-weight: 500;">${escapeHtml(node.name)}</span>
             </div>
             <div class="tree-node-actions">
-              <button class="tree-node-btn" onclick="event.stopPropagation(); promptCreatePage('${node.fsPath}')" title="New Page">
+              <button class="tree-node-btn" onclick="event.stopPropagation(); promptCreatePage(${jsArg(node.fsPath)})" title="New Page">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
               </button>
-              <button class="tree-node-btn" onclick="event.stopPropagation(); promptCreateSection('${node.fsPath}')" title="New Subsection">
+              <button class="tree-node-btn" onclick="event.stopPropagation(); promptCreateSection(${jsArg(node.fsPath)})" title="New Subsection">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
               </button>
-              <button class="tree-node-btn" onclick="event.stopPropagation(); promptRenameNode('${node.fsPath}', '${node.name}')" title="Rename">
+              <button class="tree-node-btn" onclick="event.stopPropagation(); promptRenameNode(${jsArg(node.fsPath)}, ${jsArg(node.name)})" title="Rename">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
               </button>
-              <button class="tree-node-btn" onclick="event.stopPropagation(); deleteNode('${node.fsPath}')" title="Delete">
+              <button class="tree-node-btn" onclick="event.stopPropagation(); deleteNode(${jsArg(node.fsPath)})" title="Delete">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
               </button>
             </div>
@@ -330,23 +309,23 @@ function generateTreeHTML(node, depth) {
       }
 
       html += `
-        <div class="tree-node ${isActive ? 'active' : ''}" style="padding-left: ${(isRoot ? 0 : depth + 1) * 12 + 12}px;" onclick="openNote('${page.fsPath}')">
+        <div class="tree-node ${isActive ? 'active' : ''}" style="padding-left: ${(isRoot ? 0 : depth + 1) * 12 + 12}px;" onclick="openNote(${jsArg(page.fsPath)})">
           <div class="tree-node-content">
             ${iconHtml}
-            <span class="tree-node-label">${page.title}</span>
+            <span class="tree-node-label">${escapeHtml(page.title)}</span>
             ${badgeHtml}
           </div>
           <div class="tree-node-actions">
-            <button class="tree-node-btn" onclick="event.stopPropagation(); moveNode('${node.fsPath}', '${page.name}', 'up')" title="Move Up">
+            <button class="tree-node-btn" onclick="event.stopPropagation(); moveNode(${jsArg(node.fsPath)}, ${jsArg(page.name)}, 'up')" title="Move Up">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>
             </button>
-            <button class="tree-node-btn" onclick="event.stopPropagation(); moveNode('${node.fsPath}', '${page.name}', 'down')" title="Move Down">
+            <button class="tree-node-btn" onclick="event.stopPropagation(); moveNode(${jsArg(node.fsPath)}, ${jsArg(page.name)}, 'down')" title="Move Down">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
             </button>
-            <button class="tree-node-btn" onclick="event.stopPropagation(); promptRenameNode('${page.fsPath}', '${page.title}')" title="Rename">
+            <button class="tree-node-btn" onclick="event.stopPropagation(); promptRenameNode(${jsArg(page.fsPath)}, ${jsArg(page.title)})" title="Rename">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
             </button>
-            <button class="tree-node-btn" onclick="event.stopPropagation(); deleteNode('${page.fsPath}')" title="Delete">
+            <button class="tree-node-btn" onclick="event.stopPropagation(); deleteNode(${jsArg(page.fsPath)})" title="Delete">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
             </button>
           </div>
@@ -406,7 +385,7 @@ function renderTagsCloud() {
   let html = '';
   Array.from(tagSet).sort().forEach(tag => {
     const isSelected = activeTagFilter === tag;
-    html += `<span class="tag-pill ${isSelected ? 'active' : ''}" style="margin: 2px; display:inline-block;" onclick="toggleTagFilter('${tag}')">#${tag}</span>`;
+    html += `<span class="tag-pill ${isSelected ? 'active' : ''}" style="margin: 2px; display:inline-block;" onclick="toggleTagFilter(${jsArg(tag)})">#${escapeHtml(tag)}</span>`;
   });
   container.innerHTML = html;
 }
@@ -717,9 +696,21 @@ function handleEditorInput() {
   noteContent = textarea.value;
   updateLineNumbers();
   updateSaveStatus(true);
-  
+
   if (viewMode === 'split') {
     renderMarkdownPreview();
+  }
+
+  // Debounced auto-save (1 second after the last keystroke)
+  if (autoSaveTimeout) {
+    clearTimeout(autoSaveTimeout);
+    autoSaveTimeout = null;
+  }
+  if (autoSaveEnabled && activeNote) {
+    autoSaveTimeout = setTimeout(() => {
+      autoSaveTimeout = null;
+      saveActiveNote();
+    }, 1000);
   }
 }
 
@@ -744,6 +735,16 @@ function updateLineNumbers() {
     html += `<div>${i}</div>`;
   }
   lineNumbers.innerHTML = html;
+  syncEditorScroll(); // rebuilding the gutter resets its scroll position
+}
+
+// Keep the line-number gutter aligned with the textarea's scroll position
+function syncEditorScroll() {
+  const textarea = document.getElementById('note-editor');
+  const lineNumbers = document.getElementById('line-numbers');
+  if (textarea && lineNumbers) {
+    lineNumbers.scrollTop = textarea.scrollTop;
+  }
 }
 
 // Auto save active note
@@ -1295,7 +1296,7 @@ function updateOutlineAndBacklinks() {
         const wikiRegex = new RegExp(`\\[\\[${escapeBaseName}(\\||#|\\]\\])`, 'i');
         const mdRegex = new RegExp(`\\(\\.*\\/?.*?${escapeFullName}\\)`, 'i');
         
-        if (wikiRegex.test(fileText) || mdRegex.test(fileText) || (noteBaseName && fileText.includes(noteBaseName))) {
+        if (wikiRegex.test(fileText) || mdRegex.test(fileText)) {
           const pill = document.createElement('span');
           pill.className = 'backlink-pill';
           pill.innerHTML = `
@@ -1343,6 +1344,21 @@ function escapeRegex(string) {
   return string.replace(/[/\-\\^$*+?.()|[\]{}]/g, '\\$&');
 }
 
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// Encode a value as a safe JS string expression for inline onclick handlers,
+// so paths/titles containing quotes or backslashes can't break the markup.
+function jsArg(value) {
+  return `decodeURIComponent('${encodeURIComponent(String(value))}')`;
+}
+
 function expandFoldersToPath(pagePath) {
   if (!treeData || !pagePath) return;
   const parents = [];
@@ -1377,6 +1393,7 @@ function expandFoldersToPath(pagePath) {
 
 // Daily Note helper: creates YYYY-MM-DD.md note
 async function openDailyNote() {
+  if (!notebookRoot) return;
   const today = new Date();
   const pad = (n) => String(n).padStart(2, '0');
   const dailyName = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
@@ -1441,24 +1458,45 @@ async function saveSettingsForm() {
   await refreshNotebook();
 }
 
+// Local date string (YYYY-MM-DD) — avoids the UTC off-by-one near midnight
+function localToday() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// Read the optional metadata fields (date + tags) from the create modal
+function collectModalMeta() {
+  const created = document.getElementById('create-modal-date').value || localToday();
+  const tags = document.getElementById('create-modal-tags').value
+    .split(',')
+    .map(t => t.trim().replace(/^#/, ''))
+    .filter(t => t);
+  return { created, tags };
+}
+
 // New note popup creation
 function promptCreatePage(destDir) {
   document.getElementById('create-modal-title').innerText = 'New Page';
   document.getElementById('create-modal-name-label').innerText = 'Page Title';
   document.getElementById('create-modal-name').value = '';
+  document.getElementById('create-modal-name').placeholder = 'e.g. Q3 Migration Plan';
   document.getElementById('create-modal-dest').value = destDir || notebookRoot;
   document.getElementById('create-modal-type').value = 'page';
   document.getElementById('create-modal-page-options').style.display = 'block';
+  document.getElementById('create-modal-template-group').style.display = 'block';
+  document.getElementById('create-modal-date').value = localToday();
+  document.getElementById('create-modal-tags').value = '';
 
   // Load Templates Select
   const select = document.getElementById('create-modal-template');
   select.innerHTML = '<option value="">Blank Page (No Template)</option>';
-  
+
   // Find templates files in tree if templates directory is loaded
   const templatesNode = findTemplatesNode(treeData, appSettings.templatesFolder);
   if (templatesNode) {
     templatesNode.pages.forEach(p => {
-      select.innerHTML += `<option value="${p.name}">${p.title}</option>`;
+      select.innerHTML += `<option value="${escapeHtml(p.name)}">${escapeHtml(p.title)}</option>`;
     });
   }
 
@@ -1507,14 +1545,36 @@ async function submitCreateModal() {
   const name = document.getElementById('create-modal-name').value.trim();
   const dest = document.getElementById('create-modal-dest').value;
 
-  if (!name) return;
+  // The paste-import can auto-detect a title from content, so a blank name is allowed there
+  if (!name && type !== 'import-clip') return;
 
   if (type === 'page') {
     const template = document.getElementById('create-modal-template').value;
-    const newPath = await window.api.createPage(dest, name, template);
+    const newPath = await window.api.createPage(dest, name, template, collectModalMeta());
     hideCreateModal();
     await refreshNotebook();
     await openNote(newPath);
+  } else if (type === 'import-clip') {
+    const meta = collectModalMeta();
+    hideCreateModal();
+    const result = await window.api.importClipboard(dest, { title: name, ...meta });
+    if (result.success) {
+      await refreshNotebook();
+      await openNote(result.filePath);
+    } else {
+      alert(result.reason || 'Clipboard import failed.');
+    }
+  } else if (type === 'rename') {
+    // dest holds the fsPath of the node being renamed
+    const success = await window.api.renameNode(dest, name);
+    hideCreateModal();
+    if (success) {
+      if (activeNote === dest) {
+        // Path may have changed on disk; close so refresh doesn't point at a stale file
+        closeNoteCanvas();
+      }
+      await refreshNotebook();
+    }
   } else {
     // Section Folder create
     const reason = invalidFolderNameReason(name);
@@ -1528,22 +1588,22 @@ async function submitCreateModal() {
   }
 }
 
-// Rename nodes dialog
-async function promptRenameNode(fsPath, currentName) {
-  const newName = prompt('Enter a new name:', currentName);
-  if (newName && newName.trim() && newName.trim() !== currentName) {
-    const success = await window.api.renameNode(fsPath, newName.trim());
-    if (success) {
-      if (activeNote === fsPath) {
-        // Find if page path resolved renamed
-        const node = findNodeByPath(treeData, fsPath);
-        // Note: the node path will be updated automatically since watcher updates it,
-        // we can find the renamed file and reopen it if it matches the new slug.
-        // Actually, main process renames and watching fires refresh, so we reload activeNote path
-      }
-      await refreshNotebook();
-    }
-  }
+// Rename nodes dialog (window.prompt is not supported in Electron,
+// so this reuses the create modal in "rename" mode)
+function promptRenameNode(fsPath, currentName) {
+  document.getElementById('create-modal-title').innerText = 'Rename';
+  document.getElementById('create-modal-name-label').innerText = 'New Name';
+  document.getElementById('create-modal-name').value = currentName || '';
+  document.getElementById('create-modal-dest').value = fsPath;
+  document.getElementById('create-modal-type').value = 'rename';
+  document.getElementById('create-modal-page-options').style.display = 'none';
+
+  document.getElementById('create-modal').classList.add('active');
+  setTimeout(() => {
+    const input = document.getElementById('create-modal-name');
+    input.focus();
+    input.select();
+  }, 100);
 }
 
 async function promptRenameCurrent() {
@@ -1589,17 +1649,24 @@ function invalidFolderNameReason(name) {
   return null;
 }
 
-// Imports
-async function importFromClipboard() {
+// Imports: paste-import goes through the same new-note onboarding modal
+// so the user can set title/date/tags before the note is created.
+function importFromClipboard() {
   const dest = activeNote ? pathDirname(activeNote) : notebookRoot;
-  const result = await window.api.importClipboard(dest);
-  if (result.success) {
-    await refreshNotebook();
-    await openNote(result.filePath);
-    alert('Imported clipboard content successfully!');
-  } else {
-    alert(result.reason || 'Clipboard import failed.');
-  }
+
+  document.getElementById('create-modal-title').innerText = 'Paste Note from Clipboard';
+  document.getElementById('create-modal-name-label').innerText = 'Note Title (leave blank to auto-detect from content)';
+  document.getElementById('create-modal-name').value = '';
+  document.getElementById('create-modal-name').placeholder = 'Auto-detect from pasted content';
+  document.getElementById('create-modal-dest').value = dest;
+  document.getElementById('create-modal-type').value = 'import-clip';
+  document.getElementById('create-modal-page-options').style.display = 'block';
+  document.getElementById('create-modal-template-group').style.display = 'none'; // templates don't apply to imports
+  document.getElementById('create-modal-date').value = localToday();
+  document.getElementById('create-modal-tags').value = 'imported';
+
+  document.getElementById('create-modal').classList.add('active');
+  setTimeout(() => document.getElementById('create-modal-name').focus(), 100);
 }
 
 async function importDocFile() {
@@ -1813,12 +1880,12 @@ async function renderSectionLanding() {
         </span>
       ` : '';
       return `
-        <div class="landing-page-item" onclick="openNote('${p.fsPath}')">
+        <div class="landing-page-item" onclick="openNote(${jsArg(p.fsPath)})">
           <div class="landing-page-main">
-            <span class="landing-page-title">${p.title}</span>
+            <span class="landing-page-title">${escapeHtml(p.title)}</span>
             <div class="landing-page-meta">
-              <span>Created: ${p.created || 'N/A'}</span>
-              ${p.tags.map(t => `<span class="tag-pill" style="font-size: 9px; padding: 1px 4px;">#${t}</span>`).join(' ')}
+              <span>Created: ${escapeHtml(p.created || 'N/A')}</span>
+              ${p.tags.map(t => `<span class="tag-pill" style="font-size: 9px; padding: 1px 4px;">#${escapeHtml(t)}</span>`).join(' ')}
             </div>
           </div>
           ${progressBadge}
@@ -1837,9 +1904,9 @@ async function renderSectionLanding() {
     tasksContainer.innerHTML = pendingTasks.map(t => {
       return `
         <div class="landing-task-item">
-          <input type="checkbox" style="accent-color: var(--accent-blue); width: 15px; height: 15px; cursor: pointer;" onchange="toggleLandingTask('${t.fsPath}', ${t.lineIndex})">
+          <input type="checkbox" style="accent-color: var(--accent-blue); width: 15px; height: 15px; cursor: pointer;" onchange="toggleLandingTask(${jsArg(t.fsPath)}, ${t.lineIndex})">
           <span class="landing-task-text">${escapeHtml(t.text)}</span>
-          <span class="landing-task-origin" onclick="openNote('${t.fsPath}')">${t.title}</span>
+          <span class="landing-task-origin" onclick="openNote(${jsArg(t.fsPath)})">${escapeHtml(t.title)}</span>
         </div>
       `;
     }).join('\n');
@@ -1888,12 +1955,12 @@ async function renderRootLanding() {
         </span>
       ` : '';
       return `
-        <div class="landing-page-item" onclick="openNote('${p.fsPath}')">
+        <div class="landing-page-item" onclick="openNote(${jsArg(p.fsPath)})">
           <div class="landing-page-main">
-            <span class="landing-page-title">${p.title}</span>
+            <span class="landing-page-title">${escapeHtml(p.title)}</span>
             <div class="landing-page-meta">
-              <span>Created: ${p.created || 'N/A'}</span>
-              ${p.tags.map(t => `<span class="tag-pill" style="font-size: 9px; padding: 1px 4px;">#${t}</span>`).join(' ')}
+              <span>Created: ${escapeHtml(p.created || 'N/A')}</span>
+              ${p.tags.map(t => `<span class="tag-pill" style="font-size: 9px; padding: 1px 4px;">#${escapeHtml(t)}</span>`).join(' ')}
             </div>
           </div>
           ${progressBadge}
@@ -1912,9 +1979,9 @@ async function renderRootLanding() {
     tasksContainer.innerHTML = pendingTasks.slice(0, 25).map(t => {
       return `
         <div class="landing-task-item">
-          <input type="checkbox" style="accent-color: var(--accent-blue); width: 15px; height: 15px; cursor: pointer;" onchange="toggleLandingTask('${t.fsPath}', ${t.lineIndex})">
+          <input type="checkbox" style="accent-color: var(--accent-blue); width: 15px; height: 15px; cursor: pointer;" onchange="toggleLandingTask(${jsArg(t.fsPath)}, ${t.lineIndex})">
           <span class="landing-task-text">${escapeHtml(t.text)}</span>
-          <span class="landing-task-origin" onclick="openNote('${t.fsPath}')">${t.title}</span>
+          <span class="landing-task-origin" onclick="openNote(${jsArg(t.fsPath)})">${escapeHtml(t.title)}</span>
         </div>
       `;
     }).join('\n');
@@ -2145,7 +2212,7 @@ function handlePaletteSearch() {
     el.className = `palette-item ${idx === paletteSelectedIndex ? 'selected' : ''}`;
     el.innerHTML = `
       <div class="palette-item-content">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: ${item.subtitle.startsWith('Action:') ? 'var(--accent-purple)' : 'var(--accent-blue)'};">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: ${item.subtitle.startsWith('Action:') ? 'var(--accent-teal)' : 'var(--accent-blue)'};">
           ${item.subtitle.startsWith('Action:') 
             ? '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>' 
             : '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>'}

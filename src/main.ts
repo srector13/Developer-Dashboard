@@ -54,6 +54,7 @@ async function writeSettings(settings: Partial<AppSettings>): Promise<AppSetting
 
 // Window manager
 function createWindow() {
+  const iconPath = path.join(__dirname, '../build/icon.png');
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -61,6 +62,7 @@ function createWindow() {
     minHeight: 600,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     trafficLightPosition: { x: 12, y: 20 },
+    ...(fs.existsSync(iconPath) ? { icon: iconPath } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -263,6 +265,7 @@ async function scanDirectory(
   dir: string,
   rootDir: string,
   ignore: Set<string>,
+  scratchpadFile: string,
 ): Promise<SectionNode> {
   const relative = path.relative(rootDir, dir).replace(/\\/g, '/');
   const sectionNode: SectionNode = {
@@ -284,12 +287,11 @@ async function scanDirectory(
     }
 
     if (entry.isDirectory()) {
-      const childSec = await scanDirectory(fullPath, rootDir, ignore);
+      const childSec = await scanDirectory(fullPath, rootDir, ignore, scratchpadFile);
       sectionNode.sections.push(childSec);
     } else if (entry.isFile() && entry.name.endsWith('.md')) {
       // Skip scratchpad.md if it is in the section root
-      const settings = await readSettings();
-      if (entry.name === settings.scratchpadFile && relative === '') {
+      if (entry.name === scratchpadFile && relative === '') {
         continue;
       }
       try {
@@ -364,7 +366,7 @@ ipcMain.handle('get-notebook-tree', async (event, rootPath, filterTag) => {
   if (!rootPath || !fs.existsSync(rootPath)) return null;
   const settings = await readSettings();
   const ignore = new Set(settings.ignoreFolders.map(s => s.toLowerCase()));
-  const rootNode = await scanDirectory(rootPath, rootPath, ignore);
+  const rootNode = await scanDirectory(rootPath, rootPath, ignore, settings.scratchpadFile);
 
   // Apply Tag Filtering recursively if filterTag is present
   if (filterTag) {
@@ -417,9 +419,34 @@ async function uniqueMd(dir: string, baseSlug: string): Promise<string> {
   return candidate;
 }
 
-ipcMain.handle('create-page', async (event, dirPath, title, templateName) => {
+// Local date string (YYYY-MM-DD); toISOString() would shift the date near midnight
+function localDateString(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+interface NoteMeta {
+  title?: string;
+  created?: string;
+  tags?: string[];
+}
+
+function sanitizeMeta(meta: NoteMeta | undefined): { created: string; tags: string[] } {
+  const created = meta?.created && /^\d{4}-\d{2}-\d{2}$/.test(meta.created) ? meta.created : localDateString();
+  const tags = Array.isArray(meta?.tags)
+    ? meta!.tags.map(t => String(t).trim().replace(/^#/, '')).filter(t => t)
+    : [];
+  return { created, tags };
+}
+
+function tagsYamlLine(tags: string[]): string {
+  return tags.length ? `tags: [${tags.map(yamlValue).join(', ')}]` : 'tags: []';
+}
+
+ipcMain.handle('create-page', async (event, dirPath, title, templateName, meta?: NoteMeta) => {
   const settings = await readSettings();
-  const createdDate = new Date().toISOString().split('T')[0];
+  const { created: createdDate, tags } = sanitizeMeta(meta);
   let body = '';
 
   if (templateName) {
@@ -445,7 +472,7 @@ ipcMain.handle('create-page', async (event, dirPath, title, templateName) => {
   if (settings.author) {
     fm.push(`author: ${yamlValue(settings.author)}`);
   }
-  fm.push('tags: []', '---', '', `# ${title}`, '', body);
+  fm.push(tagsYamlLine(tags), '---', '', `# ${title}`, '', body);
   const content = fm.join('\n');
 
   const baseSlug = slug(title) || 'untitled';
@@ -656,7 +683,7 @@ ipcMain.handle('move-node', async (event, dirPath, fileName, direction) => {
   if (ord.length === 0) {
     const settings = await readSettings();
     const ignore = new Set(settings.ignoreFolders.map(s => s.toLowerCase()));
-    const secNode = await scanDirectory(dirPath, settings.notebookRoot, ignore);
+    const secNode = await scanDirectory(dirPath, settings.notebookRoot, ignore, settings.scratchpadFile);
     secNode.pages.forEach(p => ord.push(p.name));
   }
 
@@ -724,13 +751,13 @@ function looksLikeHtml(text: string): boolean {
   return !!tagHits && tagHits.length >= 3;
 }
 
-ipcMain.handle('import-clipboard', async (event, destDir) => {
+ipcMain.handle('import-clipboard', async (event, destDir, meta?: NoteMeta) => {
   const settings = await readSettings();
   const { clipboard } = require('electron');
-  
+
   const html = clipboard.readHTML();
   const text = clipboard.readText();
-  
+
   if (!text && !html) return { success: false, reason: 'Clipboard is empty.' };
 
   const isHtml = looksLikeHtml(html || text);
@@ -745,14 +772,15 @@ ipcMain.handle('import-clipboard', async (event, destDir) => {
   }
 
   body = body.trim();
-  const title = body.match(/^#{1,6}\s+(.+?)\s*$/m)?.[1]?.trim() || 'Imported Note';
-  const createdDate = new Date().toISOString().split('T')[0];
+  // User-supplied title wins; otherwise auto-detect from the first heading
+  const title = meta?.title?.trim() || body.match(/^#{1,6}\s+(.+?)\s*$/m)?.[1]?.trim() || 'Imported Note';
+  const { created: createdDate, tags } = sanitizeMeta(meta);
 
   const fm: string[] = ['---', `title: ${yamlValue(title)}`, `created: ${createdDate}`];
   if (settings.author) {
     fm.push(`author: ${yamlValue(settings.author)}`);
   }
-  fm.push('tags: [imported]', '---', '', body);
+  fm.push(tagsYamlLine(tags.length ? tags : ['imported']), '---', '', body);
   const content = fm.join('\n');
 
   const baseSlug = `import-${slug(title) || Date.now()}`;
@@ -815,7 +843,7 @@ ipcMain.handle('import-document', async (event, destDir) => {
 
   body = body.trim();
   const title = body.match(/^#{1,6}\s+(.+?)\s*$/m)?.[1]?.trim() || path.basename(docPath, ext);
-  const createdDate = new Date().toISOString().split('T')[0];
+  const createdDate = localDateString();
 
   const fm: string[] = ['---', `title: ${yamlValue(title)}`, `created: ${createdDate}`];
   if (settings.author) {
