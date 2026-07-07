@@ -1458,24 +1458,45 @@ async function saveSettingsForm() {
   await refreshNotebook();
 }
 
+// Local date string (YYYY-MM-DD) — avoids the UTC off-by-one near midnight
+function localToday() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// Read the optional metadata fields (date + tags) from the create modal
+function collectModalMeta() {
+  const created = document.getElementById('create-modal-date').value || localToday();
+  const tags = document.getElementById('create-modal-tags').value
+    .split(',')
+    .map(t => t.trim().replace(/^#/, ''))
+    .filter(t => t);
+  return { created, tags };
+}
+
 // New note popup creation
 function promptCreatePage(destDir) {
   document.getElementById('create-modal-title').innerText = 'New Page';
   document.getElementById('create-modal-name-label').innerText = 'Page Title';
   document.getElementById('create-modal-name').value = '';
+  document.getElementById('create-modal-name').placeholder = 'e.g. Q3 Migration Plan';
   document.getElementById('create-modal-dest').value = destDir || notebookRoot;
   document.getElementById('create-modal-type').value = 'page';
   document.getElementById('create-modal-page-options').style.display = 'block';
+  document.getElementById('create-modal-template-group').style.display = 'block';
+  document.getElementById('create-modal-date').value = localToday();
+  document.getElementById('create-modal-tags').value = '';
 
   // Load Templates Select
   const select = document.getElementById('create-modal-template');
   select.innerHTML = '<option value="">Blank Page (No Template)</option>';
-  
+
   // Find templates files in tree if templates directory is loaded
   const templatesNode = findTemplatesNode(treeData, appSettings.templatesFolder);
   if (templatesNode) {
     templatesNode.pages.forEach(p => {
-      select.innerHTML += `<option value="${p.name}">${p.title}</option>`;
+      select.innerHTML += `<option value="${escapeHtml(p.name)}">${escapeHtml(p.title)}</option>`;
     });
   }
 
@@ -1524,14 +1545,25 @@ async function submitCreateModal() {
   const name = document.getElementById('create-modal-name').value.trim();
   const dest = document.getElementById('create-modal-dest').value;
 
-  if (!name) return;
+  // The paste-import can auto-detect a title from content, so a blank name is allowed there
+  if (!name && type !== 'import-clip') return;
 
   if (type === 'page') {
     const template = document.getElementById('create-modal-template').value;
-    const newPath = await window.api.createPage(dest, name, template);
+    const newPath = await window.api.createPage(dest, name, template, collectModalMeta());
     hideCreateModal();
     await refreshNotebook();
     await openNote(newPath);
+  } else if (type === 'import-clip') {
+    const meta = collectModalMeta();
+    hideCreateModal();
+    const result = await window.api.importClipboard(dest, { title: name, ...meta });
+    if (result.success) {
+      await refreshNotebook();
+      await openNote(result.filePath);
+    } else {
+      alert(result.reason || 'Clipboard import failed.');
+    }
   } else if (type === 'rename') {
     // dest holds the fsPath of the node being renamed
     const success = await window.api.renameNode(dest, name);
@@ -1617,17 +1649,24 @@ function invalidFolderNameReason(name) {
   return null;
 }
 
-// Imports
-async function importFromClipboard() {
+// Imports: paste-import goes through the same new-note onboarding modal
+// so the user can set title/date/tags before the note is created.
+function importFromClipboard() {
   const dest = activeNote ? pathDirname(activeNote) : notebookRoot;
-  const result = await window.api.importClipboard(dest);
-  if (result.success) {
-    await refreshNotebook();
-    await openNote(result.filePath);
-    alert('Imported clipboard content successfully!');
-  } else {
-    alert(result.reason || 'Clipboard import failed.');
-  }
+
+  document.getElementById('create-modal-title').innerText = 'Paste Note from Clipboard';
+  document.getElementById('create-modal-name-label').innerText = 'Note Title (leave blank to auto-detect from content)';
+  document.getElementById('create-modal-name').value = '';
+  document.getElementById('create-modal-name').placeholder = 'Auto-detect from pasted content';
+  document.getElementById('create-modal-dest').value = dest;
+  document.getElementById('create-modal-type').value = 'import-clip';
+  document.getElementById('create-modal-page-options').style.display = 'block';
+  document.getElementById('create-modal-template-group').style.display = 'none'; // templates don't apply to imports
+  document.getElementById('create-modal-date').value = localToday();
+  document.getElementById('create-modal-tags').value = 'imported';
+
+  document.getElementById('create-modal').classList.add('active');
+  setTimeout(() => document.getElementById('create-modal-name').focus(), 100);
 }
 
 async function importDocFile() {

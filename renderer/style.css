@@ -34,6 +34,10 @@
   padding: 0;
 }
 
+body.dark-theme {
+  color-scheme: dark; /* native widgets (date picker, scrollbars) render dark */
+}
+
 body {
   font-family: var(--font-sans);
   background-color: var(--bg-primary);
@@ -1285,6 +1289,7 @@ body {
 
 .form-group input[type="text"],
 .form-group input[type="number"],
+.form-group input[type="date"],
 .form-group select {
   width: 100%;
   padding: 8px 12px;

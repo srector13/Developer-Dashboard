@@ -190,7 +190,7 @@ contextBridge.exposeInMainWorld('api', {
   getNotebookTree: (rootPath: string, filterTag?: string) => ipcRenderer.invoke('get-notebook-tree', rootPath, filterTag),
   readNote: (filePath: string) => ipcRenderer.invoke('read-note', filePath),
   writeNote: (filePath: string, content: string) => ipcRenderer.invoke('write-note', filePath, content),
-  createPage: (dirPath: string, title: string, templateName?: string) => ipcRenderer.invoke('create-page', dirPath, title, templateName),
+  createPage: (dirPath: string, title: string, templateName?: string, meta?: { created?: string; tags?: string[] }) => ipcRenderer.invoke('create-page', dirPath, title, templateName, meta),
   createSection: (dirPath: string, name: string) => ipcRenderer.invoke('create-section', dirPath, name),
   deleteNode: (filePath: string) => ipcRenderer.invoke('delete-node', filePath),
   renameNode: (filePath: string, newName: string) => ipcRenderer.invoke('rename-node', filePath, newName),
@@ -201,7 +201,7 @@ contextBridge.exposeInMainWorld('api', {
   appendScratchpad: (text: string) => ipcRenderer.invoke('append-scratchpad', text),
   
   // Imports / Exports
-  importClipboard: (destDir: string) => ipcRenderer.invoke('import-clipboard', destDir),
+  importClipboard: (destDir: string, meta?: { title?: string; created?: string; tags?: string[] }) => ipcRenderer.invoke('import-clipboard', destDir, meta),
   importDocument: (destDir: string) => ipcRenderer.invoke('import-document', destDir),
   exportToPdf: (filePath: string, htmlContent: string) => ipcRenderer.invoke('export-to-pdf', filePath, htmlContent),
   

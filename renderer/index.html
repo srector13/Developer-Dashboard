@@ -494,6 +494,14 @@
 
         <div id="create-modal-page-options">
           <div class="form-group">
+            <label>Created Date</label>
+            <input type="date" id="create-modal-date">
+          </div>
+          <div class="form-group">
+            <label>Tags (comma-separated, optional)</label>
+            <input type="text" id="create-modal-tags" placeholder="e.g. project, planning" onkeydown="handleCreateModalEnter(event)">
+          </div>
+          <div class="form-group" id="create-modal-template-group">
             <label>Template (Optional)</label>
             <select id="create-modal-template">
               <option value="">Blank Page (No Template)</option>
