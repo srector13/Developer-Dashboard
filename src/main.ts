@@ -263,6 +263,7 @@ async function scanDirectory(
   dir: string,
   rootDir: string,
   ignore: Set<string>,
+  scratchpadFile: string,
 ): Promise<SectionNode> {
   const relative = path.relative(rootDir, dir).replace(/\\/g, '/');
   const sectionNode: SectionNode = {
@@ -284,12 +285,11 @@ async function scanDirectory(
     }
 
     if (entry.isDirectory()) {
-      const childSec = await scanDirectory(fullPath, rootDir, ignore);
+      const childSec = await scanDirectory(fullPath, rootDir, ignore, scratchpadFile);
       sectionNode.sections.push(childSec);
     } else if (entry.isFile() && entry.name.endsWith('.md')) {
       // Skip scratchpad.md if it is in the section root
-      const settings = await readSettings();
-      if (entry.name === settings.scratchpadFile && relative === '') {
+      if (entry.name === scratchpadFile && relative === '') {
         continue;
       }
       try {
@@ -364,7 +364,7 @@ ipcMain.handle('get-notebook-tree', async (event, rootPath, filterTag) => {
   if (!rootPath || !fs.existsSync(rootPath)) return null;
   const settings = await readSettings();
   const ignore = new Set(settings.ignoreFolders.map(s => s.toLowerCase()));
-  const rootNode = await scanDirectory(rootPath, rootPath, ignore);
+  const rootNode = await scanDirectory(rootPath, rootPath, ignore, settings.scratchpadFile);
 
   // Apply Tag Filtering recursively if filterTag is present
   if (filterTag) {
@@ -656,7 +656,7 @@ ipcMain.handle('move-node', async (event, dirPath, fileName, direction) => {
   if (ord.length === 0) {
     const settings = await readSettings();
     const ignore = new Set(settings.ignoreFolders.map(s => s.toLowerCase()));
-    const secNode = await scanDirectory(dirPath, settings.notebookRoot, ignore);
+    const secNode = await scanDirectory(dirPath, settings.notebookRoot, ignore, settings.scratchpadFile);
     secNode.pages.forEach(p => ord.push(p.name));
   }
 

@@ -14,7 +14,7 @@
   --text-muted: #484f58;
   
   --accent-blue: #58a6ff;
-  --accent-purple: #bc8cff;
+  --accent-teal: #39c5cf;
   --accent-green: #3fb950;
   --accent-red: #f85149;
   --accent-glow: rgba(88, 166, 255, 0.15);
@@ -640,8 +640,8 @@ body {
 
 .backlink-pill {
   font-size: 11px;
-  background-color: rgba(188, 140, 255, 0.15);
-  color: var(--accent-purple);
+  background-color: rgba(57, 197, 207, 0.15);
+  color: var(--accent-teal);
   padding: 2px 8px;
   border-radius: 12px;
   cursor: pointer;
@@ -650,15 +650,15 @@ body {
   display: flex;
   align-items: center;
   gap: 4px;
-  border: 1px solid rgba(188, 140, 255, 0.2);
+  border: 1px solid rgba(57, 197, 207, 0.2);
   user-select: none;
 }
 
 .backlink-pill:hover {
-  background-color: var(--accent-purple);
+  background-color: var(--accent-teal);
   color: #0d1117;
   transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(188, 140, 255, 0.3);
+  box-shadow: 0 2px 8px rgba(57, 197, 207, 0.3);
 }
 
 .backlink-pill svg {
@@ -860,7 +860,7 @@ body {
   background-color: rgba(88, 166, 255, 0.04) !important;
   border-left: 4px solid var(--accent-blue) !important;
   padding: 16px 24px !important;
-  color: #a5b4fc !important;
+  color: #9ecbff !important;
   font-style: italic;
   border-radius: 0 8px 8px 0;
 }
@@ -1004,19 +1004,19 @@ body {
 
 /* Obsidian-style Wiki Links */
 .markdown-body a.wiki-link {
-  color: var(--accent-purple) !important;
+  color: var(--accent-teal) !important;
   text-decoration: none;
-  border-bottom: 1px dashed rgba(188, 140, 255, 0.4);
+  border-bottom: 1px dashed rgba(57, 197, 207, 0.4);
   transition: all 0.2s ease;
   font-weight: 500;
   padding: 1px 2px;
 }
 
 .markdown-body a.wiki-link:hover {
-  color: #d8b4fe !important;
+  color: #6fdde5 !important;
   border-bottom-style: solid;
-  border-bottom-color: var(--accent-purple);
-  background-color: rgba(188, 140, 255, 0.08);
+  border-bottom-color: var(--accent-teal);
+  background-color: rgba(57, 197, 207, 0.08);
   border-radius: 4px;
 }
 
@@ -1410,10 +1410,10 @@ body {
   justify-content: center;
   width: 48px;
   height: 48px;
-  background-color: rgba(188, 140, 255, 0.12);
-  border: 1px solid rgba(188, 140, 255, 0.2);
+  background-color: rgba(57, 197, 207, 0.12);
+  border: 1px solid rgba(57, 197, 207, 0.2);
   border-radius: 12px;
-  color: var(--accent-purple);
+  color: var(--accent-teal);
 }
 
 #landing-workspace.root-mode .landing-icon-container {
@@ -1611,7 +1611,7 @@ body {
 
 .landing-task-origin {
   font-size: 11px;
-  color: var(--accent-purple);
+  color: var(--accent-teal);
   cursor: pointer;
   font-weight: 500;
   white-space: nowrap;
@@ -1854,14 +1854,14 @@ body {
 }
 
 .custom-tooltip .shortcut {
-  color: var(--accent-purple);
+  color: var(--accent-teal);
   font-size: 9px;
   font-weight: 600;
   margin-left: 6px;
-  background: rgba(188, 140, 255, 0.1);
+  background: rgba(57, 197, 207, 0.1);
   padding: 1px 5px;
   border-radius: 3px;
-  border: 1px solid rgba(188, 140, 255, 0.2);
+  border: 1px solid rgba(57, 197, 207, 0.2);
 }
 
 /* Premium Code Block Wrapper & Copy Button */
