@@ -1,6 +1,13 @@
 node_modules/
 out/
 output/
+dist/
 *.vsix
 *.zip
 .DS_Store
+
+# Playwright E2E
+/playwright-report/
+/test-results/
+/blob-report/
+/playwright/.cache/
