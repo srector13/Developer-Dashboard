@@ -44,32 +44,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Initialize Mermaid
   if (window.mermaid) {
+    const isDark = document.body.classList.contains('dark-theme');
     window.mermaid.initialize({
       startOnLoad: false,
-      theme: 'base',
-      securityLevel: 'loose',
-      themeVariables: {
-        background: '#0d1117',
-        primaryColor: '#161b22',
-        primaryTextColor: '#c9d1d9',
-        primaryBorderColor: 'rgba(240, 246, 252, 0.1)',
-        lineColor: '#58a6ff',
-        secondaryColor: '#090c10',
-        tertiaryColor: '#0d1117',
-        noteBkgColor: 'rgba(88, 166, 255, 0.05)',
-        noteBorderColor: 'rgba(88, 166, 255, 0.2)',
-        actorBkg: '#161b22',
-        actorBorder: 'rgba(240, 246, 252, 0.1)',
-        actorTextColor: '#c9d1d9',
-        signalColor: '#58a6ff',
-        signalTextColor: '#8b949e',
-        labelBoxBkgColor: '#161b22',
-        labelBoxBorderColor: 'rgba(240, 246, 252, 0.1)',
-        labelTextColor: '#c9d1d9',
-        loopLimitColor: '#39c5cf',
-        successColor: '#3fb950',
-        errorColor: '#f85149',
-      }
+      theme: isDark ? 'dark' : 'default',
+      securityLevel: 'loose'
     });
   }
 
@@ -120,18 +99,50 @@ document.addEventListener('keydown', (e) => {
 // Apply theme helper
 function applyTheme(theme) {
   const body = document.body;
+  let isDark = false;
   if (theme === 'github-dark') {
     body.className = 'dark-theme';
+    isDark = true;
   } else if (theme === 'off') {
     body.className = 'light-theme';
+    isDark = false;
   } else {
     // auto detect system light/dark
     const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
     if (systemDark) {
       body.className = 'dark-theme';
+      isDark = true;
     } else {
       body.className = 'light-theme';
+      isDark = false;
     }
+  }
+
+  if (window.mermaid) {
+    window.mermaid.initialize({
+      startOnLoad: false,
+      theme: isDark ? 'dark' : 'default',
+      securityLevel: 'loose'
+    });
+    // Force re-render of note preview so Mermaid charts update colors
+    if (activeNote && viewMode !== 'edit') {
+      const renderedHtml = window.api.renderMarkdown(noteContent);
+      document.getElementById('preview-pane').innerHTML = renderedHtml;
+      renderMarkdownPreview();
+    }
+  }
+}
+
+async function toggleGlobalTheme() {
+  const body = document.body;
+  const isDark = body.classList.contains('dark-theme');
+  const newTheme = isDark ? 'off' : 'github-dark';
+  applyTheme(newTheme);
+  
+  if (appSettings) {
+    appSettings.previewTheme = newTheme;
+    await window.api.saveSettings(appSettings);
+    document.getElementById('settings-theme').value = newTheme;
   }
 }
 
@@ -227,6 +238,10 @@ function scanGlobalTags(node) {
 // Sidebar notebook tree HTML generator
 function renderSidebarTree() {
   const treeContainer = document.getElementById('notebook-tree');
+  treeContainer.ondragover = handleDragOver;
+  treeContainer.ondragleave = handleDragLeave;
+  treeContainer.ondrop = (e) => handleDrop(e, notebookRoot);
+
   if (!treeData) {
     treeContainer.innerHTML = '<div class="empty-tree">No notebook open</div>';
     return;
@@ -250,7 +265,12 @@ function generateTreeHTML(node, depth) {
       const isActiveFolder = activeSection && activeSection.relPath === node.relPath && !activeNote;
       html += `
         <div class="tree-section">
-          <div class="tree-node ${isActiveFolder ? 'active' : ''}" style="padding-left: ${depth * 12 + 12}px;">
+          <div class="tree-node ${isActiveFolder ? 'active' : ''}" style="padding-left: ${depth * 12 + 12}px;"
+               draggable="true"
+               ondragstart="handleDragStart(event, ${jsArg(node.fsPath)})"
+               ondragover="handleDragOver(event)"
+               ondragleave="handleDragLeave(event)"
+               ondrop="handleDrop(event, ${jsArg(node.fsPath)})">
             <span class="tree-node-chevron ${isExpanded ? '' : 'collapsed'}" onclick="event.stopPropagation(); toggleFolderCollapse(${jsArg(node.relPath)})">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
             </span>
@@ -309,7 +329,10 @@ function generateTreeHTML(node, depth) {
       }
 
       html += `
-        <div class="tree-node ${isActive ? 'active' : ''}" style="padding-left: ${(isRoot ? 0 : depth + 1) * 12 + 12}px;" onclick="openNote(${jsArg(page.fsPath)})">
+        <div class="tree-node ${isActive ? 'active' : ''}" style="padding-left: ${(isRoot ? 0 : depth + 1) * 12 + 12}px;" 
+             onclick="openNote(${jsArg(page.fsPath)})"
+             draggable="true"
+             ondragstart="handleDragStart(event, ${jsArg(page.fsPath)})">
           <div class="tree-node-content">
             ${iconHtml}
             <span class="tree-node-label">${escapeHtml(page.title)}</span>
@@ -438,6 +461,9 @@ async function openNote(filePath) {
     document.getElementById('empty-state-canvas').style.display = 'none';
     document.getElementById('landing-workspace').style.display = 'none';
     document.getElementById('note-workspace').style.display = 'flex';
+    
+    const modeToggles = document.querySelector('.mode-toggles');
+    if (modeToggles) modeToggles.style.display = 'flex';
 
     renderActiveNote();
     
@@ -624,7 +650,12 @@ function renderMarkdownPreview() {
       preview.querySelectorAll('.mermaid-block-container').forEach(container => {
         const diagram = container.querySelector('.notebook-mermaid');
         if (diagram) {
-          diagram.style.zoom = `${appSettings.defaultMermaidZoom}%`;
+          diagram.style.zoom = (appSettings.defaultMermaidZoom / 100);
+          const svg = diagram.querySelector('svg');
+          if (svg) {
+            svg.style.maxWidth = '100%';
+            svg.style.height = 'auto';
+          }
         }
       });
     } catch (err) {
@@ -1269,7 +1300,20 @@ function updateOutlineAndBacklinks() {
         pill.title = `Go back to: ${label}`;
         pill.onclick = (e) => {
           e.stopPropagation();
-          openNote(resolvedPath);
+          if (resolvedPath.endsWith('.toc.md')) {
+            const dirFsPath = pathDirname(resolvedPath);
+            let dirRelPath = '';
+            if (dirFsPath.startsWith(notebookRoot)) {
+              dirRelPath = dirFsPath.slice(notebookRoot.length).replace(/^[/\\]+/, '').replace(/\\/g, '/');
+            }
+            if (dirRelPath === '') {
+              openRootLanding();
+            } else {
+              openSection(dirRelPath, dirFsPath);
+            }
+          } else {
+            openNote(resolvedPath);
+          }
         };
         backlinksList.appendChild(pill);
         backlinksContainer.style.display = 'flex';
@@ -1285,9 +1329,12 @@ function updateOutlineAndBacklinks() {
     
     // Gather all pages recursively in the entire notebook for complete backlinks check
     const allPages = gatherPagesRecursively(treeData);
+    const templatesDir = appSettings.templatesFolder;
     
     allPages.forEach(async (page) => {
       if (!page || !page.fsPath || page.fsPath === activeNote) return;
+      if (templatesDir && page.relPath && page.relPath.startsWith(templatesDir + '/')) return;
+
       try {
         const fileText = await window.api.readNote(page.fsPath);
         const escapeBaseName = escapeRegex(noteBaseName || '');
@@ -1420,6 +1467,7 @@ function showSettingsModal() {
   document.getElementById('settings-theme').value = appSettings.previewTheme;
   document.getElementById('settings-templates-folder').value = appSettings.templatesFolder;
   document.getElementById('settings-author').value = appSettings.author;
+  document.getElementById('settings-pandoc-path').value = appSettings.pandocPath || '';
   document.getElementById('settings-ignore-folders').value = appSettings.ignoreFolders.join(', ');
   document.getElementById('settings-autosave').checked = autoSaveEnabled;
   modal.classList.add('active');
@@ -1435,6 +1483,7 @@ async function saveSettingsForm() {
   const theme = document.getElementById('settings-theme').value;
   const templates = document.getElementById('settings-templates-folder').value.trim() || 'templates';
   const author = document.getElementById('settings-author').value.trim();
+  const pandocPath = document.getElementById('settings-pandoc-path').value.trim();
   const ignore = document.getElementById('settings-ignore-folders').value.split(',').map(s => s.trim()).filter(s => s);
   const autosave = document.getElementById('settings-autosave').checked;
 
@@ -1444,6 +1493,7 @@ async function saveSettingsForm() {
     previewTheme: theme,
     templatesFolder: templates,
     author: author,
+    pandocPath: pandocPath,
     scratchpadFile: appSettings.scratchpadFile,
     ignoreFolders: ignore,
     autoSaveEnabled: autosave,
@@ -1475,13 +1525,40 @@ function collectModalMeta() {
   return { created, tags };
 }
 
+function populateDestinationDropdown(destDir) {
+  const select = document.getElementById('create-modal-dest');
+  select.innerHTML = '';
+  
+  const rootOpt = document.createElement('option');
+  rootOpt.value = notebookRoot;
+  rootOpt.innerText = 'Notebook Root';
+  select.appendChild(rootOpt);
+
+  const addFolders = (node, depth = 0) => {
+    if (!node || !node.sections) return;
+    node.sections.forEach(sec => {
+      const opt = document.createElement('option');
+      opt.value = sec.fsPath;
+      opt.innerText = ' '.repeat((depth + 1) * 2) + '↳ ' + sec.name;
+      select.appendChild(opt);
+      addFolders(sec, depth + 1);
+    });
+  };
+
+  if (treeData) addFolders(treeData);
+  
+  select.value = destDir || notebookRoot;
+}
+
 // New note popup creation
 function promptCreatePage(destDir) {
   document.getElementById('create-modal-title').innerText = 'New Page';
   document.getElementById('create-modal-name-label').innerText = 'Page Title';
   document.getElementById('create-modal-name').value = '';
   document.getElementById('create-modal-name').placeholder = 'e.g. Q3 Migration Plan';
-  document.getElementById('create-modal-dest').value = destDir || notebookRoot;
+  
+  document.getElementById('create-modal-dest-group').style.display = 'block';
+  populateDestinationDropdown(destDir);
   document.getElementById('create-modal-type').value = 'page';
   document.getElementById('create-modal-page-options').style.display = 'block';
   document.getElementById('create-modal-template-group').style.display = 'block';
@@ -1522,7 +1599,9 @@ function promptCreateSection(destDir) {
   document.getElementById('create-modal-title').innerText = 'New Section';
   document.getElementById('create-modal-name-label').innerText = 'Section Name';
   document.getElementById('create-modal-name').value = '';
-  document.getElementById('create-modal-dest').value = destDir || notebookRoot;
+  
+  document.getElementById('create-modal-dest-group').style.display = 'block';
+  populateDestinationDropdown(destDir);
   document.getElementById('create-modal-type').value = 'section';
   document.getElementById('create-modal-page-options').style.display = 'none';
 
@@ -1543,7 +1622,9 @@ function handleCreateModalEnter(e) {
 async function submitCreateModal() {
   const type = document.getElementById('create-modal-type').value;
   const name = document.getElementById('create-modal-name').value.trim();
-  const dest = document.getElementById('create-modal-dest').value;
+  const dest = type === 'rename' 
+    ? document.getElementById('create-modal-rename-path').value 
+    : document.getElementById('create-modal-dest').value;
 
   // The paste-import can auto-detect a title from content, so a blank name is allowed there
   if (!name && type !== 'import-clip') return;
@@ -1594,7 +1675,10 @@ function promptRenameNode(fsPath, currentName) {
   document.getElementById('create-modal-title').innerText = 'Rename';
   document.getElementById('create-modal-name-label').innerText = 'New Name';
   document.getElementById('create-modal-name').value = currentName || '';
-  document.getElementById('create-modal-dest').value = fsPath;
+  
+  document.getElementById('create-modal-dest-group').style.display = 'none';
+  document.getElementById('create-modal-rename-path').value = fsPath;
+  
   document.getElementById('create-modal-type').value = 'rename';
   document.getElementById('create-modal-page-options').style.display = 'none';
 
@@ -1658,7 +1742,10 @@ function importFromClipboard() {
   document.getElementById('create-modal-name-label').innerText = 'Note Title (leave blank to auto-detect from content)';
   document.getElementById('create-modal-name').value = '';
   document.getElementById('create-modal-name').placeholder = 'Auto-detect from pasted content';
-  document.getElementById('create-modal-dest').value = dest;
+  
+  document.getElementById('create-modal-dest-group').style.display = 'block';
+  populateDestinationDropdown(dest);
+  
   document.getElementById('create-modal-type').value = 'import-clip';
   document.getElementById('create-modal-page-options').style.display = 'block';
   document.getElementById('create-modal-template-group').style.display = 'none'; // templates don't apply to imports
@@ -1769,6 +1856,9 @@ async function openSection(relPath, fsPath) {
   document.getElementById('note-workspace').style.display = 'none';
   document.getElementById('landing-workspace').style.display = 'flex';
 
+  const modeToggles = document.querySelector('.mode-toggles');
+  if (modeToggles) modeToggles.style.display = 'none';
+
   await renderSectionLanding();
   renderSidebarTree();
 }
@@ -1783,6 +1873,9 @@ async function openRootLanding() {
   document.getElementById('empty-state-canvas').style.display = 'none';
   document.getElementById('note-workspace').style.display = 'none';
   document.getElementById('landing-workspace').style.display = 'flex';
+
+  const modeToggles = document.querySelector('.mode-toggles');
+  if (modeToggles) modeToggles.style.display = 'none';
 
   await renderRootLanding();
   renderSidebarTree();
@@ -2059,12 +2152,11 @@ function toggleAutoSave(value) {
 function zoomMermaid(btn, amount) {
   const container = btn.closest('.mermaid-block-container');
   const pre = container.querySelector('.notebook-mermaid');
-  if (pre) {
-    let currentZoom = parseFloat(pre.style.zoom);
-    if (isNaN(currentZoom)) currentZoom = 1.0;
-    currentZoom = Math.max(0.4, Math.min(3.0, currentZoom + (amount / 100)));
-    pre.style.zoom = currentZoom;
-  }
+  if (!pre) return;
+  
+  let currentZoom = parseFloat(pre.style.zoom) || 1;
+  let newZoom = Math.max(0.4, Math.min(3.0, currentZoom + (amount / 100)));
+  pre.style.zoom = newZoom;
 }
 
 function popoutMermaid(btn) {
@@ -2079,8 +2171,10 @@ function popoutMermaid(btn) {
   const clonedSvg = originalSvg.cloneNode(true);
   clonedSvg.style.transform = 'none';
   clonedSvg.style.zoom = '1';
-  clonedSvg.style.width = 'auto';
+  clonedSvg.style.width = '100%';
   clonedSvg.style.height = 'auto';
+  clonedSvg.style.maxWidth = '100%';
+  clonedSvg.style.maxHeight = '100%';
   
   popoutBody.appendChild(clonedSvg);
   popoutZoomLevel = 100;
@@ -2093,7 +2187,7 @@ function zoomPopout(amount) {
   popoutZoomLevel = Math.max(40, Math.min(300, popoutZoomLevel + amount));
   const svg = document.querySelector('#mermaid-popout-body svg');
   if (svg) {
-    svg.style.zoom = popoutZoomLevel / 100;
+    svg.style.transform = `scale(${popoutZoomLevel / 100})`;
   }
   document.getElementById('label-popout-zoom').innerText = `${popoutZoomLevel}%`;
 }
@@ -2251,4 +2345,52 @@ function confirmPaletteSelection() {
   const selectedItem = paletteFilteredItems[paletteSelectedIndex];
   hideCommandPalette();
   selectedItem.action();
+}
+
+// --- Drag & Drop Handlers ---
+let dragSourcePath = null;
+
+function handleDragStart(e, fsPath) {
+  dragSourcePath = fsPath;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', fsPath);
+  e.stopPropagation();
+}
+
+function handleDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  e.stopPropagation();
+  const node = e.currentTarget;
+  if (node && node.classList && !node.classList.contains('drag-over')) {
+    node.classList.add('drag-over');
+  }
+}
+
+function handleDragLeave(e) {
+  e.stopPropagation();
+  const node = e.currentTarget;
+  if (node && node.classList) {
+    node.classList.remove('drag-over');
+  }
+}
+
+async function handleDrop(e, targetFsPath) {
+  e.preventDefault();
+  e.stopPropagation();
+  const node = e.currentTarget;
+  if (node && node.classList) {
+    node.classList.remove('drag-over');
+  }
+  
+  const srcPath = dragSourcePath;
+  if (!srcPath || !targetFsPath || srcPath === targetFsPath) return;
+
+  const success = await window.api.relocateNode(srcPath, targetFsPath);
+  if (success) {
+    await refreshNotebook();
+    if (activeNote === srcPath) {
+      closeNoteCanvas();
+    }
+  }
 }

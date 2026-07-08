@@ -5,7 +5,7 @@
   <title>Markdown Notebook</title>
   <link rel="stylesheet" href="vendor/github-markdown.css">
   <link rel="stylesheet" href="vendor/github-dark.css">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=2">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -40,6 +40,9 @@
           <span class="logo-text">Notebook</span>
         </div>
         <div class="header-actions">
+          <button class="icon-btn" onclick="toggleGlobalTheme()" title="Toggle Light/Dark Theme">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+          </button>
           <button class="icon-btn" onclick="openDailyNote()" title="Daily Note">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
           </button>
@@ -104,23 +107,9 @@
             </button>
           </div>
           
-          <!-- Stretch Width Options -->
-          <button class="toolbar-btn text-btn" id="btn-stretch-width" onclick="cyclePageWidth()" title="Cycle Page Width (Standard / Wide / Full)">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
-            <span id="label-stretch-width">Standard</span>
-          </button>
+          <!-- Move zoom and stretch here later -->
         </div>
-
-        <!-- Scaling text buttons -->
-        <div class="toolbar-group" id="preview-zoom-controls">
-          <button class="icon-btn" onclick="zoomPreview(-10)" title="Zoom Out Preview (Scale text smaller)">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          </button>
-          <span id="label-preview-zoom" style="font-size: 11px; color: var(--text-secondary); width: 34px; text-align: center; font-weight: 500;">100%</span>
-          <button class="icon-btn" onclick="zoomPreview(10)" title="Zoom In Preview (Scale text bigger)">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          </button>
-        </div>        <div class="toolbar-group format-buttons" id="editor-format-tools" style="display: none;">
+        <div class="toolbar-group format-buttons" id="editor-format-tools" style="display: none;">
           <!-- 1. Heading Dropdown (First) -->
           <div class="editor-dropdown">
             <button class="toolbar-btn dropdown-toggle" onclick="toggleEditorDropdown('dropdown-heading', event)" title="Insert Heading Level (H1-H4)">
@@ -168,11 +157,17 @@
               <div class="dropdown-item" onclick="insertCodeBlock('cpp')" title="C++ Source File Block">C++</div>
               <div class="dropdown-item" onclick="insertCodeBlock('csharp')" title="C# Code Block">C#</div>
               <div class="dropdown-item" onclick="insertCodeBlock('java')" title="Java Class Code Block">Java</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('kotlin')" title="Kotlin Code Block">Kotlin</div>
               <div class="dropdown-item" onclick="insertCodeBlock('go')" title="Go Programming Block">Go</div>
               <div class="dropdown-item" onclick="insertCodeBlock('rust')" title="Rust Safety Code Block">Rust</div>
               <div class="dropdown-item" onclick="insertCodeBlock('ruby')" title="Ruby Script Block">Ruby</div>
               <div class="dropdown-item" onclick="insertCodeBlock('php')" title="PHP Server Script Block">PHP</div>
               <div class="dropdown-item" onclick="insertCodeBlock('swift')" title="Swift iOS App Code Block">Swift</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('dart')" title="Dart App Code Block">Dart</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('r')" title="R Statistics Block">R</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('scala')" title="Scala Code Block">Scala</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('perl')" title="Perl Script Block">Perl</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('lua')" title="Lua Script Block">Lua</div>
               <div class="dropdown-item" onclick="insertCodeBlock('yaml')" title="YAML Config Format Block">YAML</div>
               <div class="dropdown-item" onclick="insertCodeBlock('xml')" title="XML Format Block">XML</div>
             </div>
@@ -240,19 +235,19 @@
         </div>
 
         <div class="toolbar-group">
-          <!-- Document Import/Export actions -->
-          <button class="toolbar-btn text-btn" id="btn-import-clip" onclick="importFromClipboard()" title="Import Rich Text or HTML from Clipboard as a note">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>
-            Paste Note
-          </button>
-          <button class="toolbar-btn text-btn" id="btn-import-doc" onclick="importDocFile()" title="Import DOCX/PPTX/XLSX file via Pandoc">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-            Import Doc
-          </button>
-          <button class="toolbar-btn text-btn" id="btn-export-pdf" onclick="exportToPdf()" title="Export current note to PDF">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-            Export PDF
-          </button>
+          <!-- File Actions Dropdown -->
+          <div class="editor-dropdown">
+            <button class="toolbar-btn dropdown-toggle" onclick="toggleEditorDropdown('dropdown-file-actions', event)" title="File Actions (Import/Export)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+              <span style="margin-left: 6px; font-weight: 500; font-size: 13px;">File Actions</span>
+              <svg class="chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left: 4px;"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div id="dropdown-file-actions" class="dropdown-menu glass-card" style="right: 0; left: auto;">
+              <div class="dropdown-item" onclick="importFromClipboard()" title="Import Rich Text or HTML from Clipboard as a note">Paste Note from Clipboard</div>
+              <div class="dropdown-item" onclick="importDocFile()" title="Import DOCX/PPTX/XLSX file via Pandoc">Import Doc via Pandoc</div>
+              <div class="dropdown-item" onclick="exportToPdf()" title="Export current note to PDF">Export to PDF</div>
+            </div>
+          </div>
           <button class="icon-btn" id="btn-toggle-outline" onclick="toggleRightDrawer()" title="Toggle Outline & Backlinks">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="21" y1="10" x2="7" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="21" y1="18" x2="7" y2="18"/></svg>
           </button>
@@ -312,6 +307,19 @@
           <div id="preview-pane" class="pane markdown-body">
             <!-- Rendered output -->
           </div>
+        </div>
+        
+        <!-- Bottom Right Floating Controls -->
+        <div id="bottom-right-controls" style="position: fixed; bottom: 24px; right: 24px; display: flex; align-items: center; gap: 8px; z-index: 50;">
+          <button class="icon-btn" onclick="zoomPreview(-10)" title="Zoom Out Preview">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </button>
+          <button class="icon-btn" onclick="zoomPreview(10)" title="Zoom In Preview">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </button>
+          <button class="toolbar-btn text-btn" id="btn-stretch-width" onclick="cyclePageWidth()" title="Cycle Page Width (Standard / Wide / Full)" style="font-weight: 600; font-size: 11px; padding: 0 8px;">
+            <span id="label-stretch-width">Standard</span>
+          </button>
         </div>
       </div>
 
@@ -403,7 +411,12 @@
     <!-- RIGHT DRAWER: Headings Outline & Backlinks -->
     <aside id="right-drawer" class="collapsed">
       <div class="drawer-section">
-        <h4 class="drawer-header">Outline</h4>
+        <div class="drawer-header" style="display: flex; justify-content: space-between; align-items: center;">
+          <h4>Outline</h4>
+          <button class="icon-btn" onclick="toggleRightDrawer()" title="Close Outline">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
         <ul id="outline-list" class="outline-tree">
           <!-- Headings outline list -->
         </ul>
@@ -457,6 +470,10 @@
           <label>Default Author Frontmatter</label>
           <input type="text" id="settings-author" placeholder="e.g. Stephen Rector">
         </div>
+        <div class="form-group">
+          <label>Pandoc Executable Path</label>
+          <input type="text" id="settings-pandoc-path" placeholder="e.g. /opt/homebrew/bin/pandoc or pandoc">
+        </div>
 
         <div class="form-group">
           <label>Folders to Ignore (comma-separated)</label>
@@ -484,8 +501,14 @@
         <button class="close-btn" onclick="hideCreateModal()">&times;</button>
       </div>
       <div class="modal-body">
-        <input type="hidden" id="create-modal-dest">
+        <div class="form-group" id="create-modal-dest-group">
+          <label>Destination Folder</label>
+          <select id="create-modal-dest">
+            <!-- Populated dynamically -->
+          </select>
+        </div>
         <input type="hidden" id="create-modal-type">
+        <input type="hidden" id="create-modal-rename-path">
         
         <div class="form-group">
           <label id="create-modal-name-label">Page Title</label>
@@ -571,6 +594,6 @@
 
   <!-- Scripts -->
   <script src="vendor/mermaid.min.js"></script>
-  <script src="app.js"></script>
+  <script src="app.js?v=2"></script>
 </body>
 </html>

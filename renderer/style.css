@@ -1033,7 +1033,7 @@ body {
 /* Custom Mermaid diagram cards */
 .mermaid-block-container {
   position: relative;
-  background-color: #0d1117;
+  background-color: var(--bg-tertiary);
   border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 24px;
@@ -1052,6 +1052,15 @@ body {
   box-shadow: none !important;
   color: var(--text-primary);
   font-family: var(--font-sans);
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.notebook-mermaid svg {
+  width: 100% !important;
+  max-width: 100% !important;
+  height: auto !important;
 }
 
 .mermaid-toggle-btn {
@@ -1716,13 +1725,14 @@ body {
   align-items: center;
   justify-content: center;
   padding: 40px;
-  background-color: #0b0d13;
-  background-image: radial-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-color: var(--bg-primary);
+  background-image: radial-gradient(var(--border-color) 1px, transparent 1px);
   background-size: 20px 20px;
 }
 
 #mermaid-popout-body svg {
-  max-width: 95%;
+  width: 100% !important;
+  max-width: 100%;
   max-height: 95%;
   height: auto;
   transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
@@ -2104,4 +2114,26 @@ body {
     border: 1px solid #ddd !important;
     background: #fcfcfc !important;
   }
+}
+
+body.light-theme {
+  --bg-primary: #ffffff;
+  --bg-secondary: rgba(246, 248, 250, 0.7);
+  --bg-tertiary: rgba(255, 255, 255, 0.5);
+  
+  --border-color: rgba(27, 31, 36, 0.15);
+  --border-glow: rgba(9, 105, 218, 0.4);
+  
+  --text-primary: #24292f;
+  --text-secondary: #57606a;
+  --text-muted: #6e7781;
+  
+  --accent-blue: #0969da;
+  --accent-teal: #0550ae;
+  --accent-green: #1a7f37;
+  --accent-red: #cf222e;
+  --accent-glow: rgba(9, 105, 218, 0.15);
+  
+  --glass-bg: rgba(255, 255, 255, 0.6);
+  --glass-border: rgba(27, 31, 36, 0.08);
 }

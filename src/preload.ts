@@ -194,6 +194,7 @@ contextBridge.exposeInMainWorld('api', {
   createSection: (dirPath: string, name: string) => ipcRenderer.invoke('create-section', dirPath, name),
   deleteNode: (filePath: string) => ipcRenderer.invoke('delete-node', filePath),
   renameNode: (filePath: string, newName: string) => ipcRenderer.invoke('rename-node', filePath, newName),
+  relocateNode: (srcPath: string, destDir: string) => ipcRenderer.invoke('relocate-node', srcPath, destDir),
   moveNode: (dirPath: string, fileName: string, direction: 'up' | 'down') => ipcRenderer.invoke('move-node', dirPath, fileName, direction),
   
   // Quick Scratchpad

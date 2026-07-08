@@ -21,6 +21,7 @@ interface AppSettings {
   author: string;
   scratchpadFile: string;
   autoSaveEnabled: boolean;
+  pandocPath?: string;
 }
 
 const defaultSettings: AppSettings = {
@@ -604,6 +605,26 @@ async function listMarkdownFiles(dir: string, ignore: Set<string>, rootDir: stri
   return files;
 }
 
+ipcMain.handle('relocate-node', async (event, srcPath, destDir) => {
+  if (!fs.existsSync(srcPath) || !fs.existsSync(destDir)) return false;
+  const stat = await fsp.stat(destDir);
+  if (!stat.isDirectory()) return false;
+  const baseName = path.basename(srcPath);
+  const destPath = path.join(destDir, baseName);
+  if (path.normalize(srcPath) === path.normalize(destPath)) return false;
+  
+  // Prevent moving a folder into itself
+  if (destPath.startsWith(srcPath + path.sep)) return false;
+
+  try {
+    await fsp.rename(srcPath, destPath);
+    return true;
+  } catch (err) {
+    console.error('Error moving node:', err);
+    return false;
+  }
+});
+
 ipcMain.handle('rename-node', async (event, filePath, newName) => {
   if (!fs.existsSync(filePath)) return false;
   const stat = await fsp.stat(filePath);
@@ -871,11 +892,12 @@ ipcMain.handle('import-document', async (event, destDir) => {
 });
 
 function runPandocStdin(input: string, from: string, to: string): Promise<string> {
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
     // Try homebrew path or direct path
-    const pandocPath = process.platform === 'darwin' && fs.existsSync('/opt/homebrew/bin/pandoc')
+    const settings = await readSettings();
+    const pandocPath = settings.pandocPath || (process.platform === 'darwin' && fs.existsSync('/opt/homebrew/bin/pandoc')
       ? '/opt/homebrew/bin/pandoc'
-      : 'pandoc';
+      : 'pandoc');
       
     const child = execFile(
       pandocPath,
@@ -894,10 +916,11 @@ function runPandocStdin(input: string, from: string, to: string): Promise<string
 }
 
 function runPandocFile(filePath: string, from: string, to: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const pandocPath = process.platform === 'darwin' && fs.existsSync('/opt/homebrew/bin/pandoc')
+  return new Promise(async (resolve, reject) => {
+    const settings = await readSettings();
+    const pandocPath = settings.pandocPath || (process.platform === 'darwin' && fs.existsSync('/opt/homebrew/bin/pandoc')
       ? '/opt/homebrew/bin/pandoc'
-      : 'pandoc';
+      : 'pandoc');
 
     execFile(
       pandocPath,
@@ -1015,6 +1038,12 @@ ipcMain.handle('export-to-pdf', async (event, filePath, htmlContent) => {
         /* Page break controls */
         h1, h2, h3 { page-break-after: avoid; }
         pre, blockquote, table, img { page-break-inside: avoid; }
+        
+        /* Hide notebook UI elements for clean write-up export */
+        .toolbar, .code-header, .code-header-bar, .copy-btn, .copy-code-btn, 
+        #note-header, .backlink-pill, .tag-pill, .status-indicator, #titlebar {
+          display: none !important;
+        }
       </style>
     </head>
     <body>
