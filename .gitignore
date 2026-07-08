@@ -1,6 +1,7 @@
 node_modules/
 out/
 output/
+dist/
 *.vsix
 *.zip
 .DS_Store
