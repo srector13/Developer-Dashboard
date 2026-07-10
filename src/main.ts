@@ -726,6 +726,56 @@ ipcMain.handle('move-node', async (event, dirPath, fileName, direction) => {
   return true;
 });
 
+// Update a note's frontmatter metadata (created/tags/pinned) in place,
+// preserving any other keys. The title is handled separately by rename-node
+// since it can also change the filename and wiki-links.
+ipcMain.handle('update-note-meta', async (event, filePath: string, meta: { created?: string; tags?: string[]; pinned?: boolean }) => {
+  if (!fs.existsSync(filePath)) return false;
+  let text = await fsp.readFile(filePath, 'utf8');
+
+  const created = meta?.created && /^\d{4}-\d{2}-\d{2}$/.test(meta.created) ? meta.created : '';
+  const tags = Array.isArray(meta?.tags)
+    ? meta!.tags.map(t => String(t).trim().replace(/^#/, '')).filter(t => t)
+    : [];
+  const pinned = !!meta?.pinned;
+
+  // Replaces "key: ..." (for tags: including a following block list) or appends
+  const setKey = (block: string, key: string, value: string): string => {
+    const re = key === 'tags'
+      ? /^[ \t]*tags:.*(?:\r?\n[ \t]+-[ \t].*)*/m
+      : new RegExp(`^[ \\t]*${key}:.*$`, 'm');
+    if (re.test(block)) {
+      return block.replace(re, `${key}: ${value}`);
+    }
+    return block + `\n${key}: ${value}`;
+  };
+
+  const fm = text.match(/^(---\r?\n)([\s\S]*?)(\r?\n---)(?=[ \t]*(?:\r?\n|$))/);
+  if (fm) {
+    let block = fm[2];
+    if (created) block = setKey(block, 'created', created);
+    block = setKey(block, 'tags', `[${tags.map(yamlValue).join(', ')}]`);
+    if (pinned || /^[ \t]*pinned:/m.test(block)) {
+      block = setKey(block, 'pinned', pinned ? 'true' : 'false');
+    }
+    text = fm[1] + block + fm[3] + text.slice(fm[0].length);
+  } else {
+    // No frontmatter yet: create one
+    const fmLines = ['---'];
+    if (created) fmLines.push(`created: ${created}`);
+    fmLines.push(tagsYamlLine(tags));
+    if (pinned) fmLines.push('pinned: true');
+    fmLines.push('---', '');
+    text = fmLines.join('\n') + text;
+  }
+
+  await fsp.writeFile(filePath, text, 'utf8');
+  if (mainWindow) {
+    mainWindow.webContents.send('files-changed');
+  }
+  return true;
+});
+
 // Templates management
 function resolveTemplatesDir(settings: AppSettings): string {
   return path.isAbsolute(settings.templatesFolder)

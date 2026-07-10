@@ -102,6 +102,12 @@ document.addEventListener('keydown', (e) => {
   } else if (isCmdOrCtrl && e.key.toLowerCase() === 'n') {
     e.preventDefault();
     if (notebookRoot) promptCreatePage(notebookRoot);
+  } else if (isCmdOrCtrl && ['1', '2', '3'].includes(e.key)) {
+    // View mode switching for power users: 1 Preview, 2 Edit, 3 Split
+    if (activeNote) {
+      e.preventDefault();
+      setViewMode({ '1': 'preview', '2': 'edit', '3': 'split' }[e.key]);
+    }
   } else if (e.key === 'Escape') {
     closeTopOverlay();
   }
@@ -379,7 +385,7 @@ function generateTreeHTML(node, depth) {
             <button class="tree-node-btn" onclick="event.stopPropagation(); moveNode(${jsArg(node.fsPath)}, ${jsArg(page.name)}, 'down')" title="Move Down">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
             </button>
-            <button class="tree-node-btn" onclick="event.stopPropagation(); promptRenameNode(${jsArg(page.fsPath)}, ${jsArg(page.title)})" title="Rename">
+            <button class="tree-node-btn" onclick="event.stopPropagation(); showPageInfoModal(${jsArg(page.fsPath)})" title="Edit Page Info (title, date, tags)">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
             </button>
             <button class="tree-node-btn" onclick="event.stopPropagation(); deleteNode(${jsArg(page.fsPath)})" title="Delete">
@@ -702,19 +708,37 @@ async function doRenderMarkdownPreview() {
       console.error('Mermaid render error:', err);
     }
 
-    // Inject zoom interactions or hover styling for diagrams
+    // Apply the configured default zoom to each rendered diagram
     preview.querySelectorAll('.mermaid-block-container').forEach(container => {
       const diagram = container.querySelector('.notebook-mermaid');
-      if (diagram) {
-        diagram.style.zoom = (appSettings.defaultMermaidZoom / 100);
-        const svg = diagram.querySelector('svg');
-        if (svg) {
-          svg.style.maxWidth = '100%';
-          svg.style.height = 'auto';
-        }
+      const svg = diagram ? diagram.querySelector('svg') : null;
+      if (diagram && svg) {
+        const zoom = clampMermaidZoom(appSettings.defaultMermaidZoom || 100);
+        diagram.dataset.zoomLevel = String(zoom);
+        applyInlineMermaidZoom(diagram, svg, zoom);
       }
     });
   }
+}
+
+// Inline diagram zoom works by giving the SVG an explicit pixel width
+// relative to the container (100% = container-filling, the default look).
+// CSS `zoom` can't be used: the SVG is pinned to 100% container width, so
+// scaling the box just re-fills the same space with no visible change.
+function clampMermaidZoom(zoom) {
+  return Math.max(40, Math.min(300, Math.round(zoom)));
+}
+
+function applyInlineMermaidZoom(pre, svg, zoom) {
+  if (zoom === 100) {
+    svg.style.width = '100%';
+    svg.style.maxWidth = '100%';
+  } else {
+    const base = pre.clientWidth || 600;
+    svg.style.width = `${Math.round(base * zoom / 100)}px`;
+    svg.style.maxWidth = 'none';
+  }
+  svg.style.height = 'auto';
 }
 
 // Helper to look up file by name in tree nodes
@@ -890,6 +914,67 @@ const EDITOR_INDENT = '  ';
 // Matches a list line: indent, bullet or ordered marker, optional task checkbox
 const LIST_LINE_RE = /^([ \t]*)([-*+]|\d+[.)])([ \t]+)(\[[ xX]\][ \t]+)?(.*)$/;
 
+// Replace [start, end) in the textarea with `text`. Uses execCommand so the
+// browser treats it like typing: the caret is scrolled into view natively and
+// the edit lands on the undo stack. Falls back to a manual splice.
+function replaceEditorRange(textarea, start, end, text) {
+  textarea.focus();
+  textarea.setSelectionRange(start, end);
+  let handled = false;
+  try {
+    handled = text
+      ? document.execCommand('insertText', false, text)
+      : document.execCommand('delete');
+  } catch {
+    handled = false;
+  }
+  if (!handled) {
+    const value = textarea.value;
+    textarea.value = value.slice(0, start) + text + value.slice(end);
+    textarea.selectionStart = textarea.selectionEnd = start + text.length;
+    handleEditorInput();
+  }
+  // execCommand fires the textarea's input event, so handleEditorInput has
+  // already run in the handled case. Chromium doesn't reliably reveal the
+  // caret after programmatic edits, so always scroll it into view ourselves.
+  scrollEditorCaretIntoView(textarea);
+}
+
+// Scroll the caret line into view. The caret's Y offset is measured with a
+// hidden mirror element so soft-wrapped lines are accounted for.
+function scrollEditorCaretIntoView(textarea) {
+  const style = window.getComputedStyle(textarea);
+  const lineHeight = parseFloat(style.lineHeight) || 21;
+
+  const mirror = document.createElement('div');
+  ['fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing',
+   'tabSize', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+   'borderWidth', 'boxSizing'].forEach(prop => {
+    mirror.style[prop] = style[prop];
+  });
+  mirror.style.position = 'absolute';
+  mirror.style.visibility = 'hidden';
+  mirror.style.whiteSpace = 'pre-wrap';
+  mirror.style.wordWrap = 'break-word';
+  mirror.style.width = `${textarea.clientWidth}px`;
+  mirror.textContent = textarea.value.slice(0, textarea.selectionEnd);
+
+  const marker = document.createElement('span');
+  marker.textContent = '​';
+  mirror.appendChild(marker);
+  document.body.appendChild(mirror);
+  const caretTop = marker.offsetTop;
+  mirror.remove();
+
+  const caretBottom = caretTop + lineHeight;
+  if (caretTop < textarea.scrollTop) {
+    textarea.scrollTop = caretTop;
+  } else if (caretBottom > textarea.scrollTop + textarea.clientHeight) {
+    textarea.scrollTop = caretBottom - textarea.clientHeight + lineHeight;
+  }
+  syncEditorScroll();
+}
+
 function handleEditorTab(textarea, outdent) {
   const start = textarea.selectionStart;
   const end = textarea.selectionEnd;
@@ -919,15 +1004,15 @@ function handleEditorTab(textarea, outdent) {
       return EDITOR_INDENT + line;
     }).join('\n');
 
-    textarea.value = text.slice(0, lineStart) + changed + text.slice(end);
+    if (changed !== block) {
+      replaceEditorRange(textarea, lineStart, end, changed);
+    }
     textarea.selectionStart = Math.max(lineStart, start + firstLineDelta);
     textarea.selectionEnd = Math.max(lineStart, end + totalDelta);
   } else {
     // Plain cursor: insert an indent step at the caret
-    textarea.value = text.slice(0, start) + EDITOR_INDENT + text.slice(end);
-    textarea.selectionStart = textarea.selectionEnd = start + EDITOR_INDENT.length;
+    replaceEditorRange(textarea, start, end, EDITOR_INDENT);
   }
-  handleEditorInput();
 }
 
 function handleEditorEnter(textarea) {
@@ -944,10 +1029,7 @@ function handleEditorEnter(textarea) {
     // Not a list: still preserve plain leading indentation
     const indentMatch = beforeCursor.match(/^[ \t]+/);
     if (indentMatch && beforeCursor.trim().length > 0) {
-      const insertion = '\n' + indentMatch[0];
-      textarea.value = text.slice(0, start) + insertion + text.slice(end);
-      textarea.selectionStart = textarea.selectionEnd = start + insertion.length;
-      handleEditorInput();
+      replaceEditorRange(textarea, start, end, '\n' + indentMatch[0]);
       return true;
     }
     return false;
@@ -957,9 +1039,7 @@ function handleEditorEnter(textarea) {
 
   // Empty list item: pressing Enter ends the list (removes the marker)
   if (!content.trim()) {
-    textarea.value = text.slice(0, lineStart) + text.slice(start);
-    textarea.selectionStart = textarea.selectionEnd = lineStart;
-    handleEditorInput();
+    replaceEditorRange(textarea, lineStart, start, '');
     return true;
   }
 
@@ -969,10 +1049,7 @@ function handleEditorEnter(textarea) {
   if (num) {
     nextMarker = (parseInt(num[1], 10) + 1) + num[2];
   }
-  const insertion = '\n' + indent + nextMarker + spacing + (checkbox ? '[ ] ' : '');
-  textarea.value = text.slice(0, start) + insertion + text.slice(end);
-  textarea.selectionStart = textarea.selectionEnd = start + insertion.length;
-  handleEditorInput();
+  replaceEditorRange(textarea, start, end, '\n' + indent + nextMarker + spacing + (checkbox ? '[ ] ' : ''));
   return true;
 }
 
@@ -1946,9 +2023,80 @@ function promptRenameNode(fsPath, currentName) {
 
 async function promptRenameCurrent() {
   if (!activeNote) return;
-  const node = findNodeByPath(treeData, activeNote);
-  const currentTitle = node ? node.title : pathBasename(activeNote, '.md');
-  await promptRenameNode(activeNote, currentTitle);
+  await showPageInfoModal(activeNote);
+}
+
+// ==========================================
+// PAGE INFO EDITOR (title + frontmatter)
+// ==========================================
+
+async function showPageInfoModal(fsPath) {
+  // Templates are plain bodies without frontmatter; adding metadata to them
+  // would leak into every page created from them, so just rename those.
+  if (isTemplatePath(fsPath)) {
+    const currentTitle = pathBasename(fsPath, '.md');
+    promptRenameNode(fsPath, currentTitle);
+    return;
+  }
+
+  // Flush pending edits so the metadata rewrite doesn't clobber them
+  if (activeNote && noteContent !== noteOriginalContent) {
+    await saveActiveNote();
+  }
+
+  const node = findNodeByPath(treeData, fsPath);
+  document.getElementById('page-info-path').value = fsPath;
+  document.getElementById('page-info-title').value = node ? node.title : pathBasename(fsPath, '.md');
+  document.getElementById('page-info-date').value =
+    node && /^\d{4}-\d{2}-\d{2}$/.test(node.created) ? node.created : '';
+  document.getElementById('page-info-tags').value = node ? node.tags.join(', ') : '';
+  document.getElementById('page-info-pinned').checked = !!(node && node.pinned);
+
+  document.getElementById('page-info-modal').classList.add('active');
+  setTimeout(() => document.getElementById('page-info-title').focus(), 100);
+}
+
+function hidePageInfoModal() {
+  document.getElementById('page-info-modal').classList.remove('active');
+}
+
+async function savePageInfo() {
+  const fsPath = document.getElementById('page-info-path').value;
+  const title = document.getElementById('page-info-title').value.trim();
+  const created = document.getElementById('page-info-date').value;
+  const tags = document.getElementById('page-info-tags').value
+    .split(',')
+    .map(t => t.trim().replace(/^#/, ''))
+    .filter(t => t);
+  const pinned = document.getElementById('page-info-pinned').checked;
+
+  if (!title) {
+    alert('Title cannot be empty.');
+    return;
+  }
+
+  const node = findNodeByPath(treeData, fsPath);
+  const oldTitle = node ? node.title : '';
+  hidePageInfoModal();
+
+  await window.api.updateNoteMeta(fsPath, { created, tags, pinned });
+
+  if (title !== oldTitle) {
+    // renameNode also updates the H1, wiki-links, and possibly the filename
+    await window.api.renameNode(fsPath, title);
+    if (activeNote === fsPath) {
+      // The path may have changed on disk; close so refresh doesn't point at a stale file
+      closeNoteCanvas();
+    }
+  } else if (activeNote === fsPath) {
+    noteContent = await window.api.readNote(fsPath);
+    noteOriginalContent = noteContent;
+  }
+
+  await refreshNotebook();
+  if (activeNote === fsPath) {
+    renderActiveNote();
+  }
 }
 
 // Delete note node dialog
@@ -2052,7 +2200,6 @@ async function exportToPdf() {
   const clone = preview.cloneNode(true);
   clone.querySelectorAll('.mermaid-actions-bar, .code-block-copy-btn').forEach(el => el.remove());
   clone.querySelectorAll('.notebook-mermaid').forEach(pre => {
-    pre.style.zoom = '';
     const svg = pre.querySelector('svg');
     if (svg) {
       const viewBox = svg.viewBox && svg.viewBox.baseVal;
@@ -2436,12 +2583,14 @@ function toggleAutoSave(value) {
 
 function zoomMermaid(btn, amount) {
   const container = btn.closest('.mermaid-block-container');
-  const pre = container.querySelector('.notebook-mermaid');
-  if (!pre) return;
-  
-  let currentZoom = parseFloat(pre.style.zoom) || 1;
-  let newZoom = Math.max(0.4, Math.min(3.0, currentZoom + (amount / 100)));
-  pre.style.zoom = newZoom;
+  const pre = container ? container.querySelector('.notebook-mermaid') : null;
+  const svg = pre ? pre.querySelector('svg') : null;
+  if (!pre || !svg) return;
+
+  const current = parseInt(pre.dataset.zoomLevel, 10) || 100;
+  const next = clampMermaidZoom(current + amount);
+  pre.dataset.zoomLevel = String(next);
+  applyInlineMermaidZoom(pre, svg, next);
 }
 
 let popoutBaseWidth = 0; // natural diagram width in px, basis for pixel zooming
@@ -2813,6 +2962,34 @@ function switchBuilderType() {
   document.getElementById('builder-fields-flowchart').style.display = type === 'flowchart' ? 'block' : 'none';
   document.getElementById('builder-fields-sequence').style.display = type === 'sequence' ? 'block' : 'none';
   document.getElementById('builder-fields-pie').style.display = type === 'pie' ? 'block' : 'none';
+  updateBuilderCode();
+}
+
+// "See Example" fills the current type's form with a working sample, so users
+// keep a reference even after their own typing has replaced the placeholders.
+const BUILDER_EXAMPLES = {
+  flowchart: {
+    direction: 'TD',
+    steps: 'Receive request\nValid input?\nProcess order\nSend confirmation',
+  },
+  sequence: 'Client -> Server: Login request\nServer -> Database: Verify user\nDatabase --> Server: OK\nServer --> Client: Welcome!',
+  pie: {
+    title: 'Time spent',
+    data: 'Meetings: 4\nCoding: 6\nEmail: 2',
+  },
+};
+
+function loadBuilderExample() {
+  const type = document.getElementById('builder-type').value;
+  if (type === 'flowchart') {
+    document.getElementById('builder-flow-direction').value = BUILDER_EXAMPLES.flowchart.direction;
+    document.getElementById('builder-flow-steps').value = BUILDER_EXAMPLES.flowchart.steps;
+  } else if (type === 'sequence') {
+    document.getElementById('builder-seq-messages').value = BUILDER_EXAMPLES.sequence;
+  } else if (type === 'pie') {
+    document.getElementById('builder-pie-title').value = BUILDER_EXAMPLES.pie.title;
+    document.getElementById('builder-pie-data').value = BUILDER_EXAMPLES.pie.data;
+  }
   updateBuilderCode();
 }
 
