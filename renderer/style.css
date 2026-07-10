@@ -1101,14 +1101,16 @@ body.sidebar-collapsed #btn-expand-sidebar {
   color: var(--text-primary);
   font-family: var(--font-sans);
   width: 100%;
-  display: flex;
-  justify-content: center;
+  overflow-x: auto;
 }
 
+/* Sizing (width/max-width) is applied inline by the zoom logic in app.js.
+   margin:auto centering keeps a zoomed-in diagram fully scrollable, unlike
+   flex centering which clips the left edge. */
 .notebook-mermaid svg {
-  width: 100% !important;
-  max-width: 100% !important;
-  height: auto !important;
+  display: block;
+  margin: 0 auto;
+  height: auto;
 }
 
 .mermaid-toggle-btn {

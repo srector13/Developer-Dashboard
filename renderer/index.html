@@ -108,15 +108,15 @@
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>
           </button>
           <div class="mode-toggles">
-            <button id="btn-mode-preview" class="tab-btn active" onclick="setViewMode('preview')" title="Rendered Preview">
+            <button id="btn-mode-preview" class="tab-btn active" onclick="setViewMode('preview')" title="Rendered Preview (Cmd+1 / Ctrl+1)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
               Preview
             </button>
-            <button id="btn-mode-edit" class="tab-btn" onclick="setViewMode('edit')" title="Raw Source Editor">
+            <button id="btn-mode-edit" class="tab-btn" onclick="setViewMode('edit')" title="Raw Source Editor (Cmd+2 / Ctrl+2)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
               Edit
             </button>
-            <button id="btn-mode-split" class="tab-btn" onclick="setViewMode('split')" title="Side-by-Side Split View">
+            <button id="btn-mode-split" class="tab-btn" onclick="setViewMode('split')" title="Side-by-Side Split View (Cmd+3 / Ctrl+3)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
               Split
             </button>
@@ -618,6 +618,39 @@
     </div>
   </div>
 
+  <!-- Page Info (frontmatter) Editor Modal -->
+  <div id="page-info-modal" class="modal-overlay">
+    <div class="glass-card modal-card">
+      <div class="modal-header">
+        <h3>Edit Page Info</h3>
+        <button class="close-btn" onclick="hidePageInfoModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="page-info-path">
+        <div class="form-group">
+          <label>Title</label>
+          <input type="text" id="page-info-title" placeholder="Page title" onkeydown="if (event.key === 'Enter') savePageInfo()">
+        </div>
+        <div class="form-group">
+          <label>Created Date</label>
+          <input type="date" id="page-info-date">
+        </div>
+        <div class="form-group">
+          <label>Tags (comma-separated)</label>
+          <input type="text" id="page-info-tags" placeholder="e.g. project, planning" onkeydown="if (event.key === 'Enter') savePageInfo()">
+        </div>
+        <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
+          <input type="checkbox" id="page-info-pinned" style="width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent-blue);">
+          <label for="page-info-pinned" style="margin-bottom: 0; cursor: pointer; user-select: none;">Pin this page to the top of its section</label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="hidePageInfoModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="savePageInfo()">Save</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Templates Manager Modal -->
   <div id="templates-modal" class="modal-overlay">
     <div class="glass-card modal-card">
@@ -655,7 +688,13 @@
       <div class="modal-body builder-body">
         <div class="builder-form">
           <div class="form-group">
-            <label>Diagram Type</label>
+            <label style="display: flex; justify-content: space-between; align-items: center;">
+              Diagram Type
+              <button type="button" class="btn btn-xs btn-outline" onclick="loadBuilderExample()" title="Fill the form with a working example for this diagram type">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 4px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                See Example
+              </button>
+            </label>
             <select id="builder-type" onchange="switchBuilderType()">
               <option value="flowchart">Flowchart — process &amp; steps</option>
               <option value="sequence">Sequence — who talks to whom</option>
