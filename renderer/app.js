@@ -65,6 +65,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Initialize split pane drag resizer
   initPaneResizer();
 
+  // Initialize sidebar / outline drawer resizing & collapse state
+  initPanelLayout();
+
+  // Initialize drag-to-pan inside the mermaid popout viewer
+  initPopoutPan();
+
   // Setup outside click listener for editor dropdowns
   window.addEventListener('click', (event) => {
     const menus = document.querySelectorAll('.dropdown-menu');
@@ -93,8 +99,36 @@ document.addEventListener('keydown', (e) => {
   } else if (isCmdOrCtrl && e.key.toLowerCase() === 'k') {
     e.preventDefault();
     toggleCommandPalette();
+  } else if (isCmdOrCtrl && e.key.toLowerCase() === 'n') {
+    e.preventDefault();
+    if (notebookRoot) promptCreatePage(notebookRoot);
+  } else if (e.key === 'Escape') {
+    closeTopOverlay();
   }
 });
+
+// Close the currently open overlay (modal / popout / popover / palette) on Escape
+function closeTopOverlay() {
+  const palette = document.getElementById('command-palette-modal');
+  if (palette && palette.style.display !== 'none') {
+    hideCommandPalette();
+    return;
+  }
+  const popout = document.getElementById('mermaid-popout-overlay');
+  if (popout && popout.classList.contains('active')) {
+    closeMermaidPopout();
+    return;
+  }
+  const tagsPopover = document.getElementById('tags-popover');
+  if (tagsPopover && tagsPopover.classList.contains('active')) {
+    hideTagsPopover();
+    return;
+  }
+  const activeModals = document.querySelectorAll('.modal-overlay.active');
+  if (activeModals.length > 0) {
+    activeModals[activeModals.length - 1].classList.remove('active');
+  }
+}
 
 // Apply theme helper
 function applyTheme(theme) {
@@ -126,8 +160,6 @@ function applyTheme(theme) {
     });
     // Force re-render of note preview so Mermaid charts update colors
     if (activeNote && viewMode !== 'edit') {
-      const renderedHtml = window.api.renderMarkdown(noteContent);
-      document.getElementById('preview-pane').innerHTML = renderedHtml;
       renderMarkdownPreview();
     }
   }
@@ -165,9 +197,11 @@ async function refreshNotebook(resetActiveNote = false) {
 
   // Handle active note or landing page loading
   if (activeNote) {
-    // Check if active note still exists in new tree
+    // Check if active note still exists in new tree.
+    // Template files live outside the tree (their folder is ignored), so
+    // they stay open even though findNodeByPath can't see them.
     const node = findNodeByPath(treeData, activeNote);
-    if (node) {
+    if (node || isTemplatePath(activeNote)) {
       if (!resetActiveNote) {
         // Just refresh preview rendering in case file content changed
         const refreshedText = await window.api.readNote(activeNote);
@@ -530,6 +564,7 @@ function renderActiveNote() {
   const editor = document.getElementById('note-editor');
   editor.value = noteContent;
   updateLineNumbers();
+  updateWordCount();
 
   // Render Markdown HTML preview
   renderMarkdownPreview();
@@ -544,11 +579,27 @@ function renderActiveNote() {
   }
 }
 
-// Render HTML Preview and draw Mermaid
+// Render HTML Preview and draw Mermaid.
+// Renders are serialized: replacing the preview's innerHTML while a previous
+// mermaid.run() is still in flight detaches its nodes mid-render and throws.
+let previewRenderQueue = Promise.resolve();
 function renderMarkdownPreview() {
+  previewRenderQueue = previewRenderQueue
+    .then(() => doRenderMarkdownPreview())
+    .catch(err => console.error('Preview render error:', err));
+  return previewRenderQueue;
+}
+
+async function doRenderMarkdownPreview() {
   const preview = document.getElementById('preview-pane');
   const renderedHtml = window.api.renderMarkdown(noteContent);
   preview.innerHTML = renderedHtml;
+
+  // Remember each diagram's source before Mermaid replaces it with an SVG,
+  // so the popout viewer can re-render it at full quality later.
+  preview.querySelectorAll('.notebook-mermaid').forEach(el => {
+    el.dataset.mermaidSrc = el.textContent;
+  });
 
   // Intercept click event on checklists in preview mode
   preview.querySelectorAll('.task-checkbox-link').forEach(link => {
@@ -639,28 +690,30 @@ function renderMarkdownPreview() {
     wrapper.appendChild(preEl);
   });
 
-  // Render Mermaid diagrams
+  // Render Mermaid diagrams. mermaid.run() is async — it must be awaited,
+  // otherwise the SVG sizing below runs before the SVGs exist and diagrams
+  // stay capped at Mermaid's inline max-width instead of filling the pane.
   if (window.mermaid) {
     try {
-      window.mermaid.run({
-        querySelector: '.notebook-mermaid',
-      });
-      
-      // Inject zoom interactions or hover styling for diagrams
-      preview.querySelectorAll('.mermaid-block-container').forEach(container => {
-        const diagram = container.querySelector('.notebook-mermaid');
-        if (diagram) {
-          diagram.style.zoom = (appSettings.defaultMermaidZoom / 100);
-          const svg = diagram.querySelector('svg');
-          if (svg) {
-            svg.style.maxWidth = '100%';
-            svg.style.height = 'auto';
-          }
-        }
+      await window.mermaid.run({
+        querySelector: '#preview-pane .notebook-mermaid',
       });
     } catch (err) {
       console.error('Mermaid render error:', err);
     }
+
+    // Inject zoom interactions or hover styling for diagrams
+    preview.querySelectorAll('.mermaid-block-container').forEach(container => {
+      const diagram = container.querySelector('.notebook-mermaid');
+      if (diagram) {
+        diagram.style.zoom = (appSettings.defaultMermaidZoom / 100);
+        const svg = diagram.querySelector('svg');
+        if (svg) {
+          svg.style.maxWidth = '100%';
+          svg.style.height = 'auto';
+        }
+      }
+    });
   }
 }
 
@@ -726,6 +779,7 @@ function handleEditorInput() {
   const textarea = document.getElementById('note-editor');
   noteContent = textarea.value;
   updateLineNumbers();
+  updateWordCount();
   updateSaveStatus(true);
 
   if (viewMode === 'split') {
@@ -769,6 +823,18 @@ function updateLineNumbers() {
   syncEditorScroll(); // rebuilding the gutter resets its scroll position
 }
 
+// Word count + estimated reading time shown in the note header meta row
+function updateWordCount() {
+  const label = document.getElementById('note-meta-words');
+  if (!label) return;
+  let body = noteContent || '';
+  const fm = body.match(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/);
+  if (fm) body = body.slice(fm[0].length);
+  const words = body.trim() ? body.trim().split(/\s+/).length : 0;
+  const minutes = Math.max(1, Math.round(words / 200));
+  label.innerText = words === 0 ? '0 words' : `${words.toLocaleString()} words · ~${minutes} min read`;
+}
+
 // Keep the line-number gutter aligned with the textarea's scroll position
 function syncEditorScroll() {
   const textarea = document.getElementById('note-editor');
@@ -793,7 +859,7 @@ async function saveActiveNote() {
 function handleEditorKeys(e) {
   const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
   const isCmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
-  
+
   if (isCmdOrCtrl) {
     if (e.key.toLowerCase() === 'b') {
       e.preventDefault();
@@ -802,7 +868,112 @@ function handleEditorKeys(e) {
       e.preventDefault();
       insertFormatting('italic');
     }
+    return;
   }
+
+  // Tab indents inside the note instead of moving keyboard focus away
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    handleEditorTab(e.target, e.shiftKey);
+    return;
+  }
+
+  // Enter continues lists / keeps the current indentation level
+  if (e.key === 'Enter' && !e.shiftKey && !e.altKey) {
+    if (handleEditorEnter(e.target)) {
+      e.preventDefault();
+    }
+  }
+}
+
+const EDITOR_INDENT = '  ';
+// Matches a list line: indent, bullet or ordered marker, optional task checkbox
+const LIST_LINE_RE = /^([ \t]*)([-*+]|\d+[.)])([ \t]+)(\[[ xX]\][ \t]+)?(.*)$/;
+
+function handleEditorTab(textarea, outdent) {
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  const text = textarea.value;
+  const lineStart = text.lastIndexOf('\n', start - 1) + 1;
+  const currentLine = text.slice(lineStart, text.indexOf('\n', start) === -1 ? text.length : text.indexOf('\n', start));
+  const multiline = text.slice(start, end).includes('\n');
+  const onListLine = LIST_LINE_RE.test(currentLine);
+
+  if (multiline || outdent || onListLine) {
+    // Line-wise indent/outdent of every selected line
+    const block = text.slice(lineStart, end);
+    const lines = block.split('\n');
+    let firstLineDelta = 0;
+    let totalDelta = 0;
+    const changed = lines.map((line, i) => {
+      if (outdent) {
+        let removed = 0;
+        if (line.startsWith(EDITOR_INDENT)) removed = EDITOR_INDENT.length;
+        else if (line.startsWith('\t') || line.startsWith(' ')) removed = 1;
+        if (i === 0) firstLineDelta = -removed;
+        totalDelta -= removed;
+        return line.slice(removed);
+      }
+      if (i === 0) firstLineDelta = EDITOR_INDENT.length;
+      totalDelta += EDITOR_INDENT.length;
+      return EDITOR_INDENT + line;
+    }).join('\n');
+
+    textarea.value = text.slice(0, lineStart) + changed + text.slice(end);
+    textarea.selectionStart = Math.max(lineStart, start + firstLineDelta);
+    textarea.selectionEnd = Math.max(lineStart, end + totalDelta);
+  } else {
+    // Plain cursor: insert an indent step at the caret
+    textarea.value = text.slice(0, start) + EDITOR_INDENT + text.slice(end);
+    textarea.selectionStart = textarea.selectionEnd = start + EDITOR_INDENT.length;
+  }
+  handleEditorInput();
+}
+
+function handleEditorEnter(textarea) {
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  if (start !== end) return false;
+
+  const text = textarea.value;
+  const lineStart = text.lastIndexOf('\n', start - 1) + 1;
+  const beforeCursor = text.slice(lineStart, start);
+
+  const m = beforeCursor.match(LIST_LINE_RE);
+  if (!m) {
+    // Not a list: still preserve plain leading indentation
+    const indentMatch = beforeCursor.match(/^[ \t]+/);
+    if (indentMatch && beforeCursor.trim().length > 0) {
+      const insertion = '\n' + indentMatch[0];
+      textarea.value = text.slice(0, start) + insertion + text.slice(end);
+      textarea.selectionStart = textarea.selectionEnd = start + insertion.length;
+      handleEditorInput();
+      return true;
+    }
+    return false;
+  }
+
+  const [, indent, marker, spacing, checkbox, content] = m;
+
+  // Empty list item: pressing Enter ends the list (removes the marker)
+  if (!content.trim()) {
+    textarea.value = text.slice(0, lineStart) + text.slice(start);
+    textarea.selectionStart = textarea.selectionEnd = lineStart;
+    handleEditorInput();
+    return true;
+  }
+
+  // Continue the list at the same indentation (incrementing ordered markers)
+  let nextMarker = marker;
+  const num = marker.match(/^(\d+)([.)])$/);
+  if (num) {
+    nextMarker = (parseInt(num[1], 10) + 1) + num[2];
+  }
+  const insertion = '\n' + indent + nextMarker + spacing + (checkbox ? '[ ] ' : '');
+  textarea.value = text.slice(0, start) + insertion + text.slice(end);
+  textarea.selectionStart = textarea.selectionEnd = start + insertion.length;
+  handleEditorInput();
+  return true;
 }
 
 // Formatting inserts helper
@@ -945,8 +1116,9 @@ function initCustomTooltips() {
   const selectors = '.toolbar-btn, .icon-btn, .dropdown-toggle, .dropdown-item, .mode-toggles button, .sidebar-header button, .popout-actions button';
   document.querySelectorAll(selectors).forEach(el => {
     const title = el.getAttribute('title');
-    if (title) {
+    if (title && !el.dataset.tooltipBound) {
       el.dataset.tooltip = title;
+      el.dataset.tooltipBound = 'true'; // this runs after every render; bind each element once
       el.removeAttribute('title'); // hide default system tooltip
 
       el.addEventListener('mouseenter', () => {
@@ -986,6 +1158,88 @@ function initCustomTooltips() {
       });
     }
   });
+}
+
+// ==========================================
+// PANEL LAYOUT: RESIZABLE SIDEBAR & OUTLINE DRAWER, SIDEBAR COLLAPSE
+// ==========================================
+
+const PANEL_MIN_WIDTH = 180;
+const PANEL_MAX_WIDTH = 520;
+
+function initPanelLayout() {
+  const sidebar = document.getElementById('sidebar');
+  const drawer = document.getElementById('right-drawer');
+
+  // Restore persisted widths
+  const savedSidebar = parseInt(localStorage.getItem('panelWidth:sidebar'), 10);
+  if (savedSidebar >= PANEL_MIN_WIDTH && savedSidebar <= PANEL_MAX_WIDTH) {
+    sidebar.style.width = `${savedSidebar}px`;
+  }
+  const savedDrawer = parseInt(localStorage.getItem('panelWidth:drawer'), 10);
+  if (savedDrawer >= PANEL_MIN_WIDTH && savedDrawer <= PANEL_MAX_WIDTH) {
+    drawer.style.width = `${savedDrawer}px`;
+  }
+
+  // Restore collapsed state
+  if (localStorage.getItem('sidebarCollapsed') === '1') {
+    setSidebarCollapsed(true);
+  }
+
+  initPanelResizer('sidebar-resizer', sidebar, 'left', 'panelWidth:sidebar');
+  initPanelResizer('drawer-resizer', drawer, 'right', 'panelWidth:drawer');
+}
+
+// Generic horizontal drag-resize for a fixed-width flex panel.
+// side: 'left' panels grow towards the right, 'right' panels towards the left.
+function initPanelResizer(resizerId, panel, side, storageKey) {
+  const resizer = document.getElementById(resizerId);
+  if (!resizer || !panel) return;
+
+  let dragging = false;
+
+  resizer.addEventListener('mousedown', (e) => {
+    dragging = true;
+    resizer.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+
+    // Full-screen overlay so iframes/textareas don't swallow mouse events
+    const overlay = document.createElement('div');
+    overlay.id = 'panel-resizer-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;cursor:col-resize;';
+    document.body.appendChild(overlay);
+    e.preventDefault();
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const rect = panel.getBoundingClientRect();
+    const width = side === 'left' ? (e.clientX - rect.left) : (rect.right - e.clientX);
+    const clamped = Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, width));
+    panel.style.width = `${clamped}px`;
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    resizer.classList.remove('dragging');
+    document.body.style.cursor = '';
+    const overlay = document.getElementById('panel-resizer-overlay');
+    if (overlay) overlay.remove();
+    localStorage.setItem(storageKey, String(parseInt(panel.style.width, 10) || panel.getBoundingClientRect().width));
+  });
+}
+
+function setSidebarCollapsed(collapsed) {
+  const sidebar = document.getElementById('sidebar');
+  sidebar.classList.toggle('collapsed', collapsed);
+  document.body.classList.toggle('sidebar-collapsed', collapsed);
+  localStorage.setItem('sidebarCollapsed', collapsed ? '1' : '0');
+}
+
+function toggleSidebarCollapsed() {
+  const sidebar = document.getElementById('sidebar');
+  setSidebarCollapsed(!sidebar.classList.contains('collapsed'));
 }
 
 function initPaneResizer() {
@@ -1242,7 +1496,10 @@ function insertMermaidChart(chartType) {
 function toggleRightDrawer() {
   const drawer = document.getElementById('right-drawer');
   drawer.classList.toggle('collapsed');
-  if (!drawer.classList.contains('collapsed')) {
+  const isOpen = !drawer.classList.contains('collapsed');
+  const resizer = document.getElementById('drawer-resizer');
+  if (resizer) resizer.style.display = isOpen ? 'block' : 'none';
+  if (isOpen) {
     updateOutlineAndBacklinks();
   }
 }
@@ -1551,12 +1808,12 @@ function populateDestinationDropdown(destDir) {
 }
 
 // New note popup creation
-function promptCreatePage(destDir) {
+async function promptCreatePage(destDir) {
   document.getElementById('create-modal-title').innerText = 'New Page';
   document.getElementById('create-modal-name-label').innerText = 'Page Title';
   document.getElementById('create-modal-name').value = '';
   document.getElementById('create-modal-name').placeholder = 'e.g. Q3 Migration Plan';
-  
+
   document.getElementById('create-modal-dest-group').style.display = 'block';
   populateDestinationDropdown(destDir);
   document.getElementById('create-modal-type').value = 'page';
@@ -1565,34 +1822,24 @@ function promptCreatePage(destDir) {
   document.getElementById('create-modal-date').value = localToday();
   document.getElementById('create-modal-tags').value = '';
 
-  // Load Templates Select
+  // Load Templates Select. The templates folder is excluded from the sidebar
+  // tree (it's in ignoreFolders), so ask the main process for the real list.
   const select = document.getElementById('create-modal-template');
   select.innerHTML = '<option value="">Blank Page (No Template)</option>';
-
-  // Find templates files in tree if templates directory is loaded
-  const templatesNode = findTemplatesNode(treeData, appSettings.templatesFolder);
-  if (templatesNode) {
-    templatesNode.pages.forEach(p => {
-      select.innerHTML += `<option value="${escapeHtml(p.name)}">${escapeHtml(p.title)}</option>`;
+  try {
+    const templates = await window.api.listTemplates();
+    templates.forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t.name;
+      opt.innerText = t.title;
+      select.appendChild(opt);
     });
+  } catch (err) {
+    console.error('Failed to list templates:', err);
   }
 
   document.getElementById('create-modal').classList.add('active');
   setTimeout(() => document.getElementById('create-modal-name').focus(), 100);
-}
-
-function findTemplatesNode(node, folderName) {
-  if (!node) return null;
-  if (node.kind === 'section' && node.name.toLowerCase() === folderName.toLowerCase()) {
-    return node;
-  }
-  if (node.kind === 'section') {
-    for (const s of node.sections) {
-      const match = findTemplatesNode(s, folderName);
-      if (match) return match;
-    }
-  }
-  return null;
 }
 
 function promptCreateSection(destDir) {
@@ -1635,6 +1882,13 @@ async function submitCreateModal() {
     hideCreateModal();
     await refreshNotebook();
     await openNote(newPath);
+  } else if (type === 'template') {
+    const newPath = await window.api.createTemplate(name);
+    hideCreateModal();
+    if (newPath) {
+      await openNote(newPath);
+      setViewMode('edit');
+    }
   } else if (type === 'import-clip') {
     const meta = collectModalMeta();
     hideCreateModal();
@@ -1775,13 +2029,43 @@ function pathDirname(filepath) {
   return parts.slice(0, -1).join('/');
 }
 
+// True when a file lives inside the configured templates folder
+function isTemplatePath(fsPath) {
+  if (!fsPath || !notebookRoot || !appSettings) return false;
+  const folder = appSettings.templatesFolder || 'templates';
+  const normalize = (p) => String(p).replace(/\\/g, '/').replace(/\/+$/, '');
+  const templatesDir = /^([a-zA-Z]:)?\//.test(folder.replace(/\\/g, '/'))
+    ? normalize(folder)
+    : normalize(notebookRoot) + '/' + normalize(folder);
+  return normalize(fsPath).toLowerCase().startsWith(templatesDir.toLowerCase() + '/');
+}
+
 // Native PDF Export
 async function exportToPdf() {
   if (!activeNote) return;
   const preview = document.getElementById('preview-pane');
-  const htmlContent = preview.innerHTML;
-  
-  const success = await window.api.exportToPdf(activeNote, htmlContent);
+
+  // Sanitize a copy of the rendered note for print: strip interactive UI and
+  // reset Mermaid SVG sizing. On screen the SVGs are stretched to 100% width,
+  // which in print blows tall diagrams up over multiple pages and produces
+  // blank pages around them; exporting at natural (viewBox) size fixes that.
+  const clone = preview.cloneNode(true);
+  clone.querySelectorAll('.mermaid-actions-bar, .code-block-copy-btn').forEach(el => el.remove());
+  clone.querySelectorAll('.notebook-mermaid').forEach(pre => {
+    pre.style.zoom = '';
+    const svg = pre.querySelector('svg');
+    if (svg) {
+      const viewBox = svg.viewBox && svg.viewBox.baseVal;
+      const naturalWidth = (viewBox && viewBox.width) ? viewBox.width : 0;
+      // ~660px is the printable width of an A4 page at 96dpi with margins
+      svg.style.maxWidth = naturalWidth ? `${Math.min(Math.round(naturalWidth), 660)}px` : '100%';
+      svg.style.width = '100%';
+      svg.style.height = 'auto';
+      svg.removeAttribute('height');
+    }
+  });
+
+  const success = await window.api.exportToPdf(activeNote, clone.innerHTML);
   if (success) {
     alert('Note exported as PDF successfully!');
   }
@@ -2110,7 +2394,8 @@ function zoomPreview(amount) {
   previewZoomLevel = Math.max(70, Math.min(200, previewZoomLevel + amount));
   const pane = document.getElementById('preview-pane');
   pane.style.fontSize = `${previewZoomLevel}%`;
-  document.getElementById('label-preview-zoom').innerText = `${previewZoomLevel}%`;
+  const label = document.getElementById('label-preview-zoom');
+  if (label) label.innerText = `${previewZoomLevel}%`;
 }
 
 async function cyclePageWidth() {
@@ -2159,41 +2444,111 @@ function zoomMermaid(btn, amount) {
   pre.style.zoom = newZoom;
 }
 
-function popoutMermaid(btn) {
+let popoutBaseWidth = 0; // natural diagram width in px, basis for pixel zooming
+
+async function popoutMermaid(btn) {
   const container = btn.closest('.mermaid-block-container');
-  const originalSvg = container.querySelector('svg');
-  if (!originalSvg) return;
-  
+  const pre = container ? container.querySelector('.notebook-mermaid') : null;
+  if (!pre) return;
+
   const popoutBody = document.getElementById('mermaid-popout-body');
   popoutBody.innerHTML = '';
-  
-  // Clone the SVG node and keep the original ID so Mermaid dynamic style sheets match
-  const clonedSvg = originalSvg.cloneNode(true);
-  clonedSvg.style.transform = 'none';
-  clonedSvg.style.zoom = '1';
-  clonedSvg.style.width = '100%';
-  clonedSvg.style.height = 'auto';
-  clonedSvg.style.maxWidth = '100%';
-  clonedSvg.style.maxHeight = '100%';
-  
-  popoutBody.appendChild(clonedSvg);
-  popoutZoomLevel = 100;
-  document.getElementById('label-popout-zoom').innerText = '100%';
-  
+  const canvas = document.createElement('div');
+  canvas.className = 'popout-canvas';
+  popoutBody.appendChild(canvas);
+
   document.getElementById('mermaid-popout-overlay').classList.add('active');
+
+  let svgEl = null;
+  const source = (pre.dataset.mermaidSrc || '').trim();
+  try {
+    if (source && window.mermaid) {
+      // Re-render from source: a fresh SVG with its own unique id, so markers
+      // and styles don't collide with the inline diagram's ids.
+      const { svg } = await window.mermaid.render(`popout-diagram-${Date.now()}`, source);
+      canvas.innerHTML = svg;
+      svgEl = canvas.querySelector('svg');
+    }
+  } catch (err) {
+    console.error('Popout mermaid render failed, falling back to clone:', err);
+  }
+
+  if (!svgEl) {
+    // Fallback: clone the already-rendered inline SVG
+    const originalSvg = container.querySelector('svg');
+    if (!originalSvg) {
+      canvas.innerHTML = '<div class="popout-error">This diagram could not be rendered.</div>';
+      return;
+    }
+    svgEl = originalSvg.cloneNode(true);
+    canvas.appendChild(svgEl);
+  }
+
+  // Zoom by explicit pixel width (keeps scrollbars honest, unlike transform)
+  svgEl.style.transform = 'none';
+  svgEl.style.zoom = '1';
+  svgEl.style.maxWidth = 'none';
+  svgEl.style.maxHeight = 'none';
+  svgEl.style.height = 'auto';
+  svgEl.removeAttribute('height');
+
+  const viewBox = svgEl.viewBox && svgEl.viewBox.baseVal;
+  popoutBaseWidth = (viewBox && viewBox.width) ? viewBox.width : (svgEl.getBoundingClientRect().width || 800);
+
+  // Start fitted to the visible area; don't blow small diagrams up past 150%
+  const available = popoutBody.clientWidth - 80;
+  const fit = Math.round((available / popoutBaseWidth) * 100);
+  popoutZoomLevel = Math.max(40, Math.min(150, fit || 100));
+  applyPopoutZoom();
 }
 
-function zoomPopout(amount) {
-  popoutZoomLevel = Math.max(40, Math.min(300, popoutZoomLevel + amount));
+function applyPopoutZoom() {
   const svg = document.querySelector('#mermaid-popout-body svg');
-  if (svg) {
-    svg.style.transform = `scale(${popoutZoomLevel / 100})`;
+  if (svg && popoutBaseWidth) {
+    svg.style.width = `${Math.round(popoutBaseWidth * popoutZoomLevel / 100)}px`;
   }
   document.getElementById('label-popout-zoom').innerText = `${popoutZoomLevel}%`;
 }
 
+function zoomPopout(amount) {
+  popoutZoomLevel = Math.max(40, Math.min(300, popoutZoomLevel + amount));
+  applyPopoutZoom();
+}
+
 function closeMermaidPopout() {
   document.getElementById('mermaid-popout-overlay').classList.remove('active');
+}
+
+// Drag-to-pan inside the popout viewer
+function initPopoutPan() {
+  const body = document.getElementById('mermaid-popout-body');
+  if (!body) return;
+  let panning = false;
+  let startX = 0, startY = 0, startLeft = 0, startTop = 0;
+
+  body.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    panning = true;
+    body.classList.add('panning');
+    startX = e.clientX;
+    startY = e.clientY;
+    startLeft = body.scrollLeft;
+    startTop = body.scrollTop;
+    e.preventDefault();
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!panning) return;
+    body.scrollLeft = startLeft - (e.clientX - startX);
+    body.scrollTop = startTop - (e.clientY - startY);
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (panning) {
+      panning = false;
+      body.classList.remove('panning');
+    }
+  });
 }
 
 // ==========================================
@@ -2274,6 +2629,9 @@ function handlePaletteSearch() {
     { label: 'Toggle Rendered Preview Pane', subtitle: 'Action: /preview', action: () => setViewMode('preview') },
     { label: 'Toggle Raw Source Editor', subtitle: 'Action: /edit', action: () => setViewMode('edit') },
     { label: 'Toggle Side-by-Side Split View', subtitle: 'Action: /split', action: () => setViewMode('split') },
+    { label: 'Manage Note Templates', subtitle: 'Action: /templates', action: () => showTemplatesModal() },
+    { label: 'Open Mermaid Diagram Builder', subtitle: 'Action: /diagram', action: () => showMermaidBuilder() },
+    { label: 'Toggle Sidebar (Notes Directory)', subtitle: 'Action: /sidebar', action: () => toggleSidebarCollapsed() },
   ];
 
   const matchingCommands = commands.filter(cmd => 
@@ -2345,6 +2703,255 @@ function confirmPaletteSelection() {
   const selectedItem = paletteFilteredItems[paletteSelectedIndex];
   hideCommandPalette();
   selectedItem.action();
+}
+
+// ==========================================
+// TEMPLATES MANAGER
+// ==========================================
+
+async function showTemplatesModal() {
+  const label = document.getElementById('templates-folder-label');
+  if (label && appSettings) label.innerText = appSettings.templatesFolder || 'templates';
+  document.getElementById('templates-modal').classList.add('active');
+  await renderTemplatesList();
+}
+
+function hideTemplatesModal() {
+  document.getElementById('templates-modal').classList.remove('active');
+}
+
+async function renderTemplatesList() {
+  const container = document.getElementById('templates-list');
+  container.innerHTML = '<div class="template-empty-notice">Loading templates...</div>';
+
+  const templates = await window.api.listTemplates();
+  if (!templates || templates.length === 0) {
+    container.innerHTML = '<div class="template-empty-notice">No templates yet. Create one to reuse a page layout for new notes.</div>';
+    return;
+  }
+
+  container.innerHTML = templates.map(t => `
+    <div class="template-item">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--accent-teal); flex-shrink: 0;"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+      <div class="template-item-main">
+        <span class="template-item-title">${escapeHtml(t.title)}</span>
+        <span class="template-item-name">${escapeHtml(t.name)}</span>
+      </div>
+      <div class="template-item-actions">
+        <button class="btn btn-xs btn-outline" onclick="useTemplateForNewPage(${jsArg(t.name)})" title="Create a new page from this template">New Page</button>
+        <button class="btn btn-xs btn-outline" onclick="editTemplate(${jsArg(t.fsPath)})" title="Open template in the editor">Edit</button>
+        <button class="tree-node-btn" onclick="deleteTemplate(${jsArg(t.fsPath)})" title="Delete Template">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+      </div>
+    </div>
+  `).join('\n');
+}
+
+async function useTemplateForNewPage(templateName) {
+  hideTemplatesModal();
+  await promptCreatePage(notebookRoot); // waits for the template list to load
+  const select = document.getElementById('create-modal-template');
+  if (select) select.value = templateName;
+}
+
+async function editTemplate(fsPath) {
+  hideTemplatesModal();
+  await openNote(fsPath);
+  setViewMode('edit');
+}
+
+async function deleteTemplate(fsPath) {
+  if (!confirm('Delete this template permanently?')) return;
+  const success = await window.api.deleteNode(fsPath);
+  if (success) {
+    if (activeNote === fsPath) closeNoteCanvas();
+    await renderTemplatesList();
+  }
+}
+
+function promptCreateTemplate() {
+  hideTemplatesModal();
+  document.getElementById('create-modal-title').innerText = 'New Template';
+  document.getElementById('create-modal-name-label').innerText = 'Template Name';
+  document.getElementById('create-modal-name').value = '';
+  document.getElementById('create-modal-name').placeholder = 'e.g. Meeting Notes';
+
+  document.getElementById('create-modal-dest-group').style.display = 'none';
+  document.getElementById('create-modal-type').value = 'template';
+  document.getElementById('create-modal-page-options').style.display = 'none';
+
+  document.getElementById('create-modal').classList.add('active');
+  setTimeout(() => document.getElementById('create-modal-name').focus(), 100);
+}
+
+// ==========================================
+// MERMAID DIAGRAM BUILDER
+// ==========================================
+
+let builderPreviewTimer = null;
+let builderRenderCounter = 0;
+
+function showMermaidBuilder() {
+  // Close the mermaid dropdown if it triggered us
+  const menu = document.getElementById('dropdown-mermaid');
+  if (menu) {
+    menu.classList.remove('active');
+    const chev = menu.closest('.editor-dropdown').querySelector('.chevron');
+    if (chev) chev.style.transform = 'rotate(0deg)';
+  }
+  document.getElementById('mermaid-builder-modal').classList.add('active');
+  updateBuilderCode();
+}
+
+function hideMermaidBuilder() {
+  document.getElementById('mermaid-builder-modal').classList.remove('active');
+}
+
+function switchBuilderType() {
+  const type = document.getElementById('builder-type').value;
+  document.getElementById('builder-fields-flowchart').style.display = type === 'flowchart' ? 'block' : 'none';
+  document.getElementById('builder-fields-sequence').style.display = type === 'sequence' ? 'block' : 'none';
+  document.getElementById('builder-fields-pie').style.display = type === 'pie' ? 'block' : 'none';
+  updateBuilderCode();
+}
+
+// Escape a label for use inside a quoted Mermaid node/segment label
+function mermaidLabel(s) {
+  return String(s).replace(/"/g, '#quot;');
+}
+
+function generateBuilderCode() {
+  const type = document.getElementById('builder-type').value;
+
+  if (type === 'flowchart') {
+    const direction = document.getElementById('builder-flow-direction').value;
+    const steps = document.getElementById('builder-flow-steps').value
+      .split('\n').map(s => s.trim()).filter(s => s);
+    if (steps.length === 0) return '';
+
+    const idFor = (i) => {
+      // A, B, ... Z, AA, AB ... for arbitrarily many steps
+      let n = i, id = '';
+      do { id = String.fromCharCode(65 + (n % 26)) + id; n = Math.floor(n / 26) - 1; } while (n >= 0);
+      return id;
+    };
+
+    const lines = [`flowchart ${direction}`];
+    steps.forEach((step, i) => {
+      const isDecision = /\?\s*$/.test(step);
+      const label = mermaidLabel(step);
+      lines.push(isDecision ? `    ${idFor(i)}{"${label}"}` : `    ${idFor(i)}["${label}"]`);
+    });
+    for (let i = 0; i < steps.length - 1; i++) {
+      lines.push(`    ${idFor(i)} --> ${idFor(i + 1)}`);
+    }
+    return lines.join('\n');
+  }
+
+  if (type === 'sequence') {
+    const rows = document.getElementById('builder-seq-messages').value
+      .split('\n').map(s => s.trim()).filter(s => s);
+    if (rows.length === 0) return '';
+
+    const lines = ['sequenceDiagram'];
+    rows.forEach(row => {
+      const m = row.match(/^(.+?)\s*(-->|->)\s*(.+?)\s*:\s*(.+)$/);
+      if (m) {
+        const arrow = m[2] === '-->' ? '-->>' : '->>';
+        lines.push(`    ${m[1].trim()}${arrow}${m[3].trim()}: ${m[4].trim()}`);
+      } else {
+        lines.push(`    %% Could not read: ${row} (expected "From -> To: message")`);
+      }
+    });
+    return lines.join('\n');
+  }
+
+  if (type === 'pie') {
+    const title = document.getElementById('builder-pie-title').value.trim();
+    const rows = document.getElementById('builder-pie-data').value
+      .split('\n').map(s => s.trim()).filter(s => s);
+    if (rows.length === 0) return '';
+
+    const lines = [title ? `pie title ${title}` : 'pie'];
+    rows.forEach(row => {
+      const m = row.match(/^(.+?)\s*[:=]\s*([\d.]+)\s*$/);
+      if (m) {
+        lines.push(`    "${mermaidLabel(m[1].trim())}" : ${m[2]}`);
+      }
+    });
+    return lines.length > 1 ? lines.join('\n') : '';
+  }
+
+  return '';
+}
+
+function updateBuilderCode() {
+  const code = generateBuilderCode();
+  document.getElementById('builder-code').value = code;
+  scheduleBuilderPreview();
+}
+
+function scheduleBuilderPreview() {
+  if (builderPreviewTimer) clearTimeout(builderPreviewTimer);
+  builderPreviewTimer = setTimeout(renderBuilderPreview, 250);
+}
+
+async function renderBuilderPreview() {
+  const code = document.getElementById('builder-code').value.trim();
+  const preview = document.getElementById('builder-preview');
+  const errorBox = document.getElementById('builder-error');
+
+  if (!code) {
+    preview.innerHTML = '<div class="builder-preview-placeholder">Fill in the form to see your diagram</div>';
+    errorBox.style.display = 'none';
+    return;
+  }
+  if (!window.mermaid) return;
+
+  try {
+    const { svg } = await window.mermaid.render(`builder-preview-svg-${++builderRenderCounter}`, code);
+    preview.innerHTML = svg;
+    errorBox.style.display = 'none';
+  } catch (err) {
+    // Keep the last good preview visible; surface the parse error below it
+    errorBox.innerText = (err && err.message) ? err.message : String(err);
+    errorBox.style.display = 'block';
+    // Mermaid can leave a temp error element behind on failed renders
+    const stray = document.getElementById(`dbuilder-preview-svg-${builderRenderCounter}`);
+    if (stray) stray.remove();
+  }
+}
+
+function insertBuilderDiagram() {
+  const code = document.getElementById('builder-code').value.trim();
+  if (!code) {
+    alert('The diagram is empty — fill in the form first.');
+    return;
+  }
+  if (!activeNote) {
+    alert('Open a note first, then insert the diagram.');
+    return;
+  }
+
+  const textarea = document.getElementById('note-editor');
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  const text = textarea.value;
+  const insertion = `\n\`\`\`mermaid\n${code}\n\`\`\`\n`;
+
+  textarea.value = text.substring(0, start) + insertion + text.substring(end);
+  textarea.selectionStart = textarea.selectionEnd = start + insertion.length;
+  handleEditorInput();
+  hideMermaidBuilder();
+
+  // Make sure the user sees the result immediately
+  if (viewMode === 'preview') {
+    setViewMode('split');
+  } else if (viewMode === 'split') {
+    renderMarkdownPreview();
+  }
+  textarea.focus();
 }
 
 // --- Drag & Drop Handlers ---

@@ -5,7 +5,7 @@
   <title>Markdown Notebook</title>
   <link rel="stylesheet" href="vendor/github-markdown.css">
   <link rel="stylesheet" href="vendor/github-dark.css">
-  <link rel="stylesheet" href="style.css?v=2">
+  <link rel="stylesheet" href="style.css?v=3">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -49,6 +49,9 @@
           <button class="icon-btn" onclick="showSettingsModal()" title="Settings">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           </button>
+          <button class="icon-btn" onclick="toggleSidebarCollapsed()" title="Collapse Sidebar">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/></svg>
+          </button>
         </div>
       </div>
 
@@ -84,14 +87,26 @@
         </div>
       </div>
 
-
+      <!-- Sidebar Footer: Templates Manager -->
+      <div class="sidebar-footer">
+        <button class="btn btn-sm btn-outline" onclick="showTemplatesModal()" title="Add & manage note templates">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+          Templates
+        </button>
+      </div>
     </aside>
+
+    <!-- Sidebar drag resizer -->
+    <div id="sidebar-resizer" class="panel-resizer" title="Drag to resize sidebar"></div>
 
     <!-- CENTER CANVAS: Note Editor & Preview -->
     <main id="content-canvas">
       <!-- CANVAS TOOLBAR: Mode switcher, inserts, exports -->
       <div class="toolbar">
         <div class="toolbar-group">
+          <button class="icon-btn" id="btn-expand-sidebar" onclick="toggleSidebarCollapsed()" title="Expand Sidebar">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>
+          </button>
           <div class="mode-toggles">
             <button id="btn-mode-preview" class="tab-btn active" onclick="setViewMode('preview')" title="Rendered Preview">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -209,6 +224,9 @@
               <svg class="chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
             </button>
             <div id="dropdown-mermaid" class="dropdown-menu glass-card">
+              <div class="dropdown-item dropdown-item-featured" onclick="showMermaidBuilder()" title="Build a diagram with a guided form — no Mermaid syntax needed.">
+                Diagram Builder... &nbsp;<span class="item-desc">Guided, no syntax needed</span>
+              </div>
               <div class="dropdown-item" onclick="insertMermaidChart('flowchart')" title="Use for: Representing processes, loops, decisions, workflows, and logical flow directions.">
                 Flowchart &nbsp;<span class="item-desc">Process & workflow charts</span>
               </div>
@@ -277,6 +295,10 @@
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
               <span id="note-meta-author">Author</span>
             </div>
+            <div class="meta-item" id="note-meta-words-container">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+              <span id="note-meta-words">0 words</span>
+            </div>
             <div id="note-meta-tags" class="tag-list">
               <!-- Dynamically injected tag pills -->
             </div>
@@ -314,6 +336,7 @@
           <button class="icon-btn" onclick="zoomPreview(-10)" title="Zoom Out Preview">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/></svg>
           </button>
+          <span id="label-preview-zoom" style="font-size: 11px; color: var(--text-secondary); min-width: 34px; text-align: center; font-weight: 500;">100%</span>
           <button class="icon-btn" onclick="zoomPreview(10)" title="Zoom In Preview">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           </button>
@@ -407,6 +430,9 @@
         </div>
       </div>
     </main>
+
+    <!-- Right drawer drag resizer -->
+    <div id="drawer-resizer" class="panel-resizer" style="display: none;" title="Drag to resize outline"></div>
 
     <!-- RIGHT DRAWER: Headings Outline & Backlinks -->
     <aside id="right-drawer" class="collapsed">
@@ -592,8 +618,107 @@
     </div>
   </div>
 
+  <!-- Templates Manager Modal -->
+  <div id="templates-modal" class="modal-overlay">
+    <div class="glass-card modal-card">
+      <div class="modal-header">
+        <h3>Note Templates</h3>
+        <button class="close-btn" onclick="hideTemplatesModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="templates-help">
+          Templates are Markdown files stored in your notebook's <strong id="templates-folder-label">templates</strong> folder.
+          Pick one when creating a new page. Placeholders <code>{{title}}</code>, <code>{{date}}</code>, <code>{{time}}</code>,
+          <code>{{datetime}}</code>, <code>{{weekday}}</code> and <code>{{slug}}</code> are filled in automatically.
+        </p>
+        <div id="templates-list" class="template-list">
+          <!-- Template rows injected here -->
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="hideTemplatesModal()">Close</button>
+        <button class="btn btn-primary" onclick="promptCreateTemplate()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          New Template
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mermaid Diagram Builder Modal -->
+  <div id="mermaid-builder-modal" class="modal-overlay">
+    <div class="glass-card modal-card builder-card">
+      <div class="modal-header">
+        <h3>Diagram Builder</h3>
+        <button class="close-btn" onclick="hideMermaidBuilder()">&times;</button>
+      </div>
+      <div class="modal-body builder-body">
+        <div class="builder-form">
+          <div class="form-group">
+            <label>Diagram Type</label>
+            <select id="builder-type" onchange="switchBuilderType()">
+              <option value="flowchart">Flowchart — process &amp; steps</option>
+              <option value="sequence">Sequence — who talks to whom</option>
+              <option value="pie">Pie Chart — proportions</option>
+            </select>
+          </div>
+
+          <div id="builder-fields-flowchart">
+            <div class="form-group">
+              <label>Direction</label>
+              <select id="builder-flow-direction" onchange="updateBuilderCode()">
+                <option value="TD">Top to Bottom</option>
+                <option value="LR">Left to Right</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Steps (one per line)</label>
+              <textarea id="builder-flow-steps" rows="6" oninput="updateBuilderCode()" placeholder="Receive request&#10;Valid input?&#10;Process order&#10;Send confirmation" spellcheck="false"></textarea>
+              <p class="builder-hint">Each line becomes a box connected to the next. End a line with "?" to draw it as a decision diamond.</p>
+            </div>
+          </div>
+
+          <div id="builder-fields-sequence" style="display: none;">
+            <div class="form-group">
+              <label>Messages (one per line: From -> To: message)</label>
+              <textarea id="builder-seq-messages" rows="6" oninput="updateBuilderCode()" placeholder="Client -> Server: Login request&#10;Server -> Database: Verify user&#10;Database --> Server: OK&#10;Server --> Client: Welcome!" spellcheck="false"></textarea>
+              <p class="builder-hint">Use "--&gt;" instead of "-&gt;" for a dashed reply arrow.</p>
+            </div>
+          </div>
+
+          <div id="builder-fields-pie" style="display: none;">
+            <div class="form-group">
+              <label>Chart Title</label>
+              <input type="text" id="builder-pie-title" oninput="updateBuilderCode()" placeholder="e.g. Time spent">
+            </div>
+            <div class="form-group">
+              <label>Slices (one per line: Label: value)</label>
+              <textarea id="builder-pie-data" rows="6" oninput="updateBuilderCode()" placeholder="Meetings: 4&#10;Coding: 6&#10;Email: 2" spellcheck="false"></textarea>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Mermaid Code (advanced — editable)</label>
+            <textarea id="builder-code" rows="7" oninput="scheduleBuilderPreview()" spellcheck="false" class="builder-code"></textarea>
+          </div>
+        </div>
+        <div class="builder-preview-wrap">
+          <label>Live Preview</label>
+          <div id="builder-preview" class="builder-preview">
+            <div class="builder-preview-placeholder">Fill in the form to see your diagram</div>
+          </div>
+          <div id="builder-error" class="builder-error" style="display: none;"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="hideMermaidBuilder()">Cancel</button>
+        <button class="btn btn-primary" onclick="insertBuilderDiagram()">Insert into Note</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Scripts -->
   <script src="vendor/mermaid.min.js"></script>
-  <script src="app.js?v=2"></script>
+  <script src="app.js?v=3"></script>
 </body>
 </html>

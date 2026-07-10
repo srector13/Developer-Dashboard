@@ -191,6 +191,7 @@ body {
 /* LEFT PANEL: Sidebar */
 #sidebar {
   width: 260px;
+  min-width: 0;
   border-right: 1px solid var(--border-color);
   background-color: var(--bg-secondary);
   backdrop-filter: var(--glass-blur);
@@ -198,6 +199,52 @@ body {
   flex-direction: column;
   flex-shrink: 0;
   z-index: 10;
+}
+
+#sidebar.collapsed {
+  width: 0 !important;
+  border-right: none;
+  overflow: hidden;
+}
+
+/* Draggable resize handles between panels */
+.panel-resizer {
+  width: 4px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background-color: transparent;
+  z-index: 20;
+  transition: background-color 0.15s ease;
+}
+
+.panel-resizer:hover,
+.panel-resizer.dragging {
+  background-color: var(--accent-blue);
+}
+
+body.sidebar-collapsed #sidebar-resizer {
+  display: none;
+}
+
+/* Expand-sidebar button lives in the toolbar; only visible while collapsed */
+#btn-expand-sidebar {
+  display: none;
+}
+
+body.sidebar-collapsed #btn-expand-sidebar {
+  display: inline-flex;
+}
+
+/* Sidebar footer (templates entry point) */
+.sidebar-footer {
+  padding: 10px 16px;
+  border-top: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.sidebar-footer .btn {
+  width: 100%;
+  gap: 6px;
 }
 
 .sidebar-header {
@@ -375,13 +422,14 @@ body {
   flex: 1;
 }
 
+/* Hover actions sit in normal flow so they never overlap the label text:
+   the label simply truncates with an ellipsis while they are shown. */
 .tree-node-actions {
   display: none;
-  gap: 4px;
-  position: absolute;
-  right: 8px;
-  background-color: inherit;
-  padding-left: 8px;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-left: 4px;
 }
 
 .tree-node:hover .tree-node-actions {
@@ -1125,13 +1173,13 @@ body {
 /* RIGHT DRAWER: Outline & Backlinks */
 #right-drawer {
   width: 240px;
+  min-width: 0;
   border-left: 1px solid var(--border-color);
   background-color: var(--bg-secondary);
   backdrop-filter: var(--glass-blur);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  transition: width 0.3s cubic-bezier(0.16, 1, 0.3, 1), transform 0.3s;
   overflow-y: auto;
 }
 
@@ -1721,21 +1769,41 @@ body {
 .popout-body {
   flex: 1;
   overflow: auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 40px;
   background-color: var(--bg-primary);
   background-image: radial-gradient(var(--border-color) 1px, transparent 1px);
   background-size: 20px 20px;
+  cursor: grab;
 }
 
-#mermaid-popout-body svg {
-  width: 100% !important;
-  max-width: 100%;
-  max-height: 95%;
-  height: auto;
-  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+.popout-body.panning {
+  cursor: grabbing;
+  user-select: none;
+}
+
+/* The canvas grows with the zoomed SVG so scrollbars appear naturally;
+   margin:auto centers small diagrams without clipping large ones
+   (flex centering + overflow would make the top-left unreachable). */
+.popout-canvas {
+  display: flex;
+  min-width: 100%;
+  min-height: 100%;
+  width: max-content;
+  padding: 40px;
+}
+
+.popout-canvas svg {
+  margin: auto;
+  flex-shrink: 0;
+  max-width: none !important;
+  height: auto !important;
+}
+
+.popout-error {
+  margin: auto;
+  color: var(--accent-red);
+  font-size: 13px;
+  max-width: 420px;
+  text-align: center;
 }
 
 /* CUSTOM EDITOR DROPDOWNS & TABLE SELECTION GRID */
@@ -2055,6 +2123,179 @@ body {
   margin: 0 1px;
 }
 
+
+/* TEMPLATES MANAGER MODAL */
+.templates-help {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin-bottom: 16px;
+}
+
+.templates-help code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background-color: rgba(255, 255, 255, 0.06);
+  color: var(--accent-blue);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.template-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.template-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background-color: var(--bg-tertiary);
+  transition: border-color 0.15s ease;
+}
+
+.template-item:hover {
+  border-color: var(--accent-blue);
+}
+
+.template-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.template-item-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.template-item-name {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.template-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.template-empty-notice {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 24px 12px;
+}
+
+/* MERMAID DIAGRAM BUILDER MODAL */
+.builder-card {
+  width: 880px;
+  max-width: 94%;
+}
+
+.builder-body {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 20px;
+}
+
+.builder-form textarea,
+.builder-code {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  outline: none;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.builder-form textarea:focus,
+.builder-code:focus {
+  border-color: var(--accent-blue);
+}
+
+.builder-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 6px;
+  line-height: 1.5;
+}
+
+.builder-preview-wrap {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.builder-preview-wrap > label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  font-weight: 500;
+}
+
+.builder-preview {
+  flex: 1;
+  min-height: 260px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background-color: var(--bg-tertiary);
+  background-image: radial-gradient(var(--border-color) 1px, transparent 1px);
+  background-size: 20px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 16px;
+}
+
+.builder-preview svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.builder-preview-placeholder {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.builder-error {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--accent-red);
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+}
+
+.dropdown-item-featured {
+  color: var(--accent-teal);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-color);
+}
+
+@media (max-width: 900px) {
+  .builder-body {
+    grid-template-columns: 1fr;
+  }
+}
 
 /* PRINT CSS RULE */
 @media print {

@@ -451,9 +451,7 @@ ipcMain.handle('create-page', async (event, dirPath, title, templateName, meta?:
   let body = '';
 
   if (templateName) {
-    const templatesDir = path.isAbsolute(settings.templatesFolder)
-      ? settings.templatesFolder
-      : path.join(settings.notebookRoot, settings.templatesFolder);
+    const templatesDir = resolveTemplatesDir(settings);
     const templatePath = path.join(templatesDir, templateName);
     if (fs.existsSync(templatePath)) {
       let raw = await fsp.readFile(templatePath, 'utf8');
@@ -726,6 +724,67 @@ ipcMain.handle('move-node', async (event, dirPath, fileName, direction) => {
     mainWindow.webContents.send('files-changed');
   }
   return true;
+});
+
+// Templates management
+function resolveTemplatesDir(settings: AppSettings): string {
+  return path.isAbsolute(settings.templatesFolder)
+    ? settings.templatesFolder
+    : path.join(settings.notebookRoot, settings.templatesFolder);
+}
+
+ipcMain.handle('list-templates', async () => {
+  const settings = await readSettings();
+  if (!settings.notebookRoot) return [];
+  const dir = resolveTemplatesDir(settings);
+
+  try {
+    const entries = await fsp.readdir(dir, { withFileTypes: true });
+    const templates: Array<{ name: string; fsPath: string; title: string }> = [];
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+      const fullPath = path.join(dir, entry.name);
+      let title = cleanDisplayName(path.basename(entry.name, '.md'));
+      try {
+        const meta = parseNoteMeta(await fsp.readFile(fullPath, 'utf8'), fullPath);
+        title = meta.title;
+      } catch {}
+      templates.push({ name: entry.name, fsPath: fullPath, title });
+    }
+    templates.sort((a, b) => a.title.localeCompare(b.title));
+    return templates;
+  } catch {
+    return []; // templates folder doesn't exist yet
+  }
+});
+
+ipcMain.handle('create-template', async (event, name: string) => {
+  const settings = await readSettings();
+  if (!settings.notebookRoot) return null;
+  const dir = resolveTemplatesDir(settings);
+  await fsp.mkdir(dir, { recursive: true });
+
+  // Templates are note *bodies*: create-page prepends its own frontmatter
+  // and H1, so a starter template must not include those.
+  const starter = [
+    '## Overview',
+    '',
+    'Notes about {{title}}, started on {{weekday}} {{date}}.',
+    '',
+    '## Details',
+    '',
+    '- [ ] First action item',
+    '',
+  ].join('\n');
+
+  const filename = await uniqueMd(dir, slug(name) || 'template');
+  const fullPath = path.join(dir, filename);
+  await fsp.writeFile(fullPath, starter, 'utf8');
+
+  if (mainWindow) {
+    mainWindow.webContents.send('files-changed');
+  }
+  return fullPath;
 });
 
 // Quick Scratchpad backed by scratchpadFile
@@ -1037,12 +1096,56 @@ ipcMain.handle('export-to-pdf', async (event, filePath, htmlContent) => {
         }
         /* Page break controls */
         h1, h2, h3 { page-break-after: avoid; }
-        pre, blockquote, table, img { page-break-inside: avoid; }
-        
+        blockquote, table, img { page-break-inside: avoid; }
+        pre { page-break-inside: avoid; max-height: none; }
+
+        /* Mermaid diagrams: render at natural size, capped to one page, so a
+           stretched SVG can't span multiple pages and leave blank gaps. */
+        .mermaid-block-container {
+          page-break-inside: avoid;
+          margin: 16px 0;
+          border: none;
+          background: transparent;
+        }
+        .notebook-mermaid {
+          background: transparent !important;
+          border: none !important;
+          padding: 0 !important;
+          box-shadow: none !important;
+          display: flex;
+          justify-content: center;
+          page-break-inside: avoid;
+        }
+        .notebook-mermaid svg {
+          max-width: 100% !important;
+          max-height: 8.5in;
+          height: auto !important;
+        }
+
         /* Hide notebook UI elements for clean write-up export */
-        .toolbar, .code-header, .code-header-bar, .copy-btn, .copy-code-btn, 
+        .toolbar, .code-header, .code-header-bar, .copy-btn, .copy-code-btn,
+        .mermaid-actions-bar, .code-block-copy-btn,
         #note-header, .backlink-pill, .tag-pill, .status-indicator, #titlebar {
           display: none !important;
+        }
+
+        /* Code block wrapper chrome from the preview pane */
+        .code-block-wrapper {
+          border: 1px solid #dfe2e5;
+          border-radius: 6px;
+          overflow: hidden;
+          margin-bottom: 16px;
+          page-break-inside: avoid;
+        }
+        .code-block-wrapper pre { margin: 0; }
+        .code-block-header {
+          padding: 4px 12px;
+          background: #f0f2f4;
+          border-bottom: 1px solid #dfe2e5;
+          font-size: 10px;
+          font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+          text-transform: uppercase;
+          color: #6a737d;
         }
       </style>
     </head>
