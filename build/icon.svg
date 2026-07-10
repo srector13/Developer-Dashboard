@@ -1,36 +1,37 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    App icon. Crisp by design: no blur filters (they read as "fuzzy" at dock /
+    taskbar sizes), thick rounded strokes, high figure-ground contrast.
+    Rendered to icon.png at 1024x1024 via scripts/render-icon.mjs.
+  -->
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#1c2433"/>
-      <stop offset="0.55" stop-color="#10151d"/>
-      <stop offset="1" stop-color="#0a0d12"/>
+      <stop offset="0" stop-color="#233046"/>
+      <stop offset="0.5" stop-color="#141a24"/>
+      <stop offset="1" stop-color="#0b0f15"/>
     </linearGradient>
     <linearGradient id="ink" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#58a6ff"/>
-      <stop offset="1" stop-color="#39c5cf"/>
+      <stop offset="0" stop-color="#6cb6ff"/>
+      <stop offset="1" stop-color="#3ddbe6"/>
     </linearGradient>
-    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
-      <feGaussianBlur stdDeviation="18" result="b"/>
-      <feMerge>
-        <feMergeNode in="b"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="rgba(120,180,255,0.55)"/>
+      <stop offset="1" stop-color="rgba(60,120,200,0.15)"/>
+    </linearGradient>
   </defs>
 
   <!-- Rounded-square plate -->
   <rect x="64" y="64" width="896" height="896" rx="204" fill="url(#bg)"/>
-  <rect x="70" y="70" width="884" height="884" rx="198" fill="none" stroke="rgba(88,166,255,0.28)" stroke-width="10"/>
+  <!-- Rim light: sharp 1px-feel edge instead of a glow -->
+  <rect x="72" y="72" width="880" height="880" rx="196" fill="none" stroke="url(#rim)" stroke-width="12"/>
 
-  <!-- Notebook glyph (same book mark used in the app sidebar) -->
-  <g filter="url(#glow)">
-    <svg x="236" y="236" width="552" height="552" viewBox="0 0 24 24">
-      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 19.5A2.5 2.5 0 0 0 6.5 22H20M4 19.5V5A2.5 2.5 0 0 1 6.5 2.5H20v14H6.5a2.5 2.5 0 0 0-2.5 2.5z"
-            fill="none" stroke="url(#ink)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
-      <!-- Markdown text lines on the page -->
-      <line x1="9" y1="7"  x2="16.5" y2="7"  stroke="rgba(201,209,217,0.85)" stroke-width="1.1" stroke-linecap="round"/>
-      <line x1="9" y1="10" x2="15"   y2="10" stroke="rgba(139,148,158,0.7)"  stroke-width="1.1" stroke-linecap="round"/>
-      <line x1="9" y1="13" x2="16"   y2="13" stroke="rgba(139,148,158,0.55)" stroke-width="1.1" stroke-linecap="round"/>
-    </svg>
-  </g>
+  <!-- Notebook glyph (same book mark used in the app sidebar), bold strokes -->
+  <svg x="224" y="224" width="576" height="576" viewBox="0 0 24 24">
+    <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 19.5A2.5 2.5 0 0 0 6.5 22H20M4 19.5V5A2.5 2.5 0 0 1 6.5 2.5H20v14H6.5a2.5 2.5 0 0 0-2.5 2.5z"
+          fill="none" stroke="url(#ink)" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Markdown text lines on the page: solid, high-contrast -->
+    <line x1="9" y1="7"  x2="16.5" y2="7"  stroke="#e8eef5" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="9" y1="10" x2="15"   y2="10" stroke="#aeb9c5" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="9" y1="13" x2="16"   y2="13" stroke="#7c8894" stroke-width="1.5" stroke-linecap="round"/>
+  </svg>
 </svg>
