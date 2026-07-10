@@ -200,6 +200,10 @@ contextBridge.exposeInMainWorld('api', {
   // Quick Scratchpad
   readScratchpad: () => ipcRenderer.invoke('read-scratchpad'),
   appendScratchpad: (text: string) => ipcRenderer.invoke('append-scratchpad', text),
+
+  // Templates
+  listTemplates: () => ipcRenderer.invoke('list-templates'),
+  createTemplate: (name: string) => ipcRenderer.invoke('create-template', name),
   
   // Imports / Exports
   importClipboard: (destDir: string, meta?: { title?: string; created?: string; tags?: string[] }) => ipcRenderer.invoke('import-clipboard', destDir, meta),
@@ -224,12 +228,11 @@ contextBridge.exposeInMainWorld('api', {
   // Local Markdown rendering
   renderMarkdown: (text: string) => {
     let body = text;
-    // Strip YAML frontmatter
-    if (body.startsWith('---')) {
-      const endIdx = body.indexOf('---', 3);
-      if (endIdx !== -1) {
-        body = body.substring(endIdx + 3);
-      }
+    // Strip YAML frontmatter (the closing --- must sit on its own line, so a
+    // horizontal rule or table row later in the note can't truncate content)
+    const fmMatch = body.match(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/);
+    if (fmMatch) {
+      body = body.slice(fmMatch[0].length);
     }
     // Strip TOC navigation backlinks lines like "[← Daily TOC](.toc.md)" first
     body = body.replace(/^([ \t]*\r?\n)*\[[^\]]*\]\([^)]*\.toc\.md\)([ \t]*\r?\n)*/gmi, '\n');
