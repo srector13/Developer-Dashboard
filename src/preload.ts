@@ -181,6 +181,10 @@ md.core.ruler.after('inline', 'notebook-task-lists', (state: any) => {
 
 // API Expose
 contextBridge.exposeInMainWorld('api', {
+  // Platform ('darwin' | 'win32' | 'linux') so the UI can show the right
+  // modifier keys (⌘ on macOS, Ctrl elsewhere)
+  platform: process.platform,
+
   // Config / App control
   selectFolder: () => ipcRenderer.invoke('select-folder'),
   getSettings: () => ipcRenderer.invoke('get-settings'),
@@ -209,7 +213,10 @@ contextBridge.exposeInMainWorld('api', {
   // Imports / Exports
   importClipboard: (destDir: string, meta?: { title?: string; created?: string; tags?: string[] }) => ipcRenderer.invoke('import-clipboard', destDir, meta),
   importDocument: (destDir: string) => ipcRenderer.invoke('import-document', destDir),
-  exportToPdf: (filePath: string, htmlContent: string) => ipcRenderer.invoke('export-to-pdf', filePath, htmlContent),
+  exportToPdf: (filePath: string, htmlContent: string, options?: { theme?: string; pageSize?: string; openAfter?: boolean; reveal?: boolean }) => ipcRenderer.invoke('export-to-pdf', filePath, htmlContent, options),
+
+  // Backlinks (computed in the main process in one pass)
+  getBacklinks: (filePath: string) => ipcRenderer.invoke('get-backlinks', filePath),
   
   // Utility events
   onFilesChanged: (callback: () => void) => {

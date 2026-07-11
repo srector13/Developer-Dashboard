@@ -1,5 +1,44 @@
 // Markdown Notebook Renderer App
- 
+
+// Platform detection (exposed by preload; navigator fallback for dev/harness).
+// Drives which modifier keys the UI shows: ⌘ on macOS, Ctrl elsewhere.
+const IS_MAC = (window.api && window.api.platform)
+  ? window.api.platform === 'darwin'
+  : navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+
+// Render a canonical shortcut ("Mod+Alt+L", "Tab", "Esc") for this platform.
+// The lookahead split keeps literal '+' or '-' keys ("Mod+Alt+-") intact.
+function shortcutLabel(shortcut) {
+  return shortcut.split(/\+(?=.)/).map(part => {
+    if (part === 'Mod') return IS_MAC ? '⌘' : 'Ctrl';
+    if (part === 'Alt') return IS_MAC ? '⌥' : 'Alt';
+    if (part === 'Shift') return IS_MAC ? '⇧' : 'Shift';
+    return part;
+  }).join(IS_MAC ? '' : '+');
+}
+
+// Rewrite shortcut hints written as "(Cmd+X / Ctrl+X)" or "(Cmd+Alt+X)"
+// into the platform's own form.
+function normalizeShortcutText(text) {
+  if (!text || !text.includes('Cmd+')) return text;
+  // "(Cmd+1 / Ctrl+1)" → single-platform form
+  text = text.replace(/Cmd\+(\S+?)\s*\/\s*Ctrl\+\1/g, (m, key) => `Mod+${key}`);
+  // Remaining "Cmd+..." (mac-only spellings) → canonical Mod form
+  text = text.replace(/Cmd\+/g, 'Mod+');
+  // Render canonical "Mod+Alt+X" style chunks for this platform
+  return text.replace(/(Mod(?:\+[A-Za-z0-9\-\/\]\[]+)+)/g, (m) => shortcutLabel(m));
+}
+
+function normalizeShortcutTitles() {
+  document.querySelectorAll('[title]').forEach(el => {
+    const title = el.getAttribute('title');
+    const normalized = normalizeShortcutText(title);
+    if (normalized !== title) {
+      el.setAttribute('title', normalized);
+    }
+  });
+}
+
 let notebookRoot = '';
 let activeNote = '';
 let noteContent = '';
@@ -25,9 +64,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   autoSaveEnabled = appSettings.autoSaveEnabled || false;
   document.getElementById('header-autosave').checked = autoSaveEnabled;
   
-  // Set theme from settings
-  applyTheme(appSettings.previewTheme);
- 
+  // Set theme from settings (also initializes Mermaid with the right theme)
+  applyTheme(appSettings.theme);
+
+  // Platform-correct shortcut hints must be applied before anything renders
+  // the tree (which binds tooltips and consumes the title attributes)
+  normalizeShortcutTitles();
+  const paletteHint = document.getElementById('palette-shortcut-hint');
+  if (paletteHint) paletteHint.innerText = shortcutLabel('Mod+K');
+
   if (appSettings.notebookRoot) {
     notebookRoot = appSettings.notebookRoot;
     document.getElementById('onboarding').classList.remove('active');
@@ -41,16 +86,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   window.api.onFilesChanged(async () => {
     await refreshNotebook(false); // refresh tree without resetting active note
   });
-
-  // Initialize Mermaid
-  if (window.mermaid) {
-    const isDark = document.body.classList.contains('dark-theme');
-    window.mermaid.initialize({
-      startOnLoad: false,
-      theme: isDark ? 'dark' : 'default',
-      securityLevel: 'loose'
-    });
-  }
 
   // Set default page width label
   const labelMap = { 'standard': 'Standard', 'wide': 'Wide', 'full': 'Full' };
@@ -90,8 +125,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 // Setup keyboard shortcuts inside document
 document.addEventListener('keydown', (e) => {
-  const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
-  const isCmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
+  const isCmdOrCtrl = IS_MAC ? e.metaKey : e.ctrlKey;
 
   if (isCmdOrCtrl && e.key.toLowerCase() === 's') {
     e.preventDefault();
@@ -108,6 +142,9 @@ document.addEventListener('keydown', (e) => {
       e.preventDefault();
       setViewMode({ '1': 'preview', '2': 'edit', '3': 'split' }[e.key]);
     }
+  } else if (isCmdOrCtrl && e.key === '/') {
+    e.preventDefault();
+    showShortcutsModal();
   } else if (e.key === 'Escape') {
     closeTopOverlay();
   }
@@ -136,32 +173,48 @@ function closeTopOverlay() {
   }
 }
 
-// Apply theme helper
-function applyTheme(theme) {
-  const body = document.body;
-  let isDark = false;
-  if (theme === 'github-dark') {
-    body.className = 'dark-theme';
-    isDark = true;
-  } else if (theme === 'off') {
-    body.className = 'light-theme';
-    isDark = false;
-  } else {
-    // auto detect system light/dark
-    const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    if (systemDark) {
-      body.className = 'dark-theme';
-      isDark = true;
-    } else {
-      body.className = 'light-theme';
-      isDark = false;
-    }
+// ==========================================
+// THEME SYSTEM
+// Each named theme builds on a light or dark base class; the theme-specific
+// palette lives in a body[data-theme=...] CSS variable block in style.css.
+// ==========================================
+const THEMES = {
+  light:    { base: 'light', mermaid: 'default', label: 'Light' },
+  dark:     { base: 'dark',  mermaid: 'dark',    label: 'Dark' },
+  midnight: { base: 'dark',  mermaid: 'dark',    label: 'Midnight' },
+  forest:   { base: 'dark',  mermaid: 'dark',    label: 'Forest' },
+  sepia:    { base: 'light', mermaid: 'neutral', label: 'Sepia' },
+};
+
+function resolveThemeName(name) {
+  if (name === 'system' || !THEMES[name]) {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   }
+  return name;
+}
+
+// Apply theme helper. `theme` is a setting value: 'system' or a THEMES key.
+function applyTheme(theme) {
+  const resolved = resolveThemeName(theme);
+  const entry = THEMES[resolved];
+  const body = document.body;
+
+  // classList, not className assignment: the body also carries state classes
+  // like sidebar-collapsed that must survive theme switches.
+  body.classList.remove('dark-theme', 'light-theme');
+  body.classList.add(`${entry.base}-theme`);
+  body.dataset.theme = resolved;
+
+  // Swap the highlight.js stylesheet to match the base
+  const hljsDark = document.getElementById('hljs-dark');
+  const hljsLight = document.getElementById('hljs-light');
+  if (hljsDark) hljsDark.disabled = entry.base !== 'dark';
+  if (hljsLight) hljsLight.disabled = entry.base !== 'light';
 
   if (window.mermaid) {
     window.mermaid.initialize({
       startOnLoad: false,
-      theme: isDark ? 'dark' : 'default',
+      theme: entry.mermaid,
       securityLevel: 'loose'
     });
     // Force re-render of note preview so Mermaid charts update colors
@@ -171,16 +224,18 @@ function applyTheme(theme) {
   }
 }
 
+// Quick toggle flips between the light/dark base themes; the full palette
+// list lives in Settings.
 async function toggleGlobalTheme() {
-  const body = document.body;
-  const isDark = body.classList.contains('dark-theme');
-  const newTheme = isDark ? 'off' : 'github-dark';
+  const isDark = document.body.classList.contains('dark-theme');
+  const newTheme = isDark ? 'light' : 'dark';
   applyTheme(newTheme);
-  
+
   if (appSettings) {
-    appSettings.previewTheme = newTheme;
-    await window.api.saveSettings(appSettings);
-    document.getElementById('settings-theme').value = newTheme;
+    appSettings.theme = newTheme;
+    appSettings = await window.api.saveSettings(appSettings);
+    const select = document.getElementById('settings-theme');
+    if (select) select.value = newTheme;
   }
 }
 
@@ -429,10 +484,16 @@ function findNodeByPath(node, filePath) {
   return null;
 }
 
-// Search handler
+// Search handler (debounced: the tree rebuild + tooltip rebinding is too
+// heavy to run on every keystroke in large notebooks)
+let searchDebounceTimer = null;
 function handleSearch(val) {
   searchQuery = val;
-  renderSidebarTree();
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(() => {
+    searchDebounceTimer = null;
+    renderSidebarTree();
+  }, 120);
 }
 
 // Global tags modal cloud
@@ -505,13 +566,13 @@ async function openNote(filePath) {
     const modeToggles = document.querySelector('.mode-toggles');
     if (modeToggles) modeToggles.style.display = 'flex';
 
+    // Reset view to default preview first, without rendering: renderActiveNote
+    // below renders the preview once (previously this rendered twice per open)
+    setViewMode('preview', { render: false });
     renderActiveNote();
-    
+
     // Render sidebar active selection state
     renderSidebarTree();
-
-    // Reset view to default preview
-    setViewMode('preview');
   } catch (err) {
     console.error('Error opening note:', err);
   }
@@ -759,8 +820,10 @@ function findPagePathByFilename(node, filename) {
   return null;
 }
 
-// Set view layout modes
-function setViewMode(mode) {
+// Set view layout modes. options.render=false skips the preview re-render
+// for callers that render themselves right after (avoids double mermaid runs).
+function setViewMode(mode, options = {}) {
+  const { render = true } = options;
   viewMode = mode;
   const container = document.getElementById('editor-preview-container');
   
@@ -791,7 +854,9 @@ function setViewMode(mode) {
   }
 
   if (mode === 'preview' || mode === 'split') {
-    renderMarkdownPreview();
+    if (render) {
+      renderMarkdownPreview();
+    }
     if (activeNote && noteContent !== noteOriginalContent) {
       saveActiveNote();
     }
@@ -874,17 +939,30 @@ async function saveActiveNote() {
   await window.api.writeNote(activeNote, noteContent);
   noteOriginalContent = noteContent;
   updateSaveStatus(false);
-  
-  // Re-load notebook metadata updates
-  await refreshNotebook(false);
+  // No explicit refresh: the write triggers the main process's debounced
+  // files-changed notification, which refreshes the notebook exactly once.
 }
 
 // Handle special keys inside editor
 function handleEditorKeys(e) {
-  const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
-  const isCmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
+  const isCmdOrCtrl = IS_MAC ? e.metaKey : e.ctrlKey;
 
   if (isCmdOrCtrl) {
+    // Alt/Option combos advertised in the toolbar tooltips
+    if (e.altKey) {
+      const code = e.code; // e.key is unreliable with Option on macOS
+      if (code === 'KeyL') {
+        e.preventDefault();
+        insertFormatting('list-bullet');
+      } else if (code === 'KeyC' || code === 'KeyX') {
+        e.preventDefault();
+        insertFormatting('list-check');
+      } else if (code === 'Minus') {
+        e.preventDefault();
+        insertFormatting('separator');
+      }
+      return;
+    }
     if (e.key.toLowerCase() === 'b') {
       e.preventDefault();
       insertFormatting('bold');
@@ -1192,7 +1270,9 @@ function initCustomTooltips() {
   // Scan all toolbar buttons, icon-toggles, and dropdown elements with standard title hover cues
   const selectors = '.toolbar-btn, .icon-btn, .dropdown-toggle, .dropdown-item, .mode-toggles button, .sidebar-header button, .popout-actions button';
   document.querySelectorAll(selectors).forEach(el => {
-    const title = el.getAttribute('title');
+    // Normalize at capture time too, so late-rendered elements are always
+    // platform-correct regardless of init ordering
+    const title = normalizeShortcutText(el.getAttribute('title'));
     if (title && !el.dataset.tooltipBound) {
       el.dataset.tooltip = title;
       el.dataset.tooltipBound = 'true'; // this runs after every render; bind each element once
@@ -1656,50 +1736,40 @@ function updateOutlineAndBacklinks() {
       console.error("Error loading TOC link:", err);
     }
 
-    // 2b. Scan notebook-wide incoming backlinks
+    // 2b. Notebook-wide incoming backlinks: one IPC call, computed in the
+    // main process. The request token guards against a race where a slower
+    // response for a previously-open note lands after switching notes.
     if (!treeData) return;
-    const noteBaseName = pathBasename(activeNote, '.md');
-    const activeNoteName = pathBasename(activeNote);
-    
-    // Gather all pages recursively in the entire notebook for complete backlinks check
-    const allPages = gatherPagesRecursively(treeData);
-    const templatesDir = appSettings.templatesFolder;
-    
-    allPages.forEach(async (page) => {
-      if (!page || !page.fsPath || page.fsPath === activeNote) return;
-      if (templatesDir && page.relPath && page.relPath.startsWith(templatesDir + '/')) return;
+    const requestedNote = activeNote;
+    const token = ++backlinksRequestToken;
 
-      try {
-        const fileText = await window.api.readNote(page.fsPath);
-        const escapeBaseName = escapeRegex(noteBaseName || '');
-        const escapeFullName = escapeRegex(activeNoteName || '');
-        
-        const wikiRegex = new RegExp(`\\[\\[${escapeBaseName}(\\||#|\\]\\])`, 'i');
-        const mdRegex = new RegExp(`\\(\\.*\\/?.*?${escapeFullName}\\)`, 'i');
-        
-        if (wikiRegex.test(fileText) || mdRegex.test(fileText)) {
-          const pill = document.createElement('span');
-          pill.className = 'backlink-pill';
-          pill.innerHTML = `
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:2px;"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-            ${page.title}
-          `;
-          pill.title = `Go to: ${page.title}`;
-          pill.onclick = (e) => {
-            e.stopPropagation();
-            if (page.fsPath) {
-              openNote(page.fsPath);
-            }
-          };
-          backlinksList.appendChild(pill);
-          backlinksContainer.style.display = 'flex';
-        }
-      } catch (err) {
-        console.error('Error scanning backlinks for page:', page.fsPath, err);
-      }
+    window.api.getBacklinks(requestedNote).then(paths => {
+      if (token !== backlinksRequestToken || activeNote !== requestedNote) return;
+
+      paths.forEach(fsPath => {
+        const page = findNodeByPath(treeData, fsPath);
+        const title = page ? page.title : pathBasename(fsPath, '.md');
+        const pill = document.createElement('span');
+        pill.className = 'backlink-pill';
+        pill.innerHTML = `
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:2px;"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+          ${escapeHtml(title)}
+        `;
+        pill.title = `Go to: ${title}`;
+        pill.onclick = (e) => {
+          e.stopPropagation();
+          openNote(fsPath);
+        };
+        backlinksList.appendChild(pill);
+        backlinksContainer.style.display = 'flex';
+      });
+    }).catch(err => {
+      console.error('Error loading backlinks:', err);
     });
   }
 }
+
+let backlinksRequestToken = 0;
 
 function scrollToHeading(label) {
   const preview = document.getElementById('preview-pane');
@@ -1798,7 +1868,7 @@ function showSettingsModal() {
   const modal = document.getElementById('settings-modal');
   document.getElementById('settings-page-width').value = appSettings.defaultPageWidth;
   document.getElementById('settings-mermaid-zoom').value = appSettings.defaultMermaidZoom;
-  document.getElementById('settings-theme').value = appSettings.previewTheme;
+  document.getElementById('settings-theme').value = appSettings.theme || 'system';
   document.getElementById('settings-templates-folder').value = appSettings.templatesFolder;
   document.getElementById('settings-author').value = appSettings.author;
   document.getElementById('settings-pandoc-path').value = appSettings.pandocPath || '';
@@ -1824,7 +1894,7 @@ async function saveSettingsForm() {
   appSettings = await window.api.saveSettings({
     defaultPageWidth: width,
     defaultMermaidZoom: zoom,
-    previewTheme: theme,
+    theme: theme,
     templatesFolder: templates,
     author: author,
     pandocPath: pandocPath,
@@ -2188,15 +2258,16 @@ function isTemplatePath(fsPath) {
   return normalize(fsPath).toLowerCase().startsWith(templatesDir.toLowerCase() + '/');
 }
 
-// Native PDF Export
-async function exportToPdf() {
-  if (!activeNote) return;
-  const preview = document.getElementById('preview-pane');
+// ==========================================
+// PDF EXPORT (options dialog + sanitized snapshot)
+// ==========================================
 
-  // Sanitize a copy of the rendered note for print: strip interactive UI and
-  // reset Mermaid SVG sizing. On screen the SVGs are stretched to 100% width,
-  // which in print blows tall diagrams up over multiple pages and produces
-  // blank pages around them; exporting at natural (viewBox) size fixes that.
+// Sanitize a copy of the rendered note for print: strip interactive UI and
+// reset Mermaid SVG sizing. On screen the SVGs are stretched to 100% width,
+// which in print blows tall diagrams up over multiple pages and produces
+// blank pages around them; exporting at natural (viewBox) size fixes that.
+function getSanitizedPreviewHtml() {
+  const preview = document.getElementById('preview-pane');
   const clone = preview.cloneNode(true);
   clone.querySelectorAll('.mermaid-actions-bar, .code-block-copy-btn').forEach(el => el.remove());
   clone.querySelectorAll('.notebook-mermaid').forEach(pre => {
@@ -2211,11 +2282,123 @@ async function exportToPdf() {
       svg.removeAttribute('height');
     }
   });
+  return clone.innerHTML;
+}
 
-  const success = await window.api.exportToPdf(activeNote, clone.innerHTML);
-  if (success) {
-    alert('Note exported as PDF successfully!');
+// Opens the export options dialog (prefilled with the last-used choices)
+function exportToPdf() {
+  if (!activeNote) return;
+  const opts = (appSettings && appSettings.pdfExport) || {};
+  document.getElementById('pdf-theme').value = opts.theme || 'light';
+  document.getElementById('pdf-page-size').value = opts.pageSize || 'A4';
+  document.getElementById('pdf-open-after').checked = opts.openAfter !== false;
+  document.getElementById('pdf-reveal').checked = !!opts.reveal;
+  document.getElementById('pdf-export-modal').classList.add('active');
+}
+
+function hidePdfExportModal() {
+  document.getElementById('pdf-export-modal').classList.remove('active');
+}
+
+async function confirmPdfExport() {
+  if (!activeNote) return;
+  const options = {
+    theme: document.getElementById('pdf-theme').value,
+    pageSize: document.getElementById('pdf-page-size').value,
+    openAfter: document.getElementById('pdf-open-after').checked,
+    reveal: document.getElementById('pdf-reveal').checked,
+  };
+  hidePdfExportModal();
+
+  const result = await window.api.exportToPdf(activeNote, getSanitizedPreviewHtml(), options);
+  if (result && result.success) {
+    if (appSettings) appSettings.pdfExport = options; // main persisted it
+    showToast(`PDF exported: ${pathBasename(result.pdfPath)}`);
+  } else if (result && !result.canceled) {
+    showToast(result.reason || 'PDF export failed.', 'error');
   }
+}
+
+// ==========================================
+// TOAST NOTIFICATIONS (non-blocking feedback)
+// ==========================================
+let toastTimer = null;
+function showToast(message, type = 'success') {
+  let el = document.getElementById('app-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'app-toast';
+    el.className = 'app-toast';
+    document.body.appendChild(el);
+  }
+  el.textContent = message;
+  el.classList.toggle('error', type === 'error');
+  el.classList.add('visible');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('visible'), 3500);
+}
+
+// ==========================================
+// KEYBOARD SHORTCUTS REFERENCE
+// ==========================================
+const SHORTCUT_SECTIONS = [
+  {
+    section: 'General',
+    items: [
+      { keys: 'Mod+K', desc: 'Open command palette' },
+      { keys: 'Mod+N', desc: 'Create a new page' },
+      { keys: 'Mod+S', desc: 'Save the current note' },
+      { keys: 'Mod+/', desc: 'Show this shortcuts reference' },
+      { keys: 'Esc', desc: 'Close dialogs, popups & the diagram viewer' },
+    ],
+  },
+  {
+    section: 'View',
+    items: [
+      { keys: 'Mod+1', desc: 'Rendered preview' },
+      { keys: 'Mod+2', desc: 'Raw source editor' },
+      { keys: 'Mod+3', desc: 'Side-by-side split view' },
+    ],
+  },
+  {
+    section: 'Editor — Formatting',
+    items: [
+      { keys: 'Mod+B', desc: 'Bold' },
+      { keys: 'Mod+I', desc: 'Italic' },
+      { keys: 'Mod+Alt+L', desc: 'Insert bullet list item' },
+      { keys: 'Mod+Alt+C', desc: 'Insert task checklist item' },
+      { keys: 'Mod+Alt+-', desc: 'Insert separator line' },
+    ],
+  },
+  {
+    section: 'Editor — Lists & Indentation',
+    items: [
+      { keys: 'Tab', desc: 'Indent line or list item' },
+      { keys: 'Shift+Tab', desc: 'Outdent line or list item' },
+      { keys: 'Enter', desc: 'Continue the list at the same indent' },
+      { keys: 'Enter', desc: 'On an empty item: end the list', note: 'empty item' },
+    ],
+  },
+];
+
+function showShortcutsModal() {
+  const container = document.getElementById('shortcuts-list');
+  container.innerHTML = SHORTCUT_SECTIONS.map(group => `
+    <div class="shortcuts-section">
+      <h4>${escapeHtml(group.section)}</h4>
+      ${group.items.map(item => `
+        <div class="shortcut-row">
+          <span class="shortcut-desc">${escapeHtml(item.desc)}</span>
+          <span class="shortcut-keys"><kbd>${escapeHtml(shortcutLabel(item.keys))}</kbd></span>
+        </div>
+      `).join('')}
+    </div>
+  `).join('');
+  document.getElementById('shortcuts-modal').classList.add('active');
+}
+
+function hideShortcutsModal() {
+  document.getElementById('shortcuts-modal').classList.remove('active');
 }
 
 // Prompt Page Creation with custom Name (for broken Wiki-Links)
@@ -2337,25 +2520,19 @@ function gatherPagesRecursively(node, list = []) {
   return list;
 }
 
-async function getPendingTasksForPages(pages) {
+// Open tasks now arrive on each PageNode from the tree scan (which already
+// reads every file), so building this list requires no extra file reads.
+function getPendingTasksForPages(pages) {
   const tasks = [];
   for (const page of pages) {
-    try {
-      const content = await window.api.readNote(page.fsPath);
-      const lines = content.split(/\r?\n/);
-      lines.forEach((line, index) => {
-        const checkboxRegex = /^([ \t]*([-*+]\s+|\d+\.\s+)?)\[ \]/i;
-        if (checkboxRegex.test(line)) {
-          const text = line.replace(checkboxRegex, '').trim();
-          tasks.push({
-            fsPath: page.fsPath,
-            title: page.title,
-            text: text,
-            lineIndex: index
-          });
-        }
+    (page.taskLines || []).forEach(t => {
+      tasks.push({
+        fsPath: page.fsPath,
+        title: page.title,
+        text: t.text,
+        lineIndex: t.line,
       });
-    } catch {}
+    });
   }
   return tasks;
 }
@@ -2399,9 +2576,7 @@ async function renderSectionLanding() {
     notesContainer.innerHTML = pages.map(p => {
       const taskTotal = (p.openTasks || 0) + (p.completedTasks || 0);
       const progressBadge = taskTotal > 0 ? `
-        <span class="task-badge" style="background-color: rgba(255,255,255,0.06); font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px; color: var(--text-secondary);">
-          ${p.completedTasks}/${taskTotal} Done
-        </span>
+        <span class="task-badge landing-badge">${p.completedTasks}/${taskTotal} Done</span>
       ` : '';
       return `
         <div class="landing-page-item" onclick="openNote(${jsArg(p.fsPath)})">
@@ -2474,9 +2649,7 @@ async function renderRootLanding() {
       ` + sortedPages.slice(0, 10).map(p => {
       const taskTotal = (p.openTasks || 0) + (p.completedTasks || 0);
       const progressBadge = taskTotal > 0 ? `
-        <span class="task-badge" style="background-color: rgba(255,255,255,0.06); font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px; color: var(--text-secondary);">
-          ${p.completedTasks}/${taskTotal} Done
-        </span>
+        <span class="task-badge landing-badge">${p.completedTasks}/${taskTotal} Done</span>
       ` : '';
       return `
         <div class="landing-page-item" onclick="openNote(${jsArg(p.fsPath)})">
@@ -2781,6 +2954,8 @@ function handlePaletteSearch() {
     { label: 'Manage Note Templates', subtitle: 'Action: /templates', action: () => showTemplatesModal() },
     { label: 'Open Mermaid Diagram Builder', subtitle: 'Action: /diagram', action: () => showMermaidBuilder() },
     { label: 'Toggle Sidebar (Notes Directory)', subtitle: 'Action: /sidebar', action: () => toggleSidebarCollapsed() },
+    { label: 'View Keyboard Shortcuts', subtitle: 'Action: /shortcuts', action: () => showShortcutsModal() },
+    { label: 'Export Current Note to PDF', subtitle: 'Action: /pdf', action: () => exportToPdf() },
   ];
 
   const matchingCommands = commands.filter(cmd => 
@@ -2818,9 +2993,9 @@ function handlePaletteSearch() {
             ? '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>' 
             : '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>'}
         </svg>
-        <span class="palette-item-label">${item.label}</span>
+        <span class="palette-item-label">${escapeHtml(item.label)}</span>
       </div>
-      <span class="palette-item-shortcut">${item.subtitle}</span>
+      <span class="palette-item-shortcut">${escapeHtml(item.subtitle)}</span>
     `;
     
     el.addEventListener('click', () => {
@@ -2957,11 +3132,14 @@ function hideMermaidBuilder() {
   document.getElementById('mermaid-builder-modal').classList.remove('active');
 }
 
+const BUILDER_TYPES = ['flowchart', 'sequence', 'pie', 'gantt', 'class', 'state', 'journey'];
+
 function switchBuilderType() {
   const type = document.getElementById('builder-type').value;
-  document.getElementById('builder-fields-flowchart').style.display = type === 'flowchart' ? 'block' : 'none';
-  document.getElementById('builder-fields-sequence').style.display = type === 'sequence' ? 'block' : 'none';
-  document.getElementById('builder-fields-pie').style.display = type === 'pie' ? 'block' : 'none';
+  BUILDER_TYPES.forEach(t => {
+    const group = document.getElementById(`builder-fields-${t}`);
+    if (group) group.style.display = t === type ? 'block' : 'none';
+  });
   updateBuilderCode();
 }
 
@@ -2977,6 +3155,21 @@ const BUILDER_EXAMPLES = {
     title: 'Time spent',
     data: 'Meetings: 4\nCoding: 6\nEmail: 2',
   },
+  gantt: {
+    title: 'Website Redesign',
+    start: '', // filled with today's date on load
+    tasks: 'Gather requirements: 3\nDesign mockups: 5\nBuild pages: 7\nLaunch review: 2',
+  },
+  class: {
+    classes: 'Animal: name, age, speak()\nDog: breed, fetch()\nCat: indoor, nap()',
+    relations: 'Animal <- Dog\nAnimal <- Cat',
+  },
+  state: 'Idle -> Running: start\nRunning -> Paused: pause\nPaused -> Running: resume\nRunning -> Idle: stop',
+  journey: {
+    title: 'Morning routine',
+    actor: 'Me',
+    tasks: 'Wake up: 3\nMake coffee: 5\nCheck email: 2\nStart deep work: 4',
+  },
 };
 
 function loadBuilderExample() {
@@ -2989,6 +3182,19 @@ function loadBuilderExample() {
   } else if (type === 'pie') {
     document.getElementById('builder-pie-title').value = BUILDER_EXAMPLES.pie.title;
     document.getElementById('builder-pie-data').value = BUILDER_EXAMPLES.pie.data;
+  } else if (type === 'gantt') {
+    document.getElementById('builder-gantt-title').value = BUILDER_EXAMPLES.gantt.title;
+    document.getElementById('builder-gantt-start').value = localToday();
+    document.getElementById('builder-gantt-tasks').value = BUILDER_EXAMPLES.gantt.tasks;
+  } else if (type === 'class') {
+    document.getElementById('builder-class-classes').value = BUILDER_EXAMPLES.class.classes;
+    document.getElementById('builder-class-relations').value = BUILDER_EXAMPLES.class.relations;
+  } else if (type === 'state') {
+    document.getElementById('builder-state-transitions').value = BUILDER_EXAMPLES.state;
+  } else if (type === 'journey') {
+    document.getElementById('builder-journey-title').value = BUILDER_EXAMPLES.journey.title;
+    document.getElementById('builder-journey-actor').value = BUILDER_EXAMPLES.journey.actor;
+    document.getElementById('builder-journey-tasks').value = BUILDER_EXAMPLES.journey.tasks;
   }
   updateBuilderCode();
 }
@@ -3058,6 +3264,101 @@ function generateBuilderCode() {
       }
     });
     return lines.length > 1 ? lines.join('\n') : '';
+  }
+
+  if (type === 'gantt') {
+    const title = document.getElementById('builder-gantt-title').value.trim();
+    const start = document.getElementById('builder-gantt-start').value || localToday();
+    const rows = document.getElementById('builder-gantt-tasks').value
+      .split('\n').map(s => s.trim()).filter(s => s);
+    if (rows.length === 0) return '';
+
+    const lines = ['gantt'];
+    if (title) lines.push(`    title ${title}`);
+    lines.push('    dateFormat YYYY-MM-DD', '    section Tasks');
+    let prevId = '';
+    rows.forEach((row, i) => {
+      const m = row.match(/^(.+?)\s*[:=]\s*(\d+)\s*d?\s*$/);
+      if (!m) return;
+      const id = `t${i + 1}`;
+      const when = prevId ? `after ${prevId}` : start;
+      lines.push(`    ${m[1].trim()} :${id}, ${when}, ${m[2]}d`);
+      prevId = id;
+    });
+    return lines.length > 3 ? lines.join('\n') : '';
+  }
+
+  if (type === 'class') {
+    const classRows = document.getElementById('builder-class-classes').value
+      .split('\n').map(s => s.trim()).filter(s => s);
+    const relRows = document.getElementById('builder-class-relations').value
+      .split('\n').map(s => s.trim()).filter(s => s);
+    if (classRows.length === 0 && relRows.length === 0) return '';
+
+    const lines = ['classDiagram'];
+    classRows.forEach(row => {
+      const m = row.match(/^([A-Za-z_][\w]*)\s*(?::\s*(.*))?$/);
+      if (!m) return;
+      const name = m[1];
+      const members = (m[2] || '').split(',').map(s => s.trim()).filter(s => s);
+      if (members.length === 0) {
+        lines.push(`    class ${name}`);
+      } else {
+        lines.push(`    class ${name} {`);
+        members.forEach(member => lines.push(`        +${member}`));
+        lines.push('    }');
+      }
+    });
+    relRows.forEach(row => {
+      // "Parent <- Child" = inheritance, "A -> B" = association, "A - B" = link
+      let m = row.match(/^(\w+)\s*<-\s*(\w+)$/);
+      if (m) { lines.push(`    ${m[1]} <|-- ${m[2]}`); return; }
+      m = row.match(/^(\w+)\s*->\s*(\w+)$/);
+      if (m) { lines.push(`    ${m[1]} --> ${m[2]}`); return; }
+      m = row.match(/^(\w+)\s*-\s*(\w+)$/);
+      if (m) { lines.push(`    ${m[1]} -- ${m[2]}`); }
+    });
+    return lines.length > 1 ? lines.join('\n') : '';
+  }
+
+  if (type === 'state') {
+    const rows = document.getElementById('builder-state-transitions').value
+      .split('\n').map(s => s.trim()).filter(s => s);
+    if (rows.length === 0) return '';
+
+    const lines = ['stateDiagram-v2'];
+    let firstState = '';
+    rows.forEach(row => {
+      const m = row.match(/^(.+?)\s*->\s*(.+?)(?:\s*:\s*(.+))?$/);
+      if (!m) return;
+      const from = m[1].trim().replace(/\s+/g, '_');
+      const to = m[2].trim().replace(/\s+/g, '_');
+      if (!firstState) firstState = from;
+      lines.push(`    ${from} --> ${to}${m[3] ? `: ${m[3].trim()}` : ''}`);
+    });
+    if (firstState) {
+      lines.splice(1, 0, `    [*] --> ${firstState}`);
+    }
+    return lines.length > 1 ? lines.join('\n') : '';
+  }
+
+  if (type === 'journey') {
+    const title = document.getElementById('builder-journey-title').value.trim();
+    const actor = document.getElementById('builder-journey-actor').value.trim() || 'Me';
+    const rows = document.getElementById('builder-journey-tasks').value
+      .split('\n').map(s => s.trim()).filter(s => s);
+    if (rows.length === 0) return '';
+
+    const lines = ['journey'];
+    if (title) lines.push(`    title ${title}`);
+    lines.push('    section Steps');
+    rows.forEach(row => {
+      const m = row.match(/^(.+?)\s*[:=]\s*([1-5])\s*$/);
+      if (m) {
+        lines.push(`      ${m[1].trim()}: ${m[2]}: ${actor}`);
+      }
+    });
+    return lines.length > 2 ? lines.join('\n') : '';
   }
 
   return '';
