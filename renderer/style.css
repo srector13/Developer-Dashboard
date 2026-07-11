@@ -46,6 +46,9 @@
   --mark-bg: rgba(242, 201, 76, 0.15);
   --mark-border: rgba(242, 201, 76, 0.3);
 
+  --inset-bg: rgba(0, 0, 0, 0.2);        /* recessed control groups */
+  --overlay-bg: rgba(0, 0, 0, 0.7);      /* modal backdrop */
+
   /* Shared shape tokens */
   --radius-sm: 4px;
   --radius-md: 6px;
@@ -572,7 +575,7 @@ body.sidebar-collapsed #btn-expand-sidebar {
 
 .mode-toggles {
   display: flex;
-  background-color: rgba(0,0,0,0.2);
+  background-color: var(--inset-bg);
   padding: 3px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-color);
@@ -1314,7 +1317,7 @@ body.sidebar-collapsed #btn-expand-sidebar {
   left: 0;
   width: 100vw;
   height: 100vh;
-  background-color: rgba(0, 0, 0, 0.7);
+  background-color: var(--overlay-bg);
   z-index: 100;
   display: flex;
   justify-content: center;
@@ -1937,7 +1940,7 @@ body.sidebar-collapsed #btn-expand-sidebar {
   font-weight: 600;
   color: var(--text-secondary);
   border-bottom: 1px solid var(--border-color);
-  background-color: rgba(0, 0, 0, 0.15);
+  background-color: var(--inset-bg);
 }
 
 .table-grid {
@@ -2155,7 +2158,7 @@ body.sidebar-collapsed #btn-expand-sidebar {
 
 .palette-footer {
   padding: 8px 18px;
-  background-color: rgba(0, 0, 0, 0.2);
+  background-color: var(--inset-bg);
   border-top: 1px solid var(--border-color);
   font-size: 10px;
   color: var(--text-muted);
@@ -2426,6 +2429,9 @@ body.light-theme {
   --glass-border: rgba(27, 31, 36, 0.08);
 
   /* Semantic token overrides — keep in sync with the :root list */
+  --glass-bg: rgba(255, 255, 255, 0.92);
+  --inset-bg: rgba(27, 31, 36, 0.07);
+  --overlay-bg: rgba(27, 31, 36, 0.4);
   --text-heading: #1f2328;
   --text-strong: #24292f;
   --text-inverse: #ffffff;
@@ -2510,8 +2516,10 @@ body[data-theme="sepia"] {
   --accent-green: #4a7c43;
   --accent-red: #b3382c;
   --accent-glow: rgba(154, 91, 36, 0.15);
-  --glass-bg: rgba(243, 234, 213, 0.7);
+  --glass-bg: rgba(246, 239, 222, 0.95);
   --glass-border: rgba(92, 75, 55, 0.12);
+  --inset-bg: rgba(92, 75, 55, 0.1);
+  --overlay-bg: rgba(60, 48, 32, 0.45);
   --text-heading: #2f2618;
   --text-strong: #3a2f1f;
   --text-inverse: #faf6ea;
