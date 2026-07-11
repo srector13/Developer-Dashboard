@@ -1,0 +1,770 @@
+// Renderer smoke test v2: loads renderer/index.html in plain Chromium with a
+// stubbed window.api (normally provided by the Electron preload script) and
+// exercises the current UI feature set end-to-end, including the new theme
+// system, PDF export modal, 7-type diagram builder, platform shortcuts,
+// shortcuts modal, editor combos, taskLines landing pages, backlinks and
+// palette HTML escaping.
+//
+// Usage:  SMOKE_PLATFORM=darwin node smoke-v2.mjs   (or win32; darwin default)
+import { createRequire } from 'module';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const require = createRequire(path.join(ROOT, 'package.json'));
+const { chromium } = require('@playwright/test');
+
+const PLATFORM = process.env.SMOKE_PLATFORM || process.argv[2] || 'darwin';
+const IS_MAC = PLATFORM === 'darwin';
+// Modifier the APP expects (driven by the stubbed window.api.platform)
+const MOD = IS_MAC ? 'Meta' : 'Control';
+
+const results = [];
+let failed = 0;
+
+function check(name, cond, extra = '') {
+  results.push(`${cond ? 'PASS' : 'FAIL'}  ${name}${extra ? ' — ' + extra : ''}`);
+  if (!cond) failed++;
+}
+
+const NOTE_MD = [
+  '---',
+  'title: Smoke Note',
+  'created: 2026-07-10',
+  'tags: [test]',
+  '---',
+  '',
+  '# Smoke Note',
+  '',
+  'Hello world content.',
+  '',
+  '- first bullet',
+  '',
+  '```mermaid',
+  'flowchart TD',
+  '    A[Start] --> B[End]',
+  '```',
+  '',
+].join('\n');
+
+const XSS_TITLE = '<img src=x onerror=window.__xss=1>';
+
+let browser;
+try {
+browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+
+page.on('pageerror', (err) => {
+  results.push(`PAGEERROR: ${err.message}`);
+  failed++;
+});
+page.on('console', (msg) => {
+  if (msg.type() === 'error') results.push(`CONSOLE-ERROR: ${msg.text()}`);
+});
+
+await page.addInitScript(({ noteMd, platform, xssTitle }) => {
+  const tree = {
+    kind: 'section', name: 'Root', fsPath: '/nb', relPath: '',
+    pages: [{
+      kind: 'page', name: 'smoke.md', fsPath: '/nb/smoke.md', relPath: 'smoke.md',
+      title: 'Smoke Note', created: '2026-07-10', tags: ['test'], pinned: false,
+      openTasks: 0, completedTasks: 0, taskLines: [],
+    }, {
+      kind: 'page', name: 'xss.md', fsPath: '/nb/xss.md', relPath: 'xss.md',
+      title: xssTitle, created: '2026-07-01', tags: [], pinned: false,
+      openTasks: 0, completedTasks: 0, taskLines: [],
+    }],
+    sections: [{
+      kind: 'section', name: 'Projects', fsPath: '/nb/Projects', relPath: 'Projects',
+      pages: [{
+        kind: 'page', name: 'alpha.md', fsPath: '/nb/Projects/alpha.md', relPath: 'Projects/alpha.md',
+        title: 'A Very Long Page Title That Should Truncate Nicely In The Sidebar', created: '2026-07-02',
+        tags: [], pinned: false, openTasks: 1, completedTasks: 1,
+        taskLines: [{ text: 'task', line: 2 }],
+      }],
+      sections: [],
+    }],
+  };
+
+  const files = {
+    '/nb/smoke.md': noteMd,
+    '/nb/Projects/alpha.md': '# Alpha\n\n- [ ] task\n- [x] done\n',
+    '/nb/xss.md': '# x\n',
+  };
+
+  // Instrumentation the test reads back
+  window.__treeCalls = 0;
+  window.__writes = [];
+  // Mutator to simulate a change picked up by the main-process watcher
+  window.__addTreePage = () => {
+    tree.pages.push({
+      kind: 'page', name: 'fresh.md', fsPath: '/nb/fresh.md', relPath: 'fresh.md',
+      title: 'Fresh Note', created: '2026-07-11', tags: [], pinned: false,
+      openTasks: 0, completedTasks: 0, taskLines: [],
+    });
+    files['/nb/fresh.md'] = '# Fresh Note\n';
+  };
+
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  // Minimal markdown renderer good enough for the smoke test: paragraphs +
+  // mermaid fences rendered with the same markup the preload produces.
+  function renderMarkdown(text) {
+    let body = text;
+    const fm = body.match(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/);
+    if (fm) body = body.slice(fm[0].length);
+    body = body.replace(/^([ \t]*\r?\n)*#[ \t]+.+(\r?\n|$)/, '');
+    let html = '';
+    const fenceRe = /```mermaid\n([\s\S]*?)```/g;
+    let last = 0, m;
+    while ((m = fenceRe.exec(body)) !== null) {
+      html += `<p>${esc(body.slice(last, m.index))}</p>`;
+      html += `<div class="mermaid-block-container" data-line="0">
+        <div class="mermaid-actions-bar">
+          <button class="mermaid-action-btn" onclick="zoomMermaid(this, -15)">-</button>
+          <button class="mermaid-action-btn" onclick="zoomMermaid(this, 15)">+</button>
+          <button class="mermaid-action-btn popout-btn" onclick="popoutMermaid(this)">pop</button>
+        </div>
+        <pre class="notebook-mermaid" data-line="0">${esc(m[1])}</pre>
+      </div>`;
+      last = m.index + m[0].length;
+    }
+    html += `<p>${esc(body.slice(last))}</p>`;
+    return html;
+  }
+
+  window.api = {
+    platform,
+    getSettings: async () => ({
+      notebookRoot: '/nb', defaultPageWidth: 'standard', defaultMermaidZoom: 100,
+      theme: 'dark', ignoreFolders: ['templates'], templatesFolder: 'templates',
+      author: '', scratchpadFile: 'scratchpad.md', autoSaveEnabled: false,
+      pandocPath: '',
+      pdfExport: { theme: 'light', pageSize: 'A4', openAfter: true, reveal: false },
+    }),
+    saveSettings: async (s) => s,
+    getNotebookTree: async () => { window.__treeCalls++; return JSON.parse(JSON.stringify(tree)); },
+    readNote: async (p) => files[p] || '',
+    writeNote: async (p, c) => { files[p] = c; window.__writes.push(p); return true; },
+    createPage: async () => '/nb/new.md',
+    createSection: async () => '/nb/sec',
+    deleteNode: async () => true,
+    renameNode: async () => true,
+    relocateNode: async () => true,
+    moveNode: async () => true,
+    readScratchpad: async () => '',
+    appendScratchpad: async () => true,
+    listTemplates: async () => ([
+      { name: 'meeting-notes.md', fsPath: '/nb/templates/meeting-notes.md', title: 'Meeting Notes' },
+      { name: 'daily-log.md', fsPath: '/nb/templates/daily-log.md', title: 'Daily Log' },
+    ]),
+    createTemplate: async () => '/nb/templates/new-template.md',
+    updateNoteMeta: async (p, meta) => { window.__metaUpdate = { path: p, meta }; return true; },
+    importClipboard: async () => ({ success: false, reason: 'stub' }),
+    importDocument: async () => null,
+    // New shape: returns { success, pdfPath }
+    exportToPdf: async (fp, html, options) => {
+      window.__export = { fp, html, options };
+      return { success: true, pdfPath: '/tmp/x.pdf' };
+    },
+    getBacklinks: async (p) => {
+      window.__backlinksArg = p;
+      return ['/nb/Projects/alpha.md'];
+    },
+    onFilesChanged: (cb) => { window.__filesCb = cb; return () => {}; },
+    toggleTaskAtLine: async () => true,
+    toggleMermaidOrientation: () => {},
+    openExternal: async () => true,
+    resolveRelativePath: (base, rel) => rel,
+    renderMarkdown,
+  };
+}, { noteMd: NOTE_MD, platform: PLATFORM, xssTitle: XSS_TITLE });
+
+await page.goto('file://' + path.join(ROOT, 'renderer', 'index.html'));
+await page.waitForTimeout(600);
+
+// --- 1. Boot: onboarding hidden, tree rendered, theme applied from settings ---
+check('boots past onboarding', !(await page.locator('#onboarding').evaluate(el => el.classList.contains('active'))));
+check('tree renders pages', await page.locator('#notebook-tree .tree-node-label', { hasText: 'Smoke Note' }).count() === 1);
+check('boot applies settings.theme=dark', await page.evaluate(() =>
+  document.body.classList.contains('dark-theme') && document.body.dataset.theme === 'dark'));
+check('boot: hljs dark sheet enabled, light disabled', await page.evaluate(() =>
+  document.getElementById('hljs-dark').disabled === false && document.getElementById('hljs-light').disabled === true));
+check('XSS tree title did not execute at boot', await page.evaluate(() => window.__xss === undefined));
+check('XSS tree title renders literally in sidebar', await page.evaluate(() => {
+  const labels = Array.from(document.querySelectorAll('#notebook-tree .tree-node-label'));
+  return labels.some(l => l.textContent === '<img src=x onerror=window.__xss=1>') &&
+    document.querySelectorAll('#notebook-tree img').length === 0;
+}));
+
+// --- 2. Sidebar collapse / expand ---
+await page.locator('[data-tooltip="Collapse Sidebar"]').click();
+check('sidebar collapses', await page.evaluate(() => document.getElementById('sidebar').classList.contains('collapsed') && document.body.classList.contains('sidebar-collapsed')));
+check('sidebar width 0 when collapsed', await page.evaluate(() => document.getElementById('sidebar').getBoundingClientRect().width === 0));
+const expandVisible = await page.locator('#btn-expand-sidebar').isVisible();
+check('expand button appears in toolbar', expandVisible);
+await page.locator('#btn-expand-sidebar').click();
+check('sidebar restores', await page.evaluate(() => !document.getElementById('sidebar').classList.contains('collapsed')));
+check('collapse state persisted key', await page.evaluate(() => localStorage.getItem('sidebarCollapsed') === '0'));
+
+// --- 2b. Theme system: named themes, class preservation, hljs swap, quick toggle ---
+await page.evaluate(() => { setSidebarCollapsed(true); applyTheme('midnight'); });
+check('midnight theme uses dark base + data-theme', await page.evaluate(() =>
+  document.body.classList.contains('dark-theme') && !document.body.classList.contains('light-theme') &&
+  document.body.dataset.theme === 'midnight'));
+check('applyTheme preserves other body classes', await page.evaluate(() =>
+  document.body.classList.contains('sidebar-collapsed')));
+await page.evaluate(() => applyTheme('sepia'));
+check('sepia theme uses light base + data-theme', await page.evaluate(() =>
+  document.body.classList.contains('light-theme') && !document.body.classList.contains('dark-theme') &&
+  document.body.dataset.theme === 'sepia'));
+check('sepia enables hljs light sheet', await page.evaluate(() =>
+  document.getElementById('hljs-light').disabled === false && document.getElementById('hljs-dark').disabled === true));
+await page.evaluate(() => applyTheme('forest'));
+check('forest theme uses dark base', await page.evaluate(() =>
+  document.body.classList.contains('dark-theme') && document.body.dataset.theme === 'forest'));
+await page.evaluate(() => applyTheme('system'));
+check('system theme resolves to light or dark', await page.evaluate(() =>
+  ['light', 'dark'].includes(document.body.dataset.theme) &&
+  (document.body.classList.contains('light-theme') || document.body.classList.contains('dark-theme'))));
+// Quick toggle flips the light/dark base
+await page.evaluate(() => applyTheme('light'));
+await page.evaluate(() => toggleGlobalTheme());
+check('toggleGlobalTheme flips light -> dark', await page.evaluate(() =>
+  document.body.dataset.theme === 'dark' && document.body.classList.contains('dark-theme')));
+await page.evaluate(() => toggleGlobalTheme());
+check('toggleGlobalTheme flips dark -> light', await page.evaluate(() =>
+  document.body.dataset.theme === 'light' && document.body.classList.contains('light-theme')));
+check('toggleGlobalTheme syncs settings select', await page.evaluate(() =>
+  document.getElementById('settings-theme').value === 'light'));
+// restore state for the rest of the suite
+await page.evaluate(() => { applyTheme('dark'); setSidebarCollapsed(false); });
+
+// --- 3. Sidebar drag resize ---
+const before = await page.evaluate(() => document.getElementById('sidebar').getBoundingClientRect().width);
+const rz = await page.locator('#sidebar-resizer').boundingBox();
+await page.mouse.move(rz.x + 2, rz.y + 300);
+await page.mouse.down();
+await page.mouse.move(rz.x + 102, rz.y + 300, { steps: 5 });
+await page.mouse.up();
+const after = await page.evaluate(() => document.getElementById('sidebar').getBoundingClientRect().width);
+check('sidebar drag-resize grows width', after > before + 80, `before=${before} after=${after}`);
+check('sidebar width persisted', await page.evaluate(() => !!localStorage.getItem('panelWidth:sidebar')));
+
+// --- 4. Open note, check preview + mermaid rendered ---
+await page.locator('#notebook-tree .tree-node-label', { hasText: 'Smoke Note' }).click();
+await page.waitForTimeout(800);
+check('note opens', await page.locator('#note-workspace').isVisible());
+check('mermaid svg rendered in preview', await page.locator('#preview-pane .notebook-mermaid svg').count() === 1);
+check('mermaid svg stretched (maxWidth 100%)', await page.evaluate(() => {
+  const svg = document.querySelector('#preview-pane .notebook-mermaid svg');
+  return svg && svg.style.maxWidth === '100%';
+}));
+check('word count shows', /\d+ words/.test(await page.locator('#note-meta-words').innerText()));
+
+// --- 5. Tree actions are in-flow (no overlap) ---
+const treeNode = page.locator('#notebook-tree .tree-node').filter({ hasText: 'A Very Long Page Title' }).first();
+await page.locator('#notebook-tree .tree-node-label', { hasText: 'Projects' }).click();
+await treeNode.hover();
+check('tree actions position static (in flow)', await treeNode.evaluate(el => {
+  const actions = el.querySelector('.tree-node-actions');
+  return actions && getComputedStyle(actions).position === 'static' && getComputedStyle(actions).display === 'flex';
+}));
+check('label does not overlap actions', await treeNode.evaluate(el => {
+  const label = el.querySelector('.tree-node-label').getBoundingClientRect();
+  const actions = el.querySelector('.tree-node-actions').getBoundingClientRect();
+  return label.right <= actions.left + 1;
+}));
+
+// --- 6. Editor Tab / Enter behavior ---
+// (step 5 opened a section landing page, which hides the mode toggles)
+await page.locator('#notebook-tree .tree-node-label', { hasText: 'Smoke Note' }).click();
+await page.waitForTimeout(500);
+await page.locator('#btn-mode-edit').click();
+const editor = page.locator('#note-editor');
+await editor.evaluate((ta) => { ta.focus(); ta.value = '- first bullet'; ta.selectionStart = ta.selectionEnd = ta.value.length; window.handleEditorInput(); });
+await editor.press('Tab');
+let val = await editor.inputValue();
+check('Tab indents list line', val === '  - first bullet', JSON.stringify(val));
+check('Tab stays in editor', await page.evaluate(() => document.activeElement && document.activeElement.id === 'note-editor'));
+await editor.press('Enter');
+val = await editor.inputValue();
+check('Enter continues indented bullet', val === '  - first bullet\n  - ', JSON.stringify(val));
+await editor.press('Enter'); // empty item -> ends list
+val = await editor.inputValue();
+check('Enter on empty item ends list', val === '  - first bullet\n', JSON.stringify(val));
+await editor.evaluate((ta) => { ta.value = '1. one'; ta.selectionStart = ta.selectionEnd = ta.value.length; window.handleEditorInput(); });
+await editor.press('Enter');
+val = await editor.inputValue();
+check('Enter increments ordered list', val === '1. one\n2. ', JSON.stringify(val));
+await editor.evaluate((ta) => { ta.value = '- [ ] task'; ta.selectionStart = ta.selectionEnd = ta.value.length; window.handleEditorInput(); });
+await editor.press('Enter');
+val = await editor.inputValue();
+check('Enter continues checkbox item', val === '- [ ] task\n- [ ] ', JSON.stringify(val));
+await editor.press('Shift+Tab'); // outdent (no leading indent -> no-op)
+check('Shift+Tab does not throw', true);
+
+// --- 6b. Enter scrolls the caret into view + undo works ---
+const longDoc = Array.from({ length: 200 }, (_, i) => `- line ${i}`).join('\n');
+await editor.evaluate((ta, doc) => {
+  ta.value = doc;
+  ta.selectionStart = ta.selectionEnd = doc.length;
+  ta.scrollTop = 0; // deliberately scrolled to the top, caret at the bottom
+  window.handleEditorInput();
+}, longDoc);
+await editor.press('Enter');
+check('Enter scrolls caret into view', await editor.evaluate(ta => {
+  const lineHeight = parseFloat(getComputedStyle(ta).lineHeight) || 21;
+  const caretY = (ta.value.slice(0, ta.selectionEnd).split('\n').length - 1) * lineHeight;
+  return caretY >= ta.scrollTop && caretY <= ta.scrollTop + ta.clientHeight;
+}), `scrollTop=${await editor.evaluate(ta => ta.scrollTop)}`);
+val = await editor.inputValue();
+check('Enter continued list at bottom', val.endsWith('- line 199\n- '), JSON.stringify(val.slice(-20)));
+// Native undo: driven by the real browser platform, not the stubbed one
+await editor.press('ControlOrMeta+z');
+val = await editor.inputValue();
+check('undo reverts list continuation', val.endsWith('- line 199'), JSON.stringify(val.slice(-14)));
+
+// --- 6c. View mode keyboard shortcuts (uses the STUB platform's modifier) ---
+await page.keyboard.press(`${MOD}+1`);
+check('Mod+1 switches to preview', await page.evaluate(() => document.getElementById('editor-preview-container').className.includes('preview-mode')));
+await page.keyboard.press(`${MOD}+3`);
+check('Mod+3 switches to split', await page.evaluate(() => document.getElementById('editor-preview-container').className.includes('split-mode')));
+await page.keyboard.press(`${MOD}+2`);
+check('Mod+2 switches to edit', await page.evaluate(() => document.getElementById('editor-preview-container').className.includes('edit-mode')));
+
+// --- 6d. Page Info modal ---
+await page.evaluate(() => window.showPageInfoModal('/nb/smoke.md'));
+await page.waitForTimeout(300);
+check('page info modal opens', await page.evaluate(() => document.getElementById('page-info-modal').classList.contains('active')));
+check('page info prefilled', await page.evaluate(() =>
+  document.getElementById('page-info-title').value === 'Smoke Note' &&
+  document.getElementById('page-info-date').value === '2026-07-10' &&
+  document.getElementById('page-info-tags').value === 'test'));
+await page.locator('#page-info-tags').fill('test, updated');
+await page.locator('#page-info-pinned').check();
+await page.locator('#page-info-modal .btn-primary').click();
+await page.waitForTimeout(400);
+const metaUpdate = await page.evaluate(() => window.__metaUpdate);
+check('page info saves meta via IPC', !!metaUpdate && metaUpdate.path === '/nb/smoke.md' &&
+  JSON.stringify(metaUpdate.meta.tags) === '["test","updated"]' && metaUpdate.meta.pinned === true,
+  JSON.stringify(metaUpdate));
+check('page info modal closed after save', !(await page.evaluate(() => document.getElementById('page-info-modal').classList.contains('active'))));
+
+// --- 6e. New editor combos: Mod+Alt+L / Mod+Alt+C / Mod+Alt+X / Mod+Alt+Minus ---
+await page.locator('#btn-mode-edit').click();
+await editor.evaluate((ta) => { ta.focus(); ta.value = 'hello'; ta.selectionStart = ta.selectionEnd = ta.value.length; window.handleEditorInput(); });
+await editor.press(`${MOD}+Alt+KeyL`);
+val = await editor.inputValue();
+check('Mod+Alt+L inserts bullet item', val === 'hello\n- ', JSON.stringify(val));
+await editor.press(`${MOD}+Alt+KeyC`);
+val = await editor.inputValue();
+check('Mod+Alt+C inserts checklist item', val === 'hello\n- \n- [ ] ', JSON.stringify(val));
+await editor.press(`${MOD}+Alt+KeyX`);
+val = await editor.inputValue();
+check('Mod+Alt+X also inserts checklist item', val === 'hello\n- \n- [ ] \n- [ ] ', JSON.stringify(val));
+await editor.evaluate((ta) => { ta.value = 'x'; ta.selectionStart = ta.selectionEnd = 1; window.handleEditorInput(); });
+await editor.press(`${MOD}+Alt+Minus`);
+val = await editor.inputValue();
+check('Mod+Alt+Minus inserts separator', val === 'x\n---\n', JSON.stringify(val));
+
+// --- 7. Mermaid popout ---
+// restore the original note content (editor tests overwrote it)
+await editor.evaluate((ta, md) => { ta.value = md; ta.selectionStart = ta.selectionEnd = 0; window.handleEditorInput(); }, NOTE_MD);
+await page.locator('#btn-mode-preview').click();
+await page.waitForTimeout(700);
+await page.locator('.mermaid-block-container').hover();
+await page.locator('.popout-btn').click();
+await page.waitForTimeout(700);
+check('popout overlay opens', await page.evaluate(() => document.getElementById('mermaid-popout-overlay').classList.contains('active')));
+check('popout re-rendered svg present', await page.locator('#mermaid-popout-body .popout-canvas svg').count() === 1);
+const zoomBefore = await page.locator('#label-popout-zoom').innerText();
+await page.locator('[data-tooltip="Scale Visuals Up"]').click();
+const zoomAfter = await page.locator('#label-popout-zoom').innerText();
+check('popout zoom changes label', zoomBefore !== zoomAfter, `${zoomBefore} -> ${zoomAfter}`);
+check('popout zoom sets pixel width', await page.evaluate(() => {
+  const svg = document.querySelector('#mermaid-popout-body svg');
+  return svg && /px$/.test(svg.style.width);
+}));
+await page.keyboard.press('Escape');
+check('Escape closes popout', !(await page.evaluate(() => document.getElementById('mermaid-popout-overlay').classList.contains('active'))));
+
+// --- 7b. Inline mermaid zoom (pixel-width based) ---
+const inlineWidthBefore = await page.evaluate(() => document.querySelector('#preview-pane .notebook-mermaid svg').getBoundingClientRect().width);
+await page.locator('.mermaid-block-container').hover();
+await page.locator('.mermaid-actions-bar button').nth(1).click(); // zoom in
+const inlineState = await page.evaluate(() => {
+  const pre = document.querySelector('#preview-pane .notebook-mermaid');
+  const svg = pre.querySelector('svg');
+  return { zoom: pre.dataset.zoomLevel, width: svg.getBoundingClientRect().width, styleWidth: svg.style.width };
+});
+check('inline zoom-in grows the diagram', inlineState.zoom === '115' && /px$/.test(inlineState.styleWidth) && inlineState.width > inlineWidthBefore,
+  `before=${inlineWidthBefore} after=${JSON.stringify(inlineState)}`);
+await page.locator('.mermaid-actions-bar button').nth(0).click(); // back to 100
+check('inline zoom back to 100% restores stretch', await page.evaluate(() => {
+  const pre = document.querySelector('#preview-pane .notebook-mermaid');
+  return pre.dataset.zoomLevel === '100' && pre.querySelector('svg').style.width === '100%';
+}));
+
+// --- 8. Preview zoom label ---
+await page.locator('[data-tooltip="Zoom In Preview"]').click();
+check('preview zoom label updates', (await page.locator('#label-preview-zoom').innerText()) === '110%');
+
+// --- 9. Templates modal ---
+await page.locator('.sidebar-footer .btn').click();
+await page.waitForTimeout(300);
+check('templates modal opens', await page.evaluate(() => document.getElementById('templates-modal').classList.contains('active')));
+check('templates listed', await page.locator('#templates-list .template-item').count() === 2);
+await page.locator('#templates-modal .btn-primary').click(); // New Template
+check('create modal opens in template mode', await page.evaluate(() =>
+  document.getElementById('create-modal').classList.contains('active') &&
+  document.getElementById('create-modal-type').value === 'template'));
+await page.keyboard.press('Escape');
+check('Escape closes create modal', !(await page.evaluate(() => document.getElementById('create-modal').classList.contains('active'))));
+
+// --- 10. Diagram builder (all 7 types) ---
+await page.locator('#btn-mode-edit').click();
+await page.evaluate(() => window.showMermaidBuilder());
+await page.waitForTimeout(200);
+check('builder modal opens', await page.evaluate(() => document.getElementById('mermaid-builder-modal').classList.contains('active')));
+// See Example button fills the form for the current type
+await page.locator('.builder-form .btn-xs').click();
+await page.waitForTimeout(500);
+check('See Example fills the form', (await page.locator('#builder-flow-steps').inputValue()).includes('Receive request'));
+check('See Example generates preview code', (await page.locator('#builder-code').inputValue()).includes('flowchart TD'));
+await page.locator('#builder-flow-steps').fill('Receive request\nValid input?\nProcess order');
+await page.waitForTimeout(600);
+const code = await page.locator('#builder-code').inputValue();
+check('builder generates flowchart code', code.includes('flowchart TD') && code.includes('B{"Valid input?"}') && code.includes('A --> B'), code.replace(/\n/g, '¶'));
+check('builder live preview renders svg', await page.locator('#builder-preview svg').count() === 1);
+// sequence type
+await page.locator('#builder-type').selectOption('sequence');
+check('switchBuilderType shows sequence fields', await page.evaluate(() =>
+  document.getElementById('builder-fields-sequence').style.display === 'block' &&
+  document.getElementById('builder-fields-flowchart').style.display === 'none'));
+await page.locator('#builder-seq-messages').fill('Client -> Server: Login\nServer --> Client: OK');
+await page.waitForTimeout(600);
+const seqCode = await page.locator('#builder-code').inputValue();
+check('builder sequence code', seqCode.includes('sequenceDiagram') && seqCode.includes('Client->>Server: Login') && seqCode.includes('Server-->>Client: OK'), seqCode.replace(/\n/g, '¶'));
+// pie
+await page.locator('#builder-type').selectOption('pie');
+await page.locator('#builder-pie-title').fill('Time');
+await page.locator('#builder-pie-data').fill('Meetings: 4\nCoding: 6');
+await page.waitForTimeout(600);
+const pieCode = await page.locator('#builder-code').inputValue();
+check('builder pie code', pieCode.includes('pie title Time') && pieCode.includes('"Meetings" : 4'), pieCode.replace(/\n/g, '¶'));
+// insert (still edit mode)
+await editor.evaluate((ta) => { ta.value = 'start\n'; ta.selectionStart = ta.selectionEnd = ta.value.length; window.handleEditorInput(); });
+await page.locator('#mermaid-builder-modal .btn-primary').click();
+await page.waitForTimeout(400);
+val = await editor.inputValue();
+check('builder inserts fenced block', val.includes('```mermaid\npie title Time'), JSON.stringify(val).slice(0, 120));
+check('builder keeps edit mode after insert', await page.evaluate(() => document.getElementById('editor-preview-container').className.includes('edit-mode')));
+
+// --- 10b. New builder types: gantt, class, state, journey ---
+await page.evaluate(() => window.showMermaidBuilder());
+await page.waitForTimeout(200);
+
+// gantt via example
+await page.locator('#builder-type').selectOption('gantt');
+check('switchBuilderType shows gantt fields', await page.evaluate(() =>
+  document.getElementById('builder-fields-gantt').style.display === 'block' &&
+  document.getElementById('builder-fields-pie').style.display === 'none'));
+await page.evaluate(() => window.loadBuilderExample());
+await page.waitForTimeout(700);
+check('gantt example fills fields', await page.evaluate(() =>
+  document.getElementById('builder-gantt-title').value === 'Website Redesign' &&
+  /^\d{4}-\d{2}-\d{2}$/.test(document.getElementById('builder-gantt-start').value) &&
+  document.getElementById('builder-gantt-tasks').value.includes('Gather requirements')));
+const ganttCode = await page.locator('#builder-code').inputValue();
+check('gantt code has title/dateFormat/chained tasks',
+  ganttCode.startsWith('gantt') && ganttCode.includes('title Website Redesign') &&
+  ganttCode.includes('dateFormat YYYY-MM-DD') && ganttCode.includes('section Tasks') &&
+  /Gather requirements :t1, \d{4}-\d{2}-\d{2}, 3d/.test(ganttCode) &&
+  ganttCode.includes('Design mockups :t2, after t1, 5d'),
+  ganttCode.replace(/\n/g, '¶'));
+check('gantt preview renders svg', await page.locator('#builder-preview svg').count() === 1 &&
+  await page.evaluate(() => document.getElementById('builder-error').style.display === 'none'));
+// gantt custom input
+await page.locator('#builder-gantt-title').fill('T');
+await page.locator('#builder-gantt-start').fill('2026-07-01');
+await page.locator('#builder-gantt-tasks').fill('A: 3\nB: 2');
+await page.waitForTimeout(700);
+const ganttCustom = await page.locator('#builder-code').inputValue();
+check('gantt custom tasks chain correctly',
+  ganttCustom.includes('A :t1, 2026-07-01, 3d') && ganttCustom.includes('B :t2, after t1, 2d'),
+  ganttCustom.replace(/\n/g, '¶'));
+check('gantt custom preview renders svg', await page.locator('#builder-preview svg').count() === 1);
+
+// class via example
+await page.locator('#builder-type').selectOption('class');
+check('switchBuilderType shows class fields', await page.evaluate(() =>
+  document.getElementById('builder-fields-class').style.display === 'block'));
+await page.evaluate(() => window.loadBuilderExample());
+await page.waitForTimeout(700);
+check('class example fills fields', await page.evaluate(() =>
+  document.getElementById('builder-class-classes').value.includes('Animal') &&
+  document.getElementById('builder-class-relations').value.includes('Animal <- Dog')));
+const classCode = await page.locator('#builder-code').inputValue();
+check('class code has class blocks + inheritance',
+  classCode.startsWith('classDiagram') && classCode.includes('class Animal {') &&
+  classCode.includes('+name') && classCode.includes('+speak()') &&
+  classCode.includes('Animal <|-- Dog') && classCode.includes('Animal <|-- Cat'),
+  classCode.replace(/\n/g, '¶'));
+check('class preview renders svg', await page.locator('#builder-preview svg').count() === 1 &&
+  await page.evaluate(() => document.getElementById('builder-error').style.display === 'none'));
+// class relation variants
+await page.locator('#builder-class-relations').fill('Animal <- Dog\nOwner -> Dog\nDog - Leash');
+await page.waitForTimeout(700);
+const classCode2 = await page.locator('#builder-code').inputValue();
+check('class relation arrows map correctly',
+  classCode2.includes('Animal <|-- Dog') && classCode2.includes('Owner --> Dog') && classCode2.includes('Dog -- Leash'),
+  classCode2.replace(/\n/g, '¶'));
+
+// state via example
+await page.locator('#builder-type').selectOption('state');
+check('switchBuilderType shows state fields', await page.evaluate(() =>
+  document.getElementById('builder-fields-state').style.display === 'block'));
+await page.evaluate(() => window.loadBuilderExample());
+await page.waitForTimeout(700);
+check('state example fills fields', await page.evaluate(() =>
+  document.getElementById('builder-state-transitions').value.includes('Idle -> Running: start')));
+const stateCode = await page.locator('#builder-code').inputValue();
+check('state code has start marker + transitions',
+  stateCode.startsWith('stateDiagram-v2') && stateCode.includes('[*] --> Idle') &&
+  stateCode.includes('Idle --> Running: start') && stateCode.includes('Paused --> Running: resume'),
+  stateCode.replace(/\n/g, '¶'));
+check('state preview renders svg', await page.locator('#builder-preview svg').count() === 1 &&
+  await page.evaluate(() => document.getElementById('builder-error').style.display === 'none'));
+
+// journey via example
+await page.locator('#builder-type').selectOption('journey');
+check('switchBuilderType shows journey fields', await page.evaluate(() =>
+  document.getElementById('builder-fields-journey').style.display === 'block'));
+await page.evaluate(() => window.loadBuilderExample());
+await page.waitForTimeout(700);
+check('journey example fills fields', await page.evaluate(() =>
+  document.getElementById('builder-journey-title').value === 'Morning routine' &&
+  document.getElementById('builder-journey-actor').value === 'Me' &&
+  document.getElementById('builder-journey-tasks').value.includes('Wake up: 3')));
+const journeyCode = await page.locator('#builder-code').inputValue();
+check('journey code has title/section/scored steps',
+  journeyCode.startsWith('journey') && journeyCode.includes('title Morning routine') &&
+  journeyCode.includes('section Steps') && journeyCode.includes('Wake up: 3: Me') &&
+  journeyCode.includes('Make coffee: 5: Me'),
+  journeyCode.replace(/\n/g, '¶'));
+check('journey preview renders svg', await page.locator('#builder-preview svg').count() === 1 &&
+  await page.evaluate(() => document.getElementById('builder-error').style.display === 'none'));
+
+// See Example works for the original 3 types too
+await page.locator('#builder-type').selectOption('sequence');
+await page.evaluate(() => window.loadBuilderExample());
+check('sequence example fills field', (await page.locator('#builder-seq-messages').inputValue()).includes('Client -> Server'));
+await page.locator('#builder-type').selectOption('pie');
+await page.evaluate(() => window.loadBuilderExample());
+check('pie example fills fields', await page.evaluate(() =>
+  document.getElementById('builder-pie-title').value === 'Time spent' &&
+  document.getElementById('builder-pie-data').value.includes('Meetings: 4')));
+await page.evaluate(() => window.hideMermaidBuilder());
+
+// --- 11. PDF export: modal flow, sanitization, toast, option persistence ---
+await page.locator('#btn-mode-preview').click();
+await page.waitForTimeout(800);
+await page.evaluate(() => window.exportToPdf());
+await page.waitForTimeout(200);
+check('exportToPdf opens options modal', await page.evaluate(() =>
+  document.getElementById('pdf-export-modal').classList.contains('active')));
+check('pdf modal prefilled from settings.pdfExport', await page.evaluate(() =>
+  document.getElementById('pdf-theme').value === 'light' &&
+  document.getElementById('pdf-page-size').value === 'A4' &&
+  document.getElementById('pdf-open-after').checked === true &&
+  document.getElementById('pdf-reveal').checked === false));
+await page.locator('#pdf-theme').selectOption('dark');
+await page.locator('#pdf-page-size').selectOption('Letter');
+await page.locator('#pdf-reveal').check();
+await page.locator('#pdf-export-modal .btn-primary').click();
+await page.waitForTimeout(400);
+check('pdf modal closes on confirm', !(await page.evaluate(() => document.getElementById('pdf-export-modal').classList.contains('active'))));
+const exportCall = await page.evaluate(() => window.__export || null);
+check('confirmPdfExport passes chosen options', !!exportCall && exportCall.fp === '/nb/smoke.md' &&
+  exportCall.options && exportCall.options.theme === 'dark' && exportCall.options.pageSize === 'Letter' &&
+  exportCall.options.openAfter === true && exportCall.options.reveal === true,
+  JSON.stringify(exportCall && exportCall.options));
+check('export strips mermaid action bars', !!exportCall && exportCall.html.length > 0 && !exportCall.html.includes('mermaid-actions-bar'), `len=${exportCall && exportCall.html.length}`);
+check('export caps svg to natural width', !!exportCall && /max-width:\s*\d+px/.test(exportCall.html));
+check('toast shows exported pdf name', await page.evaluate(() => {
+  const t = document.getElementById('app-toast');
+  return !!t && t.classList.contains('visible') && !t.classList.contains('error') &&
+    t.textContent.includes('PDF exported') && t.textContent.includes('x.pdf');
+}));
+// options were remembered in appSettings.pdfExport: reopen and check prefill
+await page.evaluate(() => window.exportToPdf());
+await page.waitForTimeout(200);
+check('pdf modal remembers last-used options', await page.evaluate(() =>
+  document.getElementById('pdf-theme').value === 'dark' &&
+  document.getElementById('pdf-page-size').value === 'Letter' &&
+  document.getElementById('pdf-reveal').checked === true));
+await page.evaluate(() => window.hidePdfExportModal());
+
+// --- 12. Full width mode ---
+await page.locator('#btn-stretch-width').click(); // -> wide
+await page.locator('#btn-stretch-width').click(); // -> full
+await page.waitForTimeout(600);
+const widths = await page.evaluate(() => {
+  const pane = document.getElementById('preview-pane');
+  const container = document.getElementById('editor-preview-container');
+  return { pane: pane.getBoundingClientRect().width, container: container.getBoundingClientRect().width, cls: container.className };
+});
+check('full mode: pane fills container', Math.abs(widths.pane - widths.container) < 2, JSON.stringify(widths));
+
+// --- 13. Outline drawer: resizer + backlinks pills ---
+await page.locator('#btn-toggle-outline').click();
+check('drawer opens & resizer visible', await page.evaluate(() =>
+  !document.getElementById('right-drawer').classList.contains('collapsed') &&
+  document.getElementById('drawer-resizer').style.display === 'block'));
+await page.waitForTimeout(400);
+check('getBacklinks called with active note path', await page.evaluate(() => window.__backlinksArg === '/nb/smoke.md'));
+check('backlink pill renders in note meta', await page.evaluate(() => {
+  const list = document.getElementById('note-meta-backlinks');
+  const container = document.getElementById('note-meta-backlinks-container');
+  const pills = list ? list.querySelectorAll('.backlink-pill') : [];
+  return pills.length === 1 && container.style.display === 'flex' &&
+    pills[0].textContent.includes('A Very Long Page Title');
+}));
+const drz = await page.locator('#drawer-resizer').boundingBox();
+const dBefore = await page.evaluate(() => document.getElementById('right-drawer').getBoundingClientRect().width);
+await page.mouse.move(drz.x + 2, drz.y + 300);
+await page.mouse.down();
+await page.mouse.move(drz.x - 98, drz.y + 300, { steps: 5 });
+await page.mouse.up();
+const dAfter = await page.evaluate(() => document.getElementById('right-drawer').getBoundingClientRect().width);
+check('drawer drag-resize grows width', dAfter > dBefore + 80, `before=${dBefore} after=${dAfter}`);
+await page.locator('#btn-toggle-outline').click();
+check('drawer close hides resizer', await page.evaluate(() => document.getElementById('drawer-resizer').style.display === 'none'));
+
+// --- 14. Landing pages read tasks from tree taskLines ---
+await page.locator('.logo-area').click(); // Notebook Dashboard (root landing)
+await page.waitForTimeout(500);
+check('root landing opens', await page.locator('#landing-workspace').isVisible());
+check('metrics: pages / completed / pending', await page.evaluate(() =>
+  document.getElementById('metric-pages').innerText === '3' &&
+  document.getElementById('metric-completed').innerText === '1' &&
+  document.getElementById('metric-pending').innerText === '1'));
+check('pending actions rendered from taskLines', await page.evaluate(() => {
+  const items = document.querySelectorAll('#landing-tasks-list .landing-task-item');
+  if (items.length !== 1) return false;
+  const text = items[0].querySelector('.landing-task-text');
+  const origin = items[0].querySelector('.landing-task-origin');
+  return text && text.textContent === 'task' && origin && origin.textContent.includes('A Very Long Page Title');
+}));
+check('progress ratio label from taskLines counts', (await page.locator('#metric-tasks-ratio').innerText()) === '1 of 2 tasks');
+
+// --- 15. Save does NOT rescan the tree itself; watcher callback does ---
+await page.evaluate(() => window.openNote('/nb/smoke.md'));
+await page.waitForTimeout(500);
+await page.locator('#btn-mode-edit').click();
+await editor.evaluate((ta) => { ta.focus(); ta.value = '# Smoke Note\n\nedited body\n'; ta.selectionStart = ta.selectionEnd = ta.value.length; window.handleEditorInput(); });
+const treeCallsBeforeSave = await page.evaluate(() => window.__treeCalls);
+await page.keyboard.press(`${MOD}+s`);
+await page.waitForTimeout(400);
+check('Mod+S writes the note', await page.evaluate(() => window.__writes.includes('/nb/smoke.md')));
+check('save status back to Saved', (await page.locator('#save-status-indicator').innerText()) === 'Saved');
+const treeCallsAfterSave = await page.evaluate(() => window.__treeCalls);
+check('saveActiveNote does not rescan tree', treeCallsAfterSave === treeCallsBeforeSave,
+  `before=${treeCallsBeforeSave} after=${treeCallsAfterSave}`);
+// Simulate the debounced files-changed notification from the main process
+await page.evaluate(() => { window.__addTreePage(); window.__filesCb(); });
+await page.waitForTimeout(500);
+check('files-changed callback rescans tree', await page.evaluate(() => window.__treeCalls) === treeCallsAfterSave + 1);
+check('refreshNotebook renders new tree node', await page.locator('#notebook-tree .tree-node-label', { hasText: 'Fresh Note' }).count() === 1);
+
+// --- 16. Command palette: open, HTML escaping (XSS), navigation ---
+await page.keyboard.press(`${MOD}+k`);
+await page.waitForTimeout(300);
+check('Mod+K opens command palette', await page.evaluate(() =>
+  document.getElementById('command-palette-modal').style.display !== 'none'));
+check('palette lists commands with empty query', await page.locator('#palette-results-list .palette-item').count() > 5);
+await page.locator('#palette-search-input').fill('xss');
+await page.waitForTimeout(200);
+check('palette finds XSS-titled page', await page.locator('#palette-results-list .palette-item').count() === 1);
+check('palette escapes HTML in labels', await page.evaluate(() => {
+  const label = document.querySelector('#palette-results-list .palette-item-label');
+  return label && label.textContent === '<img src=x onerror=window.__xss=1>' &&
+    document.querySelectorAll('#palette-results-list img').length === 0;
+}));
+check('window.__xss stayed undefined', await page.evaluate(() => window.__xss === undefined));
+await page.keyboard.press('Escape');
+check('Escape closes palette', await page.evaluate(() =>
+  document.getElementById('command-palette-modal').style.display === 'none'));
+
+// --- 17. Shortcuts modal: Mod+/ and settings button, kbd chips ---
+await page.keyboard.press(`${MOD}+Slash`);
+await page.waitForTimeout(200);
+check('Mod+/ opens shortcuts modal', await page.evaluate(() =>
+  document.getElementById('shortcuts-modal').classList.contains('active')));
+check('shortcuts modal renders sections + kbd chips', await page.evaluate(() =>
+  document.querySelectorAll('#shortcuts-list .shortcuts-section').length === 4 &&
+  document.querySelectorAll('#shortcuts-list kbd').length > 10));
+check('shortcut chips use platform modifier', await page.evaluate((isMac) => {
+  const kbds = Array.from(document.querySelectorAll('#shortcuts-list kbd')).map(k => k.textContent);
+  const paletteChip = kbds.find(t => t.endsWith('K'));
+  return isMac ? paletteChip === '⌘K' && kbds.includes('⌘⌥L')
+               : paletteChip === 'Ctrl+K' && kbds.includes('Ctrl+Alt+L');
+}, IS_MAC));
+await page.keyboard.press('Escape');
+check('Escape closes shortcuts modal', !(await page.evaluate(() => document.getElementById('shortcuts-modal').classList.contains('active'))));
+// Reachable from Settings
+await page.evaluate(() => window.showSettingsModal());
+await page.locator('#settings-modal button', { hasText: 'View All Keyboard Shortcuts' }).click();
+check('settings button opens shortcuts modal', await page.evaluate(() =>
+  document.getElementById('shortcuts-modal').classList.contains('active') &&
+  !document.getElementById('settings-modal').classList.contains('active')));
+await page.keyboard.press('Escape');
+
+// --- 18. Platform-aware shortcut hints ---
+check('palette hint shows platform shortcut', (await page.locator('#palette-shortcut-hint').innerText()) === (IS_MAC ? '⌘K' : 'Ctrl+K'));
+// normalizeShortcutTitles on a fresh element (function-level behavior)
+const normalized = await page.evaluate(() => {
+  const el = document.createElement('button');
+  el.setAttribute('title', 'Rendered Preview (Cmd+1 / Ctrl+1)');
+  document.body.appendChild(el);
+  normalizeShortcutTitles();
+  const t = el.getAttribute('title');
+  el.remove();
+  return t;
+});
+check('normalizeShortcutTitles rewrites Cmd/Ctrl pair titles',
+  normalized === (IS_MAC ? 'Rendered Preview (⌘1)' : 'Rendered Preview (Ctrl+1)'),
+  JSON.stringify(normalized));
+// The live mode-button tooltips (data-tooltip captured at init) must be
+// platform-correct: ⌘ glyphs on mac (and no 'Ctrl'), 'Ctrl+' on win (no 'Cmd'/⌘)
+const previewTooltip = await page.evaluate(() => document.getElementById('btn-mode-preview').dataset.tooltip || '');
+if (IS_MAC) {
+  check('mode button tooltip shows ⌘ on darwin', previewTooltip.includes('⌘1') && !previewTooltip.includes('Ctrl'),
+    JSON.stringify(previewTooltip));
+} else {
+  check('mode button tooltip shows Ctrl+ on win32', previewTooltip.includes('Ctrl+1') && !previewTooltip.includes('Cmd') && !previewTooltip.includes('⌘'),
+    JSON.stringify(previewTooltip));
+}
+const boldTooltip = await page.evaluate(() => {
+  const btn = Array.from(document.querySelectorAll('.toolbar-btn')).find(b => (b.dataset.tooltip || '').startsWith('Bold'));
+  return btn ? btn.dataset.tooltip : '';
+});
+if (IS_MAC) {
+  check('toolbar Bold tooltip platform-correct (darwin)', boldTooltip.includes('⌘B') && !boldTooltip.includes('Ctrl'),
+    JSON.stringify(boldTooltip));
+} else {
+  check('toolbar Bold tooltip platform-correct (win32)', boldTooltip.includes('Ctrl+B') && !boldTooltip.includes('Cmd') && !boldTooltip.includes('⌘'),
+    JSON.stringify(boldTooltip));
+}
+
+} finally {
+  if (browser) await browser.close();
+}
+
+console.log(`--- smoke-v2 platform=${PLATFORM} ---`);
+console.log(results.join('\n'));
+const total = results.filter(r => r.startsWith('PASS') || r.startsWith('FAIL')).length;
+console.log(failed === 0 ? `\nALL ${total} CHECKS PASSED` : `\n${failed}/${total} CHECKS FAILED`);
+process.exit(failed === 0 ? 0 : 1);

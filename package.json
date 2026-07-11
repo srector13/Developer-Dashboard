@@ -11,7 +11,9 @@
     "start": "tsc && electron .",
     "pack": "electron-builder",
     "pretest:e2e": "tsc",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:renderer": "node tests/renderer/smoke.spec.mjs darwin && node tests/renderer/smoke.spec.mjs win32",
+    "test:ui-audit": "node tests/renderer/ui-audit.mjs"
   },
   "dependencies": {
     "chokidar": "^3.6.0",
