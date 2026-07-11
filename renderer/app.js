@@ -17,19 +17,25 @@ function shortcutLabel(shortcut) {
   }).join(IS_MAC ? '' : '+');
 }
 
-// Rewrite title attributes written as "(Cmd+X / Ctrl+X)" or "(Cmd+Alt+X)"
-// into the platform's own form, before tooltips capture them.
+// Rewrite shortcut hints written as "(Cmd+X / Ctrl+X)" or "(Cmd+Alt+X)"
+// into the platform's own form.
+function normalizeShortcutText(text) {
+  if (!text || !text.includes('Cmd+')) return text;
+  // "(Cmd+1 / Ctrl+1)" → single-platform form
+  text = text.replace(/Cmd\+(\S+?)\s*\/\s*Ctrl\+\1/g, (m, key) => `Mod+${key}`);
+  // Remaining "Cmd+..." (mac-only spellings) → canonical Mod form
+  text = text.replace(/Cmd\+/g, 'Mod+');
+  // Render canonical "Mod+Alt+X" style chunks for this platform
+  return text.replace(/(Mod(?:\+[A-Za-z0-9\-\/\]\[]+)+)/g, (m) => shortcutLabel(m));
+}
+
 function normalizeShortcutTitles() {
   document.querySelectorAll('[title]').forEach(el => {
-    let title = el.getAttribute('title');
-    if (!title || !title.includes('Cmd+')) return;
-    // "(Cmd+1 / Ctrl+1)" → single-platform form
-    title = title.replace(/Cmd\+(\S+?)\s*\/\s*Ctrl\+\1/g, (m, key) => `Mod+${key}`);
-    // Remaining "Cmd+..." (mac-only spellings) → canonical Mod form
-    title = title.replace(/Cmd\+/g, 'Mod+');
-    // Render canonical "Mod+Alt+X" style chunks for this platform
-    title = title.replace(/(Mod(?:\+[A-Za-z0-9\-\/\]\[]+)+)/g, (m) => shortcutLabel(m));
-    el.setAttribute('title', title);
+    const title = el.getAttribute('title');
+    const normalized = normalizeShortcutText(title);
+    if (normalized !== title) {
+      el.setAttribute('title', normalized);
+    }
   });
 }
 
@@ -60,7 +66,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   // Set theme from settings (also initializes Mermaid with the right theme)
   applyTheme(appSettings.theme);
- 
+
+  // Platform-correct shortcut hints must be applied before anything renders
+  // the tree (which binds tooltips and consumes the title attributes)
+  normalizeShortcutTitles();
+  const paletteHint = document.getElementById('palette-shortcut-hint');
+  if (paletteHint) paletteHint.innerText = shortcutLabel('Mod+K');
+
   if (appSettings.notebookRoot) {
     notebookRoot = appSettings.notebookRoot;
     document.getElementById('onboarding').classList.remove('active');
@@ -81,12 +93,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Initialize table selector grid
   initTableGrid();
-
-  // Platform-correct shortcut hints must be applied before tooltips capture
-  // the title attributes
-  normalizeShortcutTitles();
-  const paletteHint = document.getElementById('palette-shortcut-hint');
-  if (paletteHint) paletteHint.innerText = shortcutLabel('Mod+K');
 
   // Initialize dynamic custom tooltips
   initCustomTooltips();
@@ -1264,7 +1270,9 @@ function initCustomTooltips() {
   // Scan all toolbar buttons, icon-toggles, and dropdown elements with standard title hover cues
   const selectors = '.toolbar-btn, .icon-btn, .dropdown-toggle, .dropdown-item, .mode-toggles button, .sidebar-header button, .popout-actions button';
   document.querySelectorAll(selectors).forEach(el => {
-    const title = el.getAttribute('title');
+    // Normalize at capture time too, so late-rendered elements are always
+    // platform-correct regardless of init ordering
+    const title = normalizeShortcutText(el.getAttribute('title'));
     if (title && !el.dataset.tooltipBound) {
       el.dataset.tooltip = title;
       el.dataset.tooltipBound = 'true'; // this runs after every render; bind each element once
