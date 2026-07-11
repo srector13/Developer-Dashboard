@@ -11,45 +11,73 @@ let mainWindow: BrowserWindow | null = null;
 const SETTINGS_FILE = path.join(app.getPath('userData'), 'settings.json');
 const ORDER_FILE = '.notebook-order';
 
+type ThemeName = 'system' | 'light' | 'dark' | 'midnight' | 'forest' | 'sepia';
+
+interface PdfExportOptions {
+  theme: 'light' | 'dark' | 'minimal';
+  pageSize: 'A4' | 'Letter' | 'Legal';
+  openAfter: boolean;
+  reveal: boolean;
+}
+
 interface AppSettings {
   notebookRoot: string;
   defaultPageWidth: 'standard' | 'wide' | 'full';
   defaultMermaidZoom: number;
-  previewTheme: 'github' | 'github-dark' | 'off';
+  /** Legacy pre-theme-system field; migrated into `theme` on read. */
+  previewTheme?: 'github' | 'github-dark' | 'off';
+  theme: ThemeName;
   ignoreFolders: string[];
   templatesFolder: string;
   author: string;
   scratchpadFile: string;
   autoSaveEnabled: boolean;
   pandocPath?: string;
+  pdfExport: PdfExportOptions;
 }
 
 const defaultSettings: AppSettings = {
   notebookRoot: '',
   defaultPageWidth: 'standard',
   defaultMermaidZoom: 100,
-  previewTheme: 'github',
+  theme: 'system',
   ignoreFolders: ['_media', 'attachments', 'templates', 'node_modules', '.git', '.vscode'],
   templatesFolder: 'templates',
   author: '',
   scratchpadFile: 'scratchpad.md',
   autoSaveEnabled: false,
+  pdfExport: { theme: 'light', pageSize: 'A4', openAfter: true, reveal: false },
 };
 
-// Config manager helpers
+// Migrate settings written by older versions to the current shape
+function migrateSettings(raw: Partial<AppSettings>): AppSettings {
+  const merged: AppSettings = { ...defaultSettings, ...raw, pdfExport: { ...defaultSettings.pdfExport, ...(raw.pdfExport || {}) } };
+  if (!raw.theme && raw.previewTheme) {
+    merged.theme = raw.previewTheme === 'github-dark' ? 'dark' : raw.previewTheme === 'off' ? 'light' : 'system';
+  }
+  return merged;
+}
+
+// Config manager helpers. Settings are cached in memory: they're read on
+// nearly every IPC call, and the disk copy only changes through writeSettings.
+let settingsCache: AppSettings | null = null;
+
 async function readSettings(): Promise<AppSettings> {
+  if (settingsCache) return settingsCache;
   try {
     const data = await fsp.readFile(SETTINGS_FILE, 'utf8');
-    return { ...defaultSettings, ...JSON.parse(data) };
+    settingsCache = migrateSettings(JSON.parse(data));
   } catch {
-    return defaultSettings;
+    settingsCache = { ...defaultSettings };
   }
+  return settingsCache;
 }
 
 async function writeSettings(settings: Partial<AppSettings>): Promise<AppSettings> {
   const current = await readSettings();
-  const updated = { ...current, ...settings };
+  const updated = migrateSettings({ ...current, ...settings });
   await fsp.writeFile(SETTINGS_FILE, JSON.stringify(updated, null, 2), 'utf8');
+  settingsCache = updated;
   return updated;
 }
 
@@ -81,6 +109,21 @@ function createWindow() {
   updateWatcher();
 }
 
+// Notify the renderer that notebook files changed. Debounced: the renderer
+// responds with a full notebook rescan, and a single save produces several
+// watcher events (plus an explicit send from the write handler), so without
+// coalescing one save costs 3+ full-notebook re-reads.
+let filesChangedTimer: NodeJS.Timeout | null = null;
+function notifyFilesChanged() {
+  if (filesChangedTimer) clearTimeout(filesChangedTimer);
+  filesChangedTimer = setTimeout(() => {
+    filesChangedTimer = null;
+    if (mainWindow) {
+      mainWindow.webContents.send('files-changed');
+    }
+  }, 300);
+}
+
 // Watch for folder changes to emit update events automatically
 let watcher: fs.FSWatcher | null = null;
 async function updateWatcher() {
@@ -95,9 +138,7 @@ async function updateWatcher() {
         if (filename && (filename.startsWith('.') || filename.includes('node_modules') || filename.includes('.notebook-order'))) {
           return;
         }
-        if (mainWindow) {
-          mainWindow.webContents.send('files-changed');
-        }
+        notifyFilesChanged();
       });
     } catch (err) {
       console.error('Failed to start fs watcher:', err);
@@ -175,17 +216,22 @@ function parseNoteMeta(content: string, filePath: string) {
     pinned: false,
     openTasks: 0,
     completedTasks: 0,
+    // Open-task lines are collected here, during the scan that already reads
+    // every file, so landing pages never need to re-read notes for them.
+    taskLines: [] as Array<{ text: string; line: number }>,
   };
 
   // Scan tasks
+  const openTaskRegex = /^([ \t]*([-*+]\s+|\d+\.\s+)?)\[ \]/i;
   const lines = content.split(/\r?\n/);
-  for (const l of lines) {
-    if (/^([ \t]*([-*+]\s+|\d+\.\s+)?)\[ \]/i.test(l)) {
+  lines.forEach((l, index) => {
+    if (openTaskRegex.test(l)) {
       meta.openTasks++;
+      meta.taskLines.push({ text: l.replace(openTaskRegex, '').trim(), line: index });
     } else if (/^([ \t]*([-*+]\s+|\d+\.\s+)?)\[x\]/i.test(l)) {
       meta.completedTasks++;
     }
-  }
+  });
 
   // Parse YAML Frontmatter
   const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?=[ \t]*(?:\r?\n|$))/);
@@ -245,6 +291,7 @@ interface PageNode {
   pinned: boolean;
   openTasks: number;
   completedTasks: number;
+  taskLines: Array<{ text: string; line: number }>;
   dailyKey?: string;
 }
 
@@ -267,6 +314,7 @@ async function scanDirectory(
   rootDir: string,
   ignore: Set<string>,
   scratchpadFile: string,
+  shallow = false, // skip subdirectory recursion (move-node only needs one dir)
 ): Promise<SectionNode> {
   const relative = path.relative(rootDir, dir).replace(/\\/g, '/');
   const sectionNode: SectionNode = {
@@ -288,8 +336,10 @@ async function scanDirectory(
     }
 
     if (entry.isDirectory()) {
-      const childSec = await scanDirectory(fullPath, rootDir, ignore, scratchpadFile);
-      sectionNode.sections.push(childSec);
+      if (!shallow) {
+        const childSec = await scanDirectory(fullPath, rootDir, ignore, scratchpadFile);
+        sectionNode.sections.push(childSec);
+      }
     } else if (entry.isFile() && entry.name.endsWith('.md')) {
       // Skip scratchpad.md if it is in the section root
       if (entry.name === scratchpadFile && relative === '') {
@@ -309,6 +359,7 @@ async function scanDirectory(
           pinned: meta.pinned,
           openTasks: meta.openTasks,
           completedTasks: meta.completedTasks,
+          taskLines: meta.taskLines,
           dailyKey: parseDailyKey(entry.name),
         });
       } catch (err) {
@@ -391,9 +442,7 @@ ipcMain.handle('read-note', async (event, filePath) => {
 
 ipcMain.handle('write-note', async (event, filePath, content) => {
   await fsp.writeFile(filePath, content, 'utf8');
-  if (mainWindow) {
-    mainWindow.webContents.send('files-changed');
-  }
+  notifyFilesChanged();
   return true;
 });
 
@@ -485,9 +534,7 @@ ipcMain.handle('create-page', async (event, dirPath, title, templateName, meta?:
   ord.push(filename);
   await writeOrderFile(dirPath, ord);
 
-  if (mainWindow) {
-    mainWindow.webContents.send('files-changed');
-  }
+  notifyFilesChanged();
   return fullPath;
 });
 
@@ -495,9 +542,7 @@ ipcMain.handle('create-section', async (event, dirPath, name) => {
   const fullPath = path.join(dirPath, name.trim());
   if (!fs.existsSync(fullPath)) {
     await fsp.mkdir(fullPath, { recursive: true });
-    if (mainWindow) {
-      mainWindow.webContents.send('files-changed');
-    }
+    notifyFilesChanged();
   }
   return fullPath;
 });
@@ -519,9 +564,7 @@ ipcMain.handle('delete-node', async (event, filePath) => {
         await writeOrderFile(dir, ord);
       }
     }
-    if (mainWindow) {
-      mainWindow.webContents.send('files-changed');
-    }
+    notifyFilesChanged();
   }
   return true;
 });
@@ -602,6 +645,41 @@ async function listMarkdownFiles(dir: string, ignore: Set<string>, rootDir: stri
   }
   return files;
 }
+
+// Find notes that link to the given file ([[wiki-links]] or markdown links).
+// One IPC round-trip with parallel reads in the main process replaces the
+// renderer's old per-note IPC read loop.
+ipcMain.handle('get-backlinks', async (event, filePath: string) => {
+  const settings = await readSettings();
+  if (!settings.notebookRoot || !filePath) return [];
+
+  const escapeForRegex = (s: string) => s.replace(/[/\-\\^$*+?.()|[\]{}]/g, '\\$&');
+  const base = escapeForRegex(path.basename(filePath, '.md'));
+  const full = escapeForRegex(path.basename(filePath));
+  const wikiRegex = new RegExp(`\\[\\[${base}(\\||#|\\]\\])`, 'i');
+  const mdRegex = new RegExp(`\\(\\.*\\/?.*?${full}\\)`, 'i');
+
+  const ignore = new Set(settings.ignoreFolders.map(s => s.toLowerCase()));
+  let allFiles: string[] = [];
+  try {
+    allFiles = await listMarkdownFiles(settings.notebookRoot, ignore, settings.notebookRoot);
+  } catch {
+    return [];
+  }
+
+  const normalizedTarget = path.normalize(filePath);
+  const results: string[] = [];
+  await Promise.all(allFiles.map(async (file) => {
+    if (path.normalize(file) === normalizedTarget) return;
+    try {
+      const text = await fsp.readFile(file, 'utf8');
+      if (wikiRegex.test(text) || mdRegex.test(text)) {
+        results.push(file);
+      }
+    } catch {}
+  }));
+  return results.sort();
+});
 
 ipcMain.handle('relocate-node', async (event, srcPath, destDir) => {
   if (!fs.existsSync(srcPath) || !fs.existsSync(destDir)) return false;
@@ -689,9 +767,7 @@ ipcMain.handle('rename-node', async (event, filePath, newName) => {
     }
   }
 
-  if (mainWindow) {
-    mainWindow.webContents.send('files-changed');
-  }
+  notifyFilesChanged();
   return true;
 });
 
@@ -702,7 +778,7 @@ ipcMain.handle('move-node', async (event, dirPath, fileName, direction) => {
   if (ord.length === 0) {
     const settings = await readSettings();
     const ignore = new Set(settings.ignoreFolders.map(s => s.toLowerCase()));
-    const secNode = await scanDirectory(dirPath, settings.notebookRoot, ignore, settings.scratchpadFile);
+    const secNode = await scanDirectory(dirPath, settings.notebookRoot, ignore, settings.scratchpadFile, true);
     secNode.pages.forEach(p => ord.push(p.name));
   }
 
@@ -720,9 +796,7 @@ ipcMain.handle('move-node', async (event, dirPath, fileName, direction) => {
   }
 
   await writeOrderFile(dirPath, ord);
-  if (mainWindow) {
-    mainWindow.webContents.send('files-changed');
-  }
+  notifyFilesChanged();
   return true;
 });
 
@@ -770,9 +844,7 @@ ipcMain.handle('update-note-meta', async (event, filePath: string, meta: { creat
   }
 
   await fsp.writeFile(filePath, text, 'utf8');
-  if (mainWindow) {
-    mainWindow.webContents.send('files-changed');
-  }
+  notifyFilesChanged();
   return true;
 });
 
@@ -831,9 +903,7 @@ ipcMain.handle('create-template', async (event, name: string) => {
   const fullPath = path.join(dir, filename);
   await fsp.writeFile(fullPath, starter, 'utf8');
 
-  if (mainWindow) {
-    mainWindow.webContents.send('files-changed');
-  }
+  notifyFilesChanged();
   return fullPath;
 });
 
@@ -865,9 +935,7 @@ ipcMain.handle('append-scratchpad', async (event, text) => {
   existing += text + '\n';
   
   await fsp.writeFile(scratchPath, existing, 'utf8');
-  if (mainWindow) {
-    mainWindow.webContents.send('files-changed');
-  }
+  notifyFilesChanged();
   return true;
 });
 
@@ -924,9 +992,7 @@ ipcMain.handle('import-clipboard', async (event, destDir, meta?: NoteMeta) => {
   ord.push(filename);
   await writeOrderFile(destDir, ord);
 
-  if (mainWindow) {
-    mainWindow.webContents.send('files-changed');
-  }
+  notifyFilesChanged();
 
   return { success: true, filePath: fullPath };
 });
@@ -993,9 +1059,7 @@ ipcMain.handle('import-document', async (event, destDir) => {
   ord.push(filename);
   await writeOrderFile(destDir, ord);
 
-  if (mainWindow) {
-    mainWindow.webContents.send('files-changed');
-  }
+  notifyFilesChanged();
 
   return { success: true, filePath: fullPath };
 });
@@ -1046,16 +1110,143 @@ function runPandocFile(filePath: string, from: string, to: string): Promise<stri
   });
 }
 
-// PDF Native Export using Electron webContents.printToPDF
-ipcMain.handle('export-to-pdf', async (event, filePath, htmlContent) => {
+// PDF Native Export using Electron webContents.printToPDF.
+// Theme-independent layout rules, written against --pdf-* tokens; each
+// selectable PDF theme is just a token block layered on top.
+const PDF_BASE_CSS = `
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: var(--pdf-text);
+    line-height: 1.6;
+    padding: 40px;
+    background: var(--pdf-bg);
+  }
+  h1, h2, h3, h4, h5, h6 {
+    margin-top: 24px;
+    margin-bottom: 16px;
+    font-weight: 600;
+    line-height: 1.25;
+    color: var(--pdf-heading);
+  }
+  h1 { font-size: 2em; border-bottom: 1px solid var(--pdf-border); padding-bottom: .3em; }
+  h2 { font-size: 1.5em; border-bottom: 1px solid var(--pdf-border); padding-bottom: .3em; }
+  h3 { font-size: 1.25em; }
+  pre, code {
+    font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+    background-color: var(--pdf-code-bg);
+    border-radius: 3px;
+  }
+  pre { padding: 16px; overflow: auto; font-size: 85%; line-height: 1.45; }
+  code { padding: .2em .4em; margin: 0; font-size: 85%; }
+  pre code { padding: 0; background-color: transparent; }
+  blockquote {
+    padding: 0 1em;
+    color: var(--pdf-muted);
+    border-left: .25em solid var(--pdf-border);
+    margin: 0 0 16px 0;
+  }
+  table { border-spacing: 0; border-collapse: collapse; width: 100%; margin-bottom: 16px; }
+  table th, table td { padding: 6px 13px; border: 1px solid var(--pdf-border); }
+  table th { background-color: var(--pdf-head-bg); }
+  table tr { background-color: var(--pdf-bg); border-top: 1px solid var(--pdf-border); }
+  table tr:nth-child(2n) { background-color: var(--pdf-code-bg); }
+  img { max-width: 100%; box-sizing: content-box; }
+  .task-checkbox { vertical-align: middle; margin-right: 8px; }
+  a { color: var(--pdf-link); text-decoration: none; }
+  mark { background-color: var(--pdf-mark-bg); color: var(--pdf-text); padding: 1px 4px; border-radius: 3px; }
+
+  /* Page break controls */
+  h1, h2, h3 { page-break-after: avoid; }
+  blockquote, table, img { page-break-inside: avoid; }
+  pre { page-break-inside: avoid; max-height: none; }
+
+  /* Mermaid diagrams: render at natural size, capped to one page, so a
+     stretched SVG can't span multiple pages and leave blank gaps. */
+  .mermaid-block-container {
+    page-break-inside: avoid;
+    margin: 16px 0;
+    border: none;
+    background: transparent;
+  }
+  .notebook-mermaid {
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    display: flex;
+    justify-content: center;
+    page-break-inside: avoid;
+  }
+  .notebook-mermaid svg {
+    max-width: 100% !important;
+    max-height: 8.5in;
+    height: auto !important;
+  }
+
+  /* Hide notebook UI elements for clean write-up export */
+  .toolbar, .code-header, .code-header-bar, .copy-btn, .copy-code-btn,
+  .mermaid-actions-bar, .code-block-copy-btn,
+  #note-header, .backlink-pill, .tag-pill, .status-indicator, #titlebar {
+    display: none !important;
+  }
+
+  /* Code block wrapper chrome from the preview pane */
+  .code-block-wrapper {
+    border: 1px solid var(--pdf-border);
+    border-radius: 6px;
+    overflow: hidden;
+    margin-bottom: 16px;
+    page-break-inside: avoid;
+  }
+  .code-block-wrapper pre { margin: 0; }
+  .code-block-header {
+    padding: 4px 12px;
+    background: var(--pdf-head-bg);
+    border-bottom: 1px solid var(--pdf-border);
+    font-size: 10px;
+    font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+    text-transform: uppercase;
+    color: var(--pdf-muted);
+  }
+`;
+
+const PDF_THEMES: Record<PdfExportOptions['theme'], string> = {
+  light: `
+    :root { --pdf-bg: #ffffff; --pdf-text: #24292e; --pdf-heading: #1f2328; --pdf-muted: #6a737d;
+            --pdf-border: #dfe2e5; --pdf-code-bg: #f6f8fa; --pdf-head-bg: #f0f2f4;
+            --pdf-link: #0366d6; --pdf-mark-bg: #fff3b8; }
+  `,
+  dark: `
+    :root { --pdf-bg: #0d1117; --pdf-text: #c9d1d9; --pdf-heading: #f0f6fc; --pdf-muted: #8b949e;
+            --pdf-border: #30363d; --pdf-code-bg: #161b22; --pdf-head-bg: #161b22;
+            --pdf-link: #58a6ff; --pdf-mark-bg: #4d3800; }
+  `,
+  minimal: `
+    :root { --pdf-bg: #ffffff; --pdf-text: #1a1a1a; --pdf-heading: #000000; --pdf-muted: #666666;
+            --pdf-border: #e5e5e5; --pdf-code-bg: #fafafa; --pdf-head-bg: #ffffff;
+            --pdf-link: #1a56db; --pdf-mark-bg: #f5f0d8; }
+    .code-block-wrapper { border: none; }
+    .code-block-header { display: none; }
+    pre { border: 1px solid var(--pdf-border); }
+    table tr:nth-child(2n) { background-color: var(--pdf-bg); }
+  `,
+};
+
+ipcMain.handle('export-to-pdf', async (event, filePath, htmlContent, options?: Partial<PdfExportOptions>) => {
+  const settings = await readSettings();
+  const opts: PdfExportOptions = { ...settings.pdfExport, ...(options || {}) };
+
   const result = await dialog.showSaveDialog(mainWindow!, {
     title: 'Export to PDF',
     defaultPath: filePath.replace(/\.md$/i, '.pdf'),
     filters: [{ name: 'PDF Document', extensions: ['pdf'] }],
   });
 
-  if (result.canceled || !result.filePath) return false;
+  if (result.canceled || !result.filePath) return { success: false, canceled: true };
   const pdfPath = result.filePath;
+
+  // Remember the chosen options for next time
+  await writeSettings({ pdfExport: opts });
 
   // Render HTML in a hidden BrowserWindow
   const printWindow = new BrowserWindow({
@@ -1066,138 +1257,14 @@ ipcMain.handle('export-to-pdf', async (event, filePath, htmlContent) => {
     },
   });
 
-  // Inject some minimal styled wrapper to look professional on page prints
+  const themeCss = PDF_THEMES[opts.theme] || PDF_THEMES.light;
   const styledHtml = `
     <!DOCTYPE html>
     <html>
     <head>
       <meta charset="utf-8">
-      <style>
-        body {
-          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-          color: #24292e;
-          line-height: 1.6;
-          padding: 40px;
-          background: #ffffff;
-        }
-        h1, h2, h3, h4, h5, h6 {
-          margin-top: 24px;
-          margin-bottom: 16px;
-          font-weight: 600;
-          line-height: 1.25;
-        }
-        h1 { font-size: 2em; border-bottom: 1px solid #eaecef; padding-bottom: .3em; }
-        h2 { font-size: 1.5em; border-bottom: 1px solid #eaecef; padding-bottom: .3em; }
-        h3 { font-size: 1.25em; }
-        pre, code {
-          font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
-          background-color: #f6f8fa;
-          border-radius: 3px;
-        }
-        pre {
-          padding: 16px;
-          overflow: auto;
-          font-size: 85%;
-          line-height: 1.45;
-        }
-        code {
-          padding: .2em .4em;
-          margin: 0;
-          font-size: 85%;
-        }
-        pre code {
-          padding: 0;
-          background-color: transparent;
-        }
-        blockquote {
-          padding: 0 1em;
-          color: #6a737d;
-          border-left: .25em solid #dfe2e5;
-          margin: 0 0 16px 0;
-        }
-        table {
-          border-spacing: 0;
-          border-collapse: collapse;
-          width: 100%;
-          margin-bottom: 16px;
-        }
-        table th, table td {
-          padding: 6px 13px;
-          border: 1px solid #dfe2e5;
-        }
-        table tr {
-          background-color: #fff;
-          border-top: 1px solid #c6cbd1;
-        }
-        table tr:nth-child(2n) {
-          background-color: #f6f8fa;
-        }
-        img {
-          max-width: 100%;
-          box-sizing: content-box;
-        }
-        .task-checkbox {
-          vertical-align: middle;
-          margin-right: 8px;
-        }
-        a {
-          color: #0366d6;
-          text-decoration: none;
-        }
-        /* Page break controls */
-        h1, h2, h3 { page-break-after: avoid; }
-        blockquote, table, img { page-break-inside: avoid; }
-        pre { page-break-inside: avoid; max-height: none; }
-
-        /* Mermaid diagrams: render at natural size, capped to one page, so a
-           stretched SVG can't span multiple pages and leave blank gaps. */
-        .mermaid-block-container {
-          page-break-inside: avoid;
-          margin: 16px 0;
-          border: none;
-          background: transparent;
-        }
-        .notebook-mermaid {
-          background: transparent !important;
-          border: none !important;
-          padding: 0 !important;
-          box-shadow: none !important;
-          display: flex;
-          justify-content: center;
-          page-break-inside: avoid;
-        }
-        .notebook-mermaid svg {
-          max-width: 100% !important;
-          max-height: 8.5in;
-          height: auto !important;
-        }
-
-        /* Hide notebook UI elements for clean write-up export */
-        .toolbar, .code-header, .code-header-bar, .copy-btn, .copy-code-btn,
-        .mermaid-actions-bar, .code-block-copy-btn,
-        #note-header, .backlink-pill, .tag-pill, .status-indicator, #titlebar {
-          display: none !important;
-        }
-
-        /* Code block wrapper chrome from the preview pane */
-        .code-block-wrapper {
-          border: 1px solid #dfe2e5;
-          border-radius: 6px;
-          overflow: hidden;
-          margin-bottom: 16px;
-          page-break-inside: avoid;
-        }
-        .code-block-wrapper pre { margin: 0; }
-        .code-block-header {
-          padding: 4px 12px;
-          background: #f0f2f4;
-          border-bottom: 1px solid #dfe2e5;
-          font-size: 10px;
-          font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
-          text-transform: uppercase;
-          color: #6a737d;
-        }
-      </style>
+      <style>${themeCss}</style>
+      <style>${PDF_BASE_CSS}</style>
     </head>
     <body>
       ${htmlContent}
@@ -1205,24 +1272,34 @@ ipcMain.handle('export-to-pdf', async (event, filePath, htmlContent) => {
     </html>
   `;
 
-  await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(styledHtml)}`);
+  // Load via a temp file: data: URLs have practical size limits that notes
+  // with large embedded images can exceed.
+  const tempHtmlPath = path.join(app.getPath('temp'), `mdnb-export-${Date.now()}.html`);
 
   try {
+    await fsp.writeFile(tempHtmlPath, styledHtml, 'utf8');
+    await printWindow.loadFile(tempHtmlPath);
+
     const data = await printWindow.webContents.printToPDF({
-      printBackground: true,
-      margins: {
-        marginType: 'default',
-      },
-      pageSize: 'A4',
-      preferCSSPageSize: true,
+      printBackground: true, // required for dark/tinted themes
+      margins: { marginType: 'default' },
+      pageSize: opts.pageSize || 'A4',
     });
     await fsp.writeFile(pdfPath, data);
-    printWindow.destroy();
-    return true;
-  } catch (err) {
+
+    if (opts.openAfter) {
+      await shell.openPath(pdfPath);
+    }
+    if (opts.reveal) {
+      shell.showItemInFolder(pdfPath);
+    }
+    return { success: true, pdfPath };
+  } catch (err: any) {
     console.error('Failed to print to PDF:', err);
+    return { success: false, reason: err?.message || String(err) };
+  } finally {
     printWindow.destroy();
-    return false;
+    fsp.unlink(tempHtmlPath).catch(() => {});
   }
 });
 
@@ -1242,9 +1319,7 @@ ipcMain.handle('toggle-task-at-line', async (event, filePath, lineIndex) => {
       const newChecked = (checkedChar === ' ' ? 'x' : ' ');
       lines[lineIndex] = lineText.replace(checkboxRegex, `${prefix}[${newChecked}]`);
       await fsp.writeFile(filePath, lines.join('\n'), 'utf8');
-      if (mainWindow) {
-        mainWindow.webContents.send('files-changed');
-      }
+      notifyFilesChanged();
       return true;
     }
   }

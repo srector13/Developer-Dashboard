@@ -4,8 +4,9 @@
   <meta charset="utf-8">
   <title>Markdown Notebook</title>
   <link rel="stylesheet" href="vendor/github-markdown.css">
-  <link rel="stylesheet" href="vendor/github-dark.css">
-  <link rel="stylesheet" href="style.css?v=3">
+  <link rel="stylesheet" href="vendor/github-dark.css" id="hljs-dark">
+  <link rel="stylesheet" href="vendor/github-light.css" id="hljs-light" disabled>
+  <link rel="stylesheet" href="style.css?v=4">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -376,7 +377,7 @@
             <div class="glass-card metric-card progress-metric-card" style="display: flex; align-items: center; gap: 16px;">
               <div class="progress-ring-container">
                 <svg width="48" height="48" viewBox="0 0 48 48">
-                  <circle class="progress-ring-bg" cx="24" cy="24" r="20" stroke="rgba(255, 255, 255, 0.05)" stroke-width="4" fill="transparent"/>
+                  <circle class="progress-ring-bg" cx="24" cy="24" r="20" stroke-width="4" fill="transparent"/>
                   <circle id="dashboard-progress-ring" class="progress-ring-bar" cx="24" cy="24" r="20" stroke="var(--accent-blue)" stroke-width="4" fill="transparent" stroke-dasharray="125.66" stroke-dashoffset="125.66"/>
                 </svg>
                 <div class="progress-ring-text" id="dashboard-progress-text">0%</div>
@@ -481,12 +482,22 @@
           <input type="number" id="settings-mermaid-zoom" min="40" max="300" step="10">
         </div>
         <div class="form-group">
-          <label>Preview Theme</label>
+          <label>App Theme</label>
           <select id="settings-theme">
-            <option value="github">GitHub Light/Dark Auto</option>
-            <option value="github-dark">Force GitHub Dark</option>
-            <option value="off">Unstyled/System</option>
+            <option value="system">System (Auto Light/Dark)</option>
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+            <option value="midnight">Midnight (deep blue)</option>
+            <option value="forest">Forest (green)</option>
+            <option value="sepia">Sepia (warm light)</option>
           </select>
+        </div>
+        <div class="form-group">
+          <label>Keyboard Shortcuts</label>
+          <button type="button" class="btn btn-sm btn-outline" style="width: 100%; gap: 6px;" onclick="hideSettingsModal(); showShortcutsModal();" title="View all keyboard shortcuts (Cmd+/ / Ctrl+/)">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><line x1="6" y1="10" x2="6" y2="10"/><line x1="10" y1="10" x2="10" y2="10"/><line x1="14" y1="10" x2="14" y2="10"/><line x1="18" y1="10" x2="18" y2="10"/><line x1="7" y1="14" x2="17" y2="14"/></svg>
+            View All Keyboard Shortcuts
+          </button>
         </div>
         <div class="form-group">
           <label>Templates Folder Name</label>
@@ -613,7 +624,7 @@
         <!-- Results or commands dynamically loaded -->
       </div>
       <div class="palette-footer">
-        <span>Use <span class="key">↑</span> <span class="key">↓</span> keys to navigate, <span class="key">Enter</span> to select. Toggle with <span class="key">⌘K / ⌃K</span></span>
+        <span>Use <span class="key">↑</span> <span class="key">↓</span> keys to navigate, <span class="key">Enter</span> to select. Toggle with <span class="key" id="palette-shortcut-hint">⌘K</span></span>
       </div>
     </div>
   </div>
@@ -647,6 +658,68 @@
       <div class="modal-footer">
         <button class="btn btn-outline" onclick="hidePageInfoModal()">Cancel</button>
         <button class="btn btn-primary" onclick="savePageInfo()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- PDF Export Options Modal -->
+  <div id="pdf-export-modal" class="modal-overlay">
+    <div class="glass-card modal-card">
+      <div class="modal-header">
+        <h3>Export to PDF</h3>
+        <button class="close-btn" onclick="hidePdfExportModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>PDF Theme</label>
+          <select id="pdf-theme">
+            <option value="light">Light — GitHub style</option>
+            <option value="dark">Dark — for on-screen reading</option>
+            <option value="minimal">Minimal — clean print</option>
+          </select>
+          <p class="builder-hint">Diagrams are exported with the app's current theme colors.</p>
+        </div>
+        <div class="form-group">
+          <label>Page Size</label>
+          <select id="pdf-page-size">
+            <option value="A4">A4</option>
+            <option value="Letter">Letter</option>
+            <option value="Legal">Legal</option>
+          </select>
+        </div>
+        <div class="form-group" style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+          <input type="checkbox" id="pdf-open-after" style="width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent-blue);">
+          <label for="pdf-open-after" style="margin-bottom: 0; cursor: pointer; user-select: none;">Open the PDF after export</label>
+        </div>
+        <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
+          <input type="checkbox" id="pdf-reveal" style="width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent-blue);">
+          <label for="pdf-reveal" style="margin-bottom: 0; cursor: pointer; user-select: none;">Show in containing folder</label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="hidePdfExportModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="confirmPdfExport()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Export PDF
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Keyboard Shortcuts Reference Modal -->
+  <div id="shortcuts-modal" class="modal-overlay">
+    <div class="glass-card modal-card">
+      <div class="modal-header">
+        <h3>Keyboard Shortcuts</h3>
+        <button class="close-btn" onclick="hideShortcutsModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="shortcuts-list" class="shortcuts-list">
+          <!-- Sections rendered from SHORTCUT_SECTIONS -->
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" onclick="hideShortcutsModal()">Done</button>
       </div>
     </div>
   </div>
@@ -699,6 +772,10 @@
               <option value="flowchart">Flowchart — process &amp; steps</option>
               <option value="sequence">Sequence — who talks to whom</option>
               <option value="pie">Pie Chart — proportions</option>
+              <option value="gantt">Gantt — project timeline</option>
+              <option value="class">Class — software structure</option>
+              <option value="state">State — lifecycle &amp; transitions</option>
+              <option value="journey">User Journey — steps &amp; mood</option>
             </select>
           </div>
 
@@ -733,6 +810,59 @@
             <div class="form-group">
               <label>Slices (one per line: Label: value)</label>
               <textarea id="builder-pie-data" rows="6" oninput="updateBuilderCode()" placeholder="Meetings: 4&#10;Coding: 6&#10;Email: 2" spellcheck="false"></textarea>
+            </div>
+          </div>
+
+          <div id="builder-fields-gantt" style="display: none;">
+            <div class="form-group">
+              <label>Project Title</label>
+              <input type="text" id="builder-gantt-title" oninput="updateBuilderCode()" placeholder="e.g. Website Redesign">
+            </div>
+            <div class="form-group">
+              <label>Start Date</label>
+              <input type="date" id="builder-gantt-start" onchange="updateBuilderCode()">
+            </div>
+            <div class="form-group">
+              <label>Tasks in order (one per line: Task name: days)</label>
+              <textarea id="builder-gantt-tasks" rows="6" oninput="updateBuilderCode()" placeholder="Gather requirements: 3&#10;Design mockups: 5&#10;Build pages: 7" spellcheck="false"></textarea>
+              <p class="builder-hint">Each task starts when the previous one finishes. The number is its length in days.</p>
+            </div>
+          </div>
+
+          <div id="builder-fields-class" style="display: none;">
+            <div class="form-group">
+              <label>Classes (one per line: Name: member1, member2())</label>
+              <textarea id="builder-class-classes" rows="5" oninput="updateBuilderCode()" placeholder="Animal: name, age, speak()&#10;Dog: breed, fetch()" spellcheck="false"></textarea>
+              <p class="builder-hint">Members ending in "()" are drawn as methods; the rest as fields.</p>
+            </div>
+            <div class="form-group">
+              <label>Relationships (one per line)</label>
+              <textarea id="builder-class-relations" rows="4" oninput="updateBuilderCode()" placeholder="Animal <- Dog&#10;Owner -> Dog" spellcheck="false"></textarea>
+              <p class="builder-hint">"Parent &lt;- Child" draws inheritance, "A -&gt; B" an arrow, "A - B" a plain link.</p>
+            </div>
+          </div>
+
+          <div id="builder-fields-state" style="display: none;">
+            <div class="form-group">
+              <label>Transitions (one per line: From -> To: trigger)</label>
+              <textarea id="builder-state-transitions" rows="6" oninput="updateBuilderCode()" placeholder="Idle -> Running: start&#10;Running -> Paused: pause&#10;Paused -> Running: resume" spellcheck="false"></textarea>
+              <p class="builder-hint">The trigger label after ":" is optional. The first state gets the start marker automatically.</p>
+            </div>
+          </div>
+
+          <div id="builder-fields-journey" style="display: none;">
+            <div class="form-group">
+              <label>Journey Title</label>
+              <input type="text" id="builder-journey-title" oninput="updateBuilderCode()" placeholder="e.g. Morning routine">
+            </div>
+            <div class="form-group">
+              <label>Person / Actor</label>
+              <input type="text" id="builder-journey-actor" oninput="updateBuilderCode()" placeholder="Me">
+            </div>
+            <div class="form-group">
+              <label>Steps (one per line: Step: mood 1-5)</label>
+              <textarea id="builder-journey-tasks" rows="6" oninput="updateBuilderCode()" placeholder="Wake up: 3&#10;Make coffee: 5&#10;Check email: 2" spellcheck="false"></textarea>
+              <p class="builder-hint">Mood scores: 1 = terrible, 5 = great.</p>
             </div>
           </div>
 
