@@ -268,6 +268,9 @@
               <div class="dropdown-item" onclick="importFromClipboard()" title="Import Rich Text or HTML from Clipboard as a note">Paste Note from Clipboard</div>
               <div class="dropdown-item" onclick="importDocFile()" title="Import DOCX/PPTX/XLSX file via Pandoc">Import Doc via Pandoc</div>
               <div class="dropdown-item" onclick="exportToPdf()" title="Export current note to PDF">Export to PDF</div>
+              <div class="dropdown-item" onclick="exportAsHtml()" title="Export current note as a standalone HTML file (images inlined)">Export to HTML</div>
+              <div class="dropdown-item" onclick="exportAsDocx()" title="Export current note to Word via Pandoc">Export to Word (DOCX)</div>
+              <div class="dropdown-item" onclick="copyAsRichText()" title="Copy the rendered note to the clipboard as rich text">Copy as Rich Text</div>
               <div class="dropdown-item" onclick="showHistoryModal()" title="Browse and restore earlier saved versions of this note">Note History</div>
               <div class="dropdown-item" onclick="showTrashModal()" title="Restore or permanently delete trashed notes">Trash</div>
             </div>
@@ -365,6 +368,10 @@
               <!-- Folder or Notebook SVG -->
             </div>
             <h1 id="landing-title">Section Name</h1>
+            <button class="btn btn-sm btn-outline" style="margin-left: auto; gap: 6px;" onclick="exportSectionToPdf()" title="Export every page below this view into one PDF with a table of contents">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Export All to PDF
+            </button>
           </div>
           <p id="landing-subtitle">Summary and incomplete actions beneath this notebook folder.</p>
         </header>
@@ -750,13 +757,20 @@
       </div>
       <div class="modal-body">
         <div class="form-group">
+          <label>What to Export</label>
+          <select id="pdf-scope">
+            <option value="note">Current note</option>
+          </select>
+          <p class="builder-hint">Section and notebook exports produce one merged PDF with a table of contents.</p>
+        </div>
+        <div class="form-group">
           <label>PDF Theme</label>
           <select id="pdf-theme">
             <option value="light">Light — GitHub style</option>
             <option value="dark">Dark — for on-screen reading</option>
             <option value="minimal">Minimal — clean print</option>
           </select>
-          <p class="builder-hint">Diagrams are exported with the app's current theme colors.</p>
+          <p class="builder-hint">Diagrams are re-rendered to match the selected PDF theme.</p>
         </div>
         <div class="form-group">
           <label>Page Size</label>
