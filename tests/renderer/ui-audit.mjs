@@ -179,6 +179,17 @@ await page.addInitScript(({ noteMd, renderedHtml }) => {
     pdfExport: { theme: 'light', pageSize: 'A4', openAfter: true, reveal: false },
   };
   window.api = {
+    searchNotes: async (q) => (window.__searchStub || []),
+    saveAttachment: async (p) => ({ success: true, fsPath: '/nb/attachments/pasted.png', relPath: 'attachments/pasted.png' }),
+    importAttachmentFile: async (p) => ({ success: true, fsPath: '/nb/attachments/dropped.pdf', relPath: 'attachments/dropped.pdf' }),
+    getPathForFile: (file) => '/fake/dropped.png',
+    listTrash: async () => (window.__trashStub || []),
+    restoreTrashItem: async (n) => ({ success: true, restoredPath: '/nb/restored.md' }),
+    deleteTrashItem: async (n) => true,
+    emptyTrash: async () => ({ removed: 1 }),
+    listNoteHistory: async (p) => (window.__historyStub || []),
+    readNoteHistory: async (p, id) => '# Old version\n\nOld content.',
+    restoreNoteHistory: async (p, id) => true,
     platform: 'darwin',
     getSettings: async () => settings,
     saveSettings: async (s) => { settings = Object.assign({}, settings, s); return settings; },

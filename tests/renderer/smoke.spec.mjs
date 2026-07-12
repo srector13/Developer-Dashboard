@@ -135,6 +135,17 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
   }
 
   window.api = {
+    searchNotes: async (q) => (window.__searchStub || []),
+    saveAttachment: async (p) => ({ success: true, fsPath: '/nb/attachments/pasted.png', relPath: 'attachments/pasted.png' }),
+    importAttachmentFile: async (p) => ({ success: true, fsPath: '/nb/attachments/dropped.pdf', relPath: 'attachments/dropped.pdf' }),
+    getPathForFile: (file) => '/fake/dropped.png',
+    listTrash: async () => (window.__trashStub || []),
+    restoreTrashItem: async (n) => ({ success: true, restoredPath: '/nb/restored.md' }),
+    deleteTrashItem: async (n) => true,
+    emptyTrash: async () => ({ removed: 1 }),
+    listNoteHistory: async (p) => (window.__historyStub || []),
+    readNoteHistory: async (p, id) => '# Old version\n\nOld content.',
+    restoreNoteHistory: async (p, id) => true,
     platform,
     getSettings: async () => ({
       notebookRoot: '/nb', defaultPageWidth: 'standard', defaultMermaidZoom: 100,
@@ -177,7 +188,7 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
     toggleMermaidOrientation: () => {},
     openExternal: async () => true,
     resolveRelativePath: (base, rel) => rel,
-    renderMarkdown,
+    renderMarkdown: (text, opts) => renderMarkdown(text),
   };
 }, { noteMd: NOTE_MD, platform: PLATFORM, xssTitle: XSS_TITLE });
 

@@ -3,13 +3,11 @@
 <head>
   <meta charset="utf-8">
   <title>Markdown Notebook</title>
+  <link rel="stylesheet" href="vendor/fonts.css">
   <link rel="stylesheet" href="vendor/github-markdown.css">
   <link rel="stylesheet" href="vendor/github-dark.css" id="hljs-dark">
   <link rel="stylesheet" href="vendor/github-light.css" id="hljs-light" disabled>
-  <link rel="stylesheet" href="style.css?v=4">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css?v=5">
 </head>
 <body class="dark-theme">
   <!-- Frameless titlebar padding for macOS -->
@@ -85,6 +83,9 @@
         </div>
         <div id="notebook-tree" class="file-tree">
           <!-- Tree nodes dynamically injected here -->
+        </div>
+        <div id="content-search-results" style="display: none;">
+          <!-- Full-text matches injected here -->
         </div>
       </div>
 
@@ -215,6 +216,8 @@
               <div class="table-grid" id="table-selection-grid">
                 <!-- Dynamically populated 8x8 grid cells -->
               </div>
+              <div class="dropdown-item" onclick="openTableEditor('insert')" title="Build a table visually with a grid editor">Open Table Editor…</div>
+              <div class="dropdown-item" onclick="openTableEditor('edit')" title="Edit the markdown table under the text cursor">Edit Table at Cursor</div>
             </div>
           </div>
  
@@ -265,12 +268,19 @@
               <div class="dropdown-item" onclick="importFromClipboard()" title="Import Rich Text or HTML from Clipboard as a note">Paste Note from Clipboard</div>
               <div class="dropdown-item" onclick="importDocFile()" title="Import DOCX/PPTX/XLSX file via Pandoc">Import Doc via Pandoc</div>
               <div class="dropdown-item" onclick="exportToPdf()" title="Export current note to PDF">Export to PDF</div>
+              <div class="dropdown-item" onclick="showHistoryModal()" title="Browse and restore earlier saved versions of this note">Note History</div>
+              <div class="dropdown-item" onclick="showTrashModal()" title="Restore or permanently delete trashed notes">Trash</div>
             </div>
           </div>
           <button class="icon-btn" id="btn-toggle-outline" onclick="toggleRightDrawer()" title="Toggle Outline & Backlinks">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="21" y1="10" x2="7" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="21" y1="18" x2="7" y2="18"/></svg>
           </button>
         </div>
+      </div>
+
+      <!-- OPEN NOTE TABS -->
+      <div id="tab-strip" style="display: none;">
+        <!-- Tabs injected by renderTabStrip() -->
       </div>
 
       <!-- MAIN NOTE WORKSPACE -->
@@ -662,6 +672,75 @@
     </div>
   </div>
 
+  <!-- Table Editor Modal -->
+  <div id="table-editor-modal" class="modal-overlay">
+    <div class="glass-card modal-card builder-card">
+      <div class="modal-header">
+        <h3>Table Editor</h3>
+        <button class="close-btn" onclick="hideTableEditorModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="table-editor-grid" class="table-editor-grid">
+          <!-- Grid rendered by renderTableEditorGrid() -->
+        </div>
+        <div class="form-group" style="margin-top: 16px;">
+          <label>Markdown Output</label>
+          <textarea id="table-editor-output" rows="6" readonly class="builder-code" spellcheck="false"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="hideTableEditorModal()">Cancel</button>
+        <button id="table-editor-apply" class="btn btn-primary" onclick="applyTableEditor()">Insert Table</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Trash Modal -->
+  <div id="trash-modal" class="modal-overlay">
+    <div class="glass-card modal-card">
+      <div class="modal-header">
+        <h3>Trash</h3>
+        <button class="close-btn" onclick="hideTrashModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="templates-help">Deleted pages and sections are kept here until you restore them or empty the trash.</p>
+        <div id="trash-list" class="template-list">
+          <!-- Trash rows injected here -->
+        </div>
+      </div>
+      <div class="modal-footer" style="justify-content: space-between;">
+        <button class="btn btn-outline" onclick="confirmEmptyTrash()" title="Permanently delete everything in the trash">Empty Trash</button>
+        <button class="btn btn-primary" onclick="hideTrashModal()">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Note History Modal -->
+  <div id="history-modal" class="modal-overlay">
+    <div class="glass-card modal-card builder-card">
+      <div class="modal-header">
+        <h3>Note History</h3>
+        <button class="close-btn" onclick="hideHistoryModal()">&times;</button>
+      </div>
+      <div class="modal-body history-body">
+        <div class="history-sidebar">
+          <div id="history-list" class="history-list">
+            <!-- Snapshot entries injected here -->
+          </div>
+        </div>
+        <div class="history-preview-wrap">
+          <div id="history-preview" class="history-preview markdown-body">
+            <div class="builder-preview-placeholder">Select a snapshot to preview it</div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="hideHistoryModal()">Close</button>
+        <button id="history-restore-btn" class="btn btn-primary" onclick="restoreSelectedHistory()" disabled>Restore This Version</button>
+      </div>
+    </div>
+  </div>
+
   <!-- PDF Export Options Modal -->
   <div id="pdf-export-modal" class="modal-overlay">
     <div class="glass-card modal-card">
@@ -763,7 +842,7 @@
           <div class="form-group">
             <label style="display: flex; justify-content: space-between; align-items: center;">
               Diagram Type
-              <button type="button" class="btn btn-xs btn-outline" onclick="loadBuilderExample()" title="Fill the form with a working example for this diagram type">
+              <button type="button" id="builder-example-btn" class="btn btn-xs btn-outline" onclick="loadBuilderExample()" title="Fill the form with a working example for this diagram type">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 4px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
                 See Example
               </button>
@@ -776,6 +855,11 @@
               <option value="class">Class — software structure</option>
               <option value="state">State — lifecycle &amp; transitions</option>
               <option value="journey">User Journey — steps &amp; mood</option>
+              <option value="er">ER — data &amp; relationships</option>
+              <option value="timeline">Timeline — events by period</option>
+              <option value="mindmap">Mindmap — branching ideas</option>
+              <option value="quadrant">Quadrant — 2×2 prioritization</option>
+              <option value="custom">Custom — write Mermaid directly</option>
             </select>
           </div>
 
@@ -866,6 +950,66 @@
             </div>
           </div>
 
+          <div id="builder-fields-er" style="display: none;">
+            <div class="form-group">
+              <label>Entities (one per line: Name: field1, field2)</label>
+              <textarea id="builder-er-entities" rows="5" oninput="updateBuilderCode()" placeholder="Customer: id, name&#10;Order: id, total" spellcheck="false"></textarea>
+              <p class="builder-hint">Write "int id" to give a field a type; bare fields are typed "string".</p>
+            </div>
+            <div class="form-group">
+              <label>Relationships (one per line)</label>
+              <textarea id="builder-er-relations" rows="4" oninput="updateBuilderCode()" placeholder="Customer one-to-many Order: places" spellcheck="false"></textarea>
+              <p class="builder-hint">Use one-to-one, one-to-many, many-to-one or many-to-many (or 1-1, 1-n, n-1, n-n). The label after ":" is optional.</p>
+            </div>
+          </div>
+
+          <div id="builder-fields-timeline" style="display: none;">
+            <div class="form-group">
+              <label>Timeline Title</label>
+              <input type="text" id="builder-timeline-title" oninput="updateBuilderCode()" placeholder="e.g. Company milestones">
+            </div>
+            <div class="form-group">
+              <label>Events (one per line: Period: event; another event)</label>
+              <textarea id="builder-timeline-events" rows="6" oninput="updateBuilderCode()" placeholder="2023: Founded; First hire&#10;2024: Product launch" spellcheck="false"></textarea>
+              <p class="builder-hint">Separate multiple events in one period with semicolons.</p>
+            </div>
+          </div>
+
+          <div id="builder-fields-mindmap" style="display: none;">
+            <div class="form-group">
+              <label>Outline (first line is the center; indent 2 spaces per level)</label>
+              <textarea id="builder-mindmap-outline" rows="8" oninput="updateBuilderCode()" placeholder="Project Plan&#10;  Research&#10;    Competitors&#10;  Design" spellcheck="false"></textarea>
+              <p class="builder-hint">Each indented line branches off the line above it.</p>
+            </div>
+          </div>
+
+          <div id="builder-fields-quadrant" style="display: none;">
+            <div class="form-group">
+              <label>Chart Title</label>
+              <input type="text" id="builder-quadrant-title" oninput="updateBuilderCode()" placeholder="e.g. Effort vs Impact">
+            </div>
+            <div class="form-group builder-axis-grid">
+              <div><label>X axis, left</label><input type="text" id="builder-quadrant-xleft" oninput="updateBuilderCode()" placeholder="Low Effort"></div>
+              <div><label>X axis, right</label><input type="text" id="builder-quadrant-xright" oninput="updateBuilderCode()" placeholder="High Effort"></div>
+              <div><label>Y axis, bottom</label><input type="text" id="builder-quadrant-ybottom" oninput="updateBuilderCode()" placeholder="Low Impact"></div>
+              <div><label>Y axis, top</label><input type="text" id="builder-quadrant-ytop" oninput="updateBuilderCode()" placeholder="High Impact"></div>
+            </div>
+            <div class="form-group builder-axis-grid">
+              <div><label>Top-right quadrant</label><input type="text" id="builder-quadrant-q1" oninput="updateBuilderCode()" placeholder="Strategic bets"></div>
+              <div><label>Top-left quadrant</label><input type="text" id="builder-quadrant-q2" oninput="updateBuilderCode()" placeholder="Quick wins"></div>
+              <div><label>Bottom-left quadrant</label><input type="text" id="builder-quadrant-q3" oninput="updateBuilderCode()" placeholder="Skip"></div>
+              <div><label>Bottom-right quadrant</label><input type="text" id="builder-quadrant-q4" oninput="updateBuilderCode()" placeholder="Money pits"></div>
+            </div>
+            <div class="form-group">
+              <label>Points (one per line: Name: x, y — both 0 to 1)</label>
+              <textarea id="builder-quadrant-points" rows="4" oninput="updateBuilderCode()" placeholder="Dark mode: 0.2, 0.7&#10;Rewrite backend: 0.9, 0.8" spellcheck="false"></textarea>
+            </div>
+          </div>
+
+          <div id="builder-fields-custom" style="display: none;">
+            <p class="builder-hint" style="margin-bottom: 12px;">Raw Mermaid mode — edit the code below directly. The live preview updates as you type.</p>
+          </div>
+
           <div class="form-group">
             <label>Mermaid Code (advanced — editable)</label>
             <textarea id="builder-code" rows="7" oninput="scheduleBuilderPreview()" spellcheck="false" class="builder-code"></textarea>
@@ -881,7 +1025,7 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-outline" onclick="hideMermaidBuilder()">Cancel</button>
-        <button class="btn btn-primary" onclick="insertBuilderDiagram()">Insert into Note</button>
+        <button id="builder-apply-btn" class="btn btn-primary" onclick="insertBuilderDiagram()">Insert into Note</button>
       </div>
     </div>
   </div>

@@ -13,7 +13,8 @@
     "pretest:e2e": "tsc",
     "test:e2e": "playwright test",
     "test:renderer": "node tests/renderer/smoke.spec.mjs darwin && node tests/renderer/smoke.spec.mjs win32",
-    "test:ui-audit": "node tests/renderer/ui-audit.mjs"
+    "test:ui-audit": "node tests/renderer/ui-audit.mjs",
+    "fonts:sync": "node scripts/sync-fonts.mjs"
   },
   "dependencies": {
     "chokidar": "^3.6.0",
