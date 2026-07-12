@@ -1,7 +1,8 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import MarkdownIt from 'markdown-it';
 import hljs from 'highlight.js';
 import * as path from 'path';
+import { pathToFileURL } from 'url';
 
 // Custom Markdown-it renderer (typed as any to prevent circular type initializer warnings)
 const md: any = new MarkdownIt({
@@ -66,6 +67,9 @@ md.renderer.rules.fence = (tokens: any[], idx: number, options: any, env: any, s
         <button class="mermaid-action-btn" onclick="window.api.toggleMermaidOrientation(${mapLine})" title="Toggle Diagram Orientation">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
         </button>
+        <button class="mermaid-action-btn" onclick="editMermaidDiagram(this)" title="Edit Diagram in Builder">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+        </button>
       </div>
       <pre class="notebook-mermaid" data-line="${mapLine}">${escapeHtml(code)}</pre>
     </div>\n`;
@@ -114,6 +118,26 @@ md.inline.ruler.after('link', 'notebook-wiki-link', (state: any, silent: boolean
   state.pos = end + 2;
   return true;
 });
+
+// 3b. Image src resolution: the document is loaded from the app's renderer
+// directory, so relative image paths in notes would resolve to the wrong
+// place. When env.resourceBase is set (the active note's directory), rewrite
+// relative srcs to absolute file:// URLs. Also fixes PDF export, whose temp
+// print HTML inherits the absolute URLs.
+const defaultImage = md.renderer.rules.image || ((tokens: any[], idx: number, options: any, env: any, self: any) => self.renderToken(tokens, idx, options));
+md.renderer.rules.image = (tokens: any[], idx: number, options: any, env: any, self: any) => {
+  const base = env && env.resourceBase;
+  if (base) {
+    const src = tokens[idx].attrGet('src') || '';
+    const isAbsoluteOrScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(src) || src.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(src);
+    if (src && !isAbsoluteOrScheme) {
+      try {
+        tokens[idx].attrSet('src', pathToFileURL(path.resolve(base, decodeURI(src))).href);
+      } catch {}
+    }
+  }
+  return defaultImage(tokens, idx, options, env, self);
+};
 
 // 4. External link target blank
 const defaultLinkOpen = md.renderer.rules.link_open || ((tokens: any[], idx: number, options: any, env: any, self: any) => self.renderToken(tokens, idx, options));
@@ -217,6 +241,25 @@ contextBridge.exposeInMainWorld('api', {
 
   // Backlinks (computed in the main process in one pass)
   getBacklinks: (filePath: string) => ipcRenderer.invoke('get-backlinks', filePath),
+
+  // Full-text search over note contents
+  searchNotes: (query: string, opts?: { maxResults?: number }) => ipcRenderer.invoke('search-notes', query, opts),
+
+  // Attachments
+  saveAttachment: (payload: { baseName: string; bytes: ArrayBuffer; notePath: string }) => ipcRenderer.invoke('save-attachment', payload),
+  importAttachmentFile: (payload: { sourcePath: string; notePath: string }) => ipcRenderer.invoke('import-attachment-file', payload),
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
+
+  // Trash
+  listTrash: () => ipcRenderer.invoke('list-trash'),
+  restoreTrashItem: (trashName: string) => ipcRenderer.invoke('restore-trash-item', trashName),
+  deleteTrashItem: (trashName: string) => ipcRenderer.invoke('delete-trash-item', trashName),
+  emptyTrash: () => ipcRenderer.invoke('empty-trash'),
+
+  // Note history
+  listNoteHistory: (filePath: string) => ipcRenderer.invoke('list-note-history', filePath),
+  readNoteHistory: (filePath: string, id: string) => ipcRenderer.invoke('read-note-history', filePath, id),
+  restoreNoteHistory: (filePath: string, id: string) => ipcRenderer.invoke('restore-note-history', filePath, id),
   
   // Utility events
   onFilesChanged: (callback: () => void) => {
@@ -233,8 +276,9 @@ contextBridge.exposeInMainWorld('api', {
   openExternal: (url: string) => ipcRenderer.invoke('open-external', url),
   resolveRelativePath: (basePath: string, relPath: string) => path.resolve(path.dirname(basePath), relPath),
   
-  // Local Markdown rendering
-  renderMarkdown: (text: string) => {
+  // Local Markdown rendering. opts.resourceBase (the note's directory)
+  // enables relative image resolution — see the image rule above.
+  renderMarkdown: (text: string, opts?: { resourceBase?: string }) => {
     let body = text;
     // Strip YAML frontmatter (the closing --- must sit on its own line, so a
     // horizontal rule or table row later in the note can't truncate content)
@@ -248,8 +292,8 @@ contextBridge.exposeInMainWorld('api', {
 
     // Strip first H1 heading if it is at the very start of the note body (run after stripping TOC)
     body = body.replace(/^([ \t]*\r?\n)*#[ \t]+.+(\r?\n|$)/, '');
-    
-    return md.render(body);
+
+    return md.render(body, { resourceBase: opts?.resourceBase || '' });
   },
 });
 

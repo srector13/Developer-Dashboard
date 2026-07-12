@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as crypto from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
@@ -29,6 +30,7 @@ interface AppSettings {
   theme: ThemeName;
   ignoreFolders: string[];
   templatesFolder: string;
+  attachmentsFolder: string;
   author: string;
   scratchpadFile: string;
   autoSaveEnabled: boolean;
@@ -43,6 +45,7 @@ const defaultSettings: AppSettings = {
   theme: 'system',
   ignoreFolders: ['_media', 'attachments', 'templates', 'node_modules', '.git', '.vscode'],
   templatesFolder: 'templates',
+  attachmentsFolder: 'attachments',
   author: '',
   scratchpadFile: 'scratchpad.md',
   autoSaveEnabled: false,
@@ -54,6 +57,12 @@ function migrateSettings(raw: Partial<AppSettings>): AppSettings {
   const merged: AppSettings = { ...defaultSettings, ...raw, pdfExport: { ...defaultSettings.pdfExport, ...(raw.pdfExport || {}) } };
   if (!raw.theme && raw.previewTheme) {
     merged.theme = raw.previewTheme === 'github-dark' ? 'dark' : raw.previewTheme === 'off' ? 'light' : 'system';
+  }
+  // The attachments folder must stay out of the notebook tree (same coupling
+  // rule as the templates folder).
+  if (merged.attachmentsFolder &&
+      !merged.ignoreFolders.some(f => f.toLowerCase() === merged.attachmentsFolder.toLowerCase())) {
+    merged.ignoreFolders = [...merged.ignoreFolders, merged.attachmentsFolder];
   }
   return merged;
 }
@@ -133,10 +142,17 @@ async function updateWatcher() {
     watcher = null;
   }
   if (settings.notebookRoot && fs.existsSync(settings.notebookRoot)) {
+    const ignoreSegments = new Set(settings.ignoreFolders.map(s => s.toLowerCase()));
     try {
       watcher = fs.watch(settings.notebookRoot, { recursive: true }, (event, filename) => {
         if (filename && (filename.startsWith('.') || filename.includes('node_modules') || filename.includes('.notebook-order'))) {
           return;
+        }
+        // Ignored folders (attachments, templates, _media, ...) don't appear
+        // in the tree, so churn inside them shouldn't trigger rescans.
+        if (filename) {
+          const firstSegment = filename.split(/[\\/]/)[0].toLowerCase();
+          if (ignoreSegments.has(firstSegment)) return;
         }
         notifyFilesChanged();
       });
@@ -309,12 +325,25 @@ function parseDailyKey(filename: string): string | undefined {
   return m ? m[1] : undefined;
 }
 
+// Full-text search index. Built as a side effect of the tree scan (which
+// already reads every note) and swapped atomically per get-notebook-tree, so
+// it is exactly as fresh as the sidebar and costs zero extra file reads.
+interface SearchDoc {
+  fsPath: string;
+  relPath: string;
+  title: string;
+  lines: string[];
+}
+let searchIndex: Map<string, SearchDoc> = new Map();
+const SEARCH_MAX_INDEXED_FILE = 1_000_000; // bytes; skip pathological files
+
 async function scanDirectory(
   dir: string,
   rootDir: string,
   ignore: Set<string>,
   scratchpadFile: string,
   shallow = false, // skip subdirectory recursion (move-node only needs one dir)
+  collector?: Map<string, SearchDoc>, // populated only by get-notebook-tree
 ): Promise<SectionNode> {
   const relative = path.relative(rootDir, dir).replace(/\\/g, '/');
   const sectionNode: SectionNode = {
@@ -337,7 +366,7 @@ async function scanDirectory(
 
     if (entry.isDirectory()) {
       if (!shallow) {
-        const childSec = await scanDirectory(fullPath, rootDir, ignore, scratchpadFile);
+        const childSec = await scanDirectory(fullPath, rootDir, ignore, scratchpadFile, false, collector);
         sectionNode.sections.push(childSec);
       }
     } else if (entry.isFile() && entry.name.endsWith('.md')) {
@@ -348,6 +377,14 @@ async function scanDirectory(
       try {
         const text = await fsp.readFile(fullPath, 'utf8');
         const meta = parseNoteMeta(text, fullPath);
+        if (collector && text.length <= SEARCH_MAX_INDEXED_FILE) {
+          collector.set(fullPath, {
+            fsPath: fullPath,
+            relPath: path.relative(rootDir, fullPath).replace(/\\/g, '/'),
+            title: meta.title,
+            lines: text.split(/\r?\n/),
+          });
+        }
         sectionNode.pages.push({
           kind: 'page',
           name: entry.name,
@@ -412,13 +449,25 @@ async function scanDirectory(
 
 // IPC Operations API Setup
 ipcMain.handle('get-settings', () => readSettings());
-ipcMain.handle('save-settings', (event, settings) => writeSettings(settings));
+ipcMain.handle('save-settings', async (event, settings) => {
+  const before = await readSettings();
+  const updated = await writeSettings(settings);
+  // Re-arm the watcher when anything it depends on changed (it used to be
+  // re-armed only by select-folder, so ignoreFolders edits never applied)
+  if (updated.notebookRoot !== before.notebookRoot ||
+      JSON.stringify(updated.ignoreFolders) !== JSON.stringify(before.ignoreFolders)) {
+    await updateWatcher();
+  }
+  return updated;
+});
 
 ipcMain.handle('get-notebook-tree', async (event, rootPath, filterTag) => {
   if (!rootPath || !fs.existsSync(rootPath)) return null;
   const settings = await readSettings();
   const ignore = new Set(settings.ignoreFolders.map(s => s.toLowerCase()));
-  const rootNode = await scanDirectory(rootPath, rootPath, ignore, settings.scratchpadFile);
+  const collector = new Map<string, SearchDoc>();
+  const rootNode = await scanDirectory(rootPath, rootPath, ignore, settings.scratchpadFile, false, collector);
+  searchIndex = collector; // atomic swap: deleted files vanish from search
 
   // Apply Tag Filtering recursively if filterTag is present
   if (filterTag) {
@@ -440,8 +489,125 @@ ipcMain.handle('read-note', async (event, filePath) => {
   return await fsp.readFile(filePath, 'utf8');
 });
 
-ipcMain.handle('write-note', async (event, filePath, content) => {
+// ==========================================
+// NOTE HISTORY (bounded save snapshots under <root>/.history/)
+// ==========================================
+
+const HISTORY_MAX_SNAPSHOTS = 20;
+const HISTORY_MIN_INTERVAL_MS = 5 * 60 * 1000;
+
+interface HistoryIndex {
+  relPath: string;
+  entries: Array<{ id: string; savedAt: string; size: number }>;
+}
+
+function historyDirFor(root: string, filePath: string): string {
+  const rel = path.relative(root, filePath).replace(/\\/g, '/');
+  const hash = crypto.createHash('sha1').update(rel).digest('hex').slice(0, 12);
+  return path.join(root, '.history', hash);
+}
+
+async function readHistoryIndex(dir: string, relPath: string): Promise<HistoryIndex> {
+  try {
+    const data = JSON.parse(await fsp.readFile(path.join(dir, 'index.json'), 'utf8'));
+    if (Array.isArray(data.entries)) return { relPath: data.relPath || relPath, entries: data.entries };
+  } catch {}
+  return { relPath, entries: [] };
+}
+
+async function writeHistoryIndex(dir: string, index: HistoryIndex): Promise<void> {
+  await fsp.writeFile(path.join(dir, 'index.json'), JSON.stringify(index, null, 2), 'utf8');
+}
+
+// Snapshot `content` (the note's PREVIOUS state) for filePath. Rate-limited
+// unless force is set (used by restore, which must always be undoable).
+async function snapshotNote(root: string, filePath: string, content: string, force = false): Promise<void> {
+  const rel = path.relative(root, filePath).replace(/\\/g, '/');
+  const dir = historyDirFor(root, filePath);
+  await fsp.mkdir(dir, { recursive: true });
+  const index = await readHistoryIndex(dir, rel);
+
+  if (!force && index.entries.length > 0) {
+    const newest = Date.parse(index.entries[0].savedAt);
+    if (!isNaN(newest) && Date.now() - newest < HISTORY_MIN_INTERVAL_MS) return;
+  }
+
+  const savedAt = new Date().toISOString();
+  const id = savedAt.replace(/[:.]/g, '-');
+  await fsp.writeFile(path.join(dir, `${id}.md`), content, 'utf8');
+  index.relPath = rel;
+  index.entries.unshift({ id, savedAt, size: Buffer.byteLength(content, 'utf8') });
+
+  // Prune oldest beyond the cap
+  while (index.entries.length > HISTORY_MAX_SNAPSHOTS) {
+    const dropped = index.entries.pop()!;
+    await fsp.unlink(path.join(dir, `${dropped.id}.md`)).catch(() => {});
+  }
+  await writeHistoryIndex(dir, index);
+}
+
+// Shared write path: snapshots the previous on-disk content when it changed
+// materially. History lives under dot-prefixed .history/, so these writes
+// never wake the watcher.
+async function writeNoteFile(filePath: string, content: string, opts: { snapshot?: boolean; forceSnapshot?: boolean } = {}): Promise<void> {
+  if (opts.snapshot) {
+    try {
+      const settings = await readSettings();
+      const root = settings.notebookRoot;
+      if (root && !path.relative(root, filePath).startsWith('..')) {
+        const prev = await fsp.readFile(filePath, 'utf8').catch(() => null);
+        if (prev !== null && prev !== content) {
+          await snapshotNote(root, filePath, prev, opts.forceSnapshot);
+        }
+      }
+    } catch (err) {
+      console.error('History snapshot failed:', err);
+    }
+  }
   await fsp.writeFile(filePath, content, 'utf8');
+}
+
+ipcMain.handle('write-note', async (event, filePath, content) => {
+  await writeNoteFile(filePath, content, { snapshot: true });
+  notifyFilesChanged();
+  return true;
+});
+
+const HISTORY_ID_RE = /^[\w\-]+$/; // snapshot ids are ISO stamps with [:.]→-
+
+ipcMain.handle('list-note-history', async (event, filePath: string) => {
+  const settings = await readSettings();
+  if (!settings.notebookRoot) return [];
+  const dir = historyDirFor(settings.notebookRoot, filePath);
+  const rel = path.relative(settings.notebookRoot, filePath).replace(/\\/g, '/');
+  const index = await readHistoryIndex(dir, rel);
+  return index.entries;
+});
+
+ipcMain.handle('read-note-history', async (event, filePath: string, id: string) => {
+  const settings = await readSettings();
+  if (!settings.notebookRoot || !HISTORY_ID_RE.test(id)) return '';
+  const dir = historyDirFor(settings.notebookRoot, filePath);
+  try {
+    return await fsp.readFile(path.join(dir, `${id}.md`), 'utf8');
+  } catch {
+    return '';
+  }
+});
+
+ipcMain.handle('restore-note-history', async (event, filePath: string, id: string) => {
+  const settings = await readSettings();
+  if (!settings.notebookRoot || !HISTORY_ID_RE.test(id)) return false;
+  const dir = historyDirFor(settings.notebookRoot, filePath);
+  let snapshot: string;
+  try {
+    snapshot = await fsp.readFile(path.join(dir, `${id}.md`), 'utf8');
+  } catch {
+    return false;
+  }
+  // Snapshot the current content first (bypassing the rate limit) so a
+  // restore is itself undoable, then write the historical content.
+  await writeNoteFile(filePath, snapshot, { snapshot: true, forceSnapshot: true });
   notifyFilesChanged();
   return true;
 });
@@ -459,14 +625,18 @@ function slug(s: string): string {
     .slice(0, 60);
 }
 
-async function uniqueMd(dir: string, baseSlug: string): Promise<string> {
-  let candidate = `${baseSlug}.md`;
+async function uniqueFile(dir: string, base: string, ext: string): Promise<string> {
+  let candidate = `${base}.${ext}`;
   let i = 1;
   while (fs.existsSync(path.join(dir, candidate))) {
-    candidate = `${baseSlug}-${i}.md`;
+    candidate = `${base}-${i}.${ext}`;
     i++;
   }
   return candidate;
+}
+
+async function uniqueMd(dir: string, baseSlug: string): Promise<string> {
+  return uniqueFile(dir, baseSlug, 'md');
 }
 
 // Local date string (YYYY-MM-DD); toISOString() would shift the date near midnight
@@ -547,26 +717,198 @@ ipcMain.handle('create-section', async (event, dirPath, name) => {
   return fullPath;
 });
 
-ipcMain.handle('delete-node', async (event, filePath) => {
-  if (fs.existsSync(filePath)) {
-    const stat = await fsp.stat(filePath);
-    if (stat.isDirectory()) {
-      await fsp.rm(filePath, { recursive: true });
-    } else {
-      await fsp.unlink(filePath);
-      // Remove from order file
-      const dir = path.dirname(filePath);
-      const name = path.basename(filePath);
-      const ord = await readOrderFile(dir);
-      const idx = ord.indexOf(name);
-      if (idx !== -1) {
-        ord.splice(idx, 1);
-        await writeOrderFile(dir, ord);
-      }
-    }
-    notifyFilesChanged();
+// ==========================================
+// TRASH (soft delete into <root>/.trash/ with sidecar metadata)
+// ==========================================
+
+function trashDirFor(root: string): string {
+  return path.join(root, '.trash');
+}
+
+interface TrashMeta {
+  originalRelPath: string;
+  deletedAt: string;
+  kind: 'page' | 'section';
+  title: string;
+}
+
+// Move a file or whole folder into the trash; returns the trash entry name.
+async function moveToTrash(root: string, filePath: string): Promise<string> {
+  const trashDir = trashDirFor(root);
+  await fsp.mkdir(trashDir, { recursive: true });
+
+  const stat = await fsp.stat(filePath);
+  const isDir = stat.isDirectory();
+  const stamp = attachmentTimestamp();
+  const base = path.basename(filePath);
+  let trashName = `${stamp}-${base}`;
+  let i = 1;
+  while (fs.existsSync(path.join(trashDir, trashName))) {
+    trashName = `${stamp}-${i}-${base}`;
+    i++;
   }
+  const dest = path.join(trashDir, trashName);
+
+  try {
+    await fsp.rename(filePath, dest);
+  } catch {
+    // Cross-device fallback
+    await fsp.cp(filePath, dest, { recursive: true });
+    await fsp.rm(filePath, { recursive: true });
+  }
+
+  let title = cleanDisplayName(isDir ? base : path.basename(base, '.md'));
+  if (!isDir) {
+    try {
+      title = parseNoteMeta(await fsp.readFile(dest, 'utf8'), dest).title;
+    } catch {}
+  }
+  const meta: TrashMeta = {
+    originalRelPath: path.relative(root, filePath).replace(/\\/g, '/'),
+    deletedAt: new Date().toISOString(),
+    kind: isDir ? 'section' : 'page',
+    title,
+  };
+  await fsp.writeFile(path.join(trashDir, `${trashName}.trashmeta.json`), JSON.stringify(meta, null, 2), 'utf8');
+  return trashName;
+}
+
+ipcMain.handle('delete-node', async (event, filePath) => {
+  if (!fs.existsSync(filePath)) return true;
+  const settings = await readSettings();
+  const root = settings.notebookRoot;
+  const rel = root ? path.relative(root, filePath) : '..';
+
+  if (!root || rel.startsWith('..') || path.isAbsolute(rel)) {
+    // Outside the notebook (e.g. absolute templates dir): hard delete as before
+    await fsp.rm(filePath, { recursive: true });
+  } else {
+    await moveToTrash(root, filePath);
+  }
+
+  // Remove pages from their folder's order file
+  if (filePath.endsWith('.md')) {
+    const dir = path.dirname(filePath);
+    const name = path.basename(filePath);
+    const ord = await readOrderFile(dir).catch(() => [] as string[]);
+    const idx = ord.indexOf(name);
+    if (idx !== -1) {
+      ord.splice(idx, 1);
+      await writeOrderFile(dir, ord);
+    }
+  }
+  notifyFilesChanged();
   return true;
+});
+
+ipcMain.handle('list-trash', async () => {
+  const settings = await readSettings();
+  if (!settings.notebookRoot) return [];
+  const trashDir = trashDirFor(settings.notebookRoot);
+
+  let entries: fs.Dirent[] = [];
+  try {
+    entries = await fsp.readdir(trashDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const items: Array<TrashMeta & { trashName: string }> = [];
+  for (const entry of entries) {
+    if (entry.name.endsWith('.trashmeta.json')) continue;
+    let meta: TrashMeta = {
+      originalRelPath: entry.name.replace(/^\d{8}-\d{6}-/, ''),
+      deletedAt: '',
+      kind: entry.isDirectory() ? 'section' : 'page',
+      title: cleanDisplayName(entry.name.replace(/^\d{8}-\d{6}-/, '').replace(/\.md$/i, '')),
+    };
+    try {
+      meta = { ...meta, ...JSON.parse(await fsp.readFile(path.join(trashDir, `${entry.name}.trashmeta.json`), 'utf8')) };
+    } catch {}
+    items.push({ ...meta, trashName: entry.name });
+  }
+  items.sort((a, b) => (b.deletedAt || '').localeCompare(a.deletedAt || ''));
+  return items;
+});
+
+// Trash entry names come back from list-trash; refuse anything path-like.
+function safeTrashName(trashName: string): boolean {
+  return !!trashName && !trashName.includes('/') && !trashName.includes('\\') && trashName !== '.' && trashName !== '..';
+}
+
+ipcMain.handle('restore-trash-item', async (event, trashName: string) => {
+  const settings = await readSettings();
+  if (!settings.notebookRoot || !safeTrashName(trashName)) return { success: false, reason: 'Invalid item.' };
+  const trashDir = trashDirFor(settings.notebookRoot);
+  const src = path.join(trashDir, trashName);
+  if (!fs.existsSync(src)) return { success: false, reason: 'Item no longer in trash.' };
+
+  let originalRelPath = trashName.replace(/^\d{8}-\d{6}-/, '');
+  try {
+    const meta = JSON.parse(await fsp.readFile(`${src}.trashmeta.json`, 'utf8'));
+    if (meta.originalRelPath) originalRelPath = meta.originalRelPath;
+  } catch {}
+
+  let target = path.join(settings.notebookRoot, originalRelPath);
+  await fsp.mkdir(path.dirname(target), { recursive: true });
+
+  if (fs.existsSync(target)) {
+    // Collision: uniquify
+    const dir = path.dirname(target);
+    const base = path.basename(target);
+    if (base.toLowerCase().endsWith('.md')) {
+      target = path.join(dir, await uniqueMd(dir, base.slice(0, -3)));
+    } else {
+      let i = 1;
+      let candidate = `${base}-restored`;
+      while (fs.existsSync(path.join(dir, candidate))) candidate = `${base}-restored-${i++}`;
+      target = path.join(dir, candidate);
+    }
+  }
+
+  try {
+    await fsp.rename(src, target);
+  } catch {
+    await fsp.cp(src, target, { recursive: true });
+    await fsp.rm(src, { recursive: true });
+  }
+  await fsp.unlink(`${src}.trashmeta.json`).catch(() => {});
+
+  // Restored pages rejoin their folder's manual ordering
+  if (target.endsWith('.md')) {
+    const dir = path.dirname(target);
+    const ord = await readOrderFile(dir);
+    if (ord.length > 0 && !ord.includes(path.basename(target))) {
+      ord.push(path.basename(target));
+      await writeOrderFile(dir, ord);
+    }
+  }
+
+  notifyFilesChanged();
+  return { success: true, restoredPath: target };
+});
+
+ipcMain.handle('delete-trash-item', async (event, trashName: string) => {
+  const settings = await readSettings();
+  if (!settings.notebookRoot || !safeTrashName(trashName)) return false;
+  const src = path.join(trashDirFor(settings.notebookRoot), trashName);
+  await fsp.rm(src, { recursive: true, force: true });
+  await fsp.unlink(`${src}.trashmeta.json`).catch(() => {});
+  return true;
+});
+
+ipcMain.handle('empty-trash', async () => {
+  const settings = await readSettings();
+  if (!settings.notebookRoot) return { removed: 0 };
+  const trashDir = trashDirFor(settings.notebookRoot);
+  let removed = 0;
+  try {
+    for (const entry of await fsp.readdir(trashDir)) {
+      if (!entry.endsWith('.trashmeta.json')) removed++;
+      await fsp.rm(path.join(trashDir, entry), { recursive: true, force: true });
+    }
+  } catch {}
+  return { removed };
 });
 
 // Rename / Wiki-link updating logic
@@ -645,6 +987,76 @@ async function listMarkdownFiles(dir: string, ignore: Set<string>, rootDir: stri
   }
   return files;
 }
+
+// Full-text search over the index built by the tree scan.
+// A line matches when it contains every whitespace-separated term
+// (case-insensitive). Results are capped and carry highlight ranges.
+const SEARCH_MAX_FILES = 50;
+const SEARCH_MAX_SNIPPETS = 3;
+const SEARCH_MAX_LINE_MATCHES = 50;
+const SEARCH_SNIPPET_WIDTH = 160;
+
+function makeSearchSnippet(line: string, lower: string, terms: string[], lineIdx: number) {
+  const firstHit = Math.min(...terms.map(t => {
+    const i = lower.indexOf(t);
+    return i === -1 ? Infinity : i;
+  }));
+  let start = 0;
+  if (line.length > SEARCH_SNIPPET_WIDTH) {
+    start = Math.max(0, Math.min(firstHit - 40, line.length - SEARCH_SNIPPET_WIDTH));
+  }
+  const text = line.substr(start, SEARCH_SNIPPET_WIDTH);
+  const textLower = lower.substr(start, SEARCH_SNIPPET_WIDTH);
+
+  const ranges: Array<[number, number]> = [];
+  for (const term of terms) {
+    let idx = 0;
+    while ((idx = textLower.indexOf(term, idx)) !== -1) {
+      ranges.push([idx, term.length]);
+      idx += term.length;
+    }
+  }
+  ranges.sort((a, b) => a[0] - b[0]);
+  const merged: Array<[number, number]> = [];
+  for (const [s, l] of ranges) {
+    const last = merged[merged.length - 1];
+    if (last && s <= last[0] + last[1]) {
+      last[1] = Math.max(last[1], s + l - last[0]);
+    } else {
+      merged.push([s, l]);
+    }
+  }
+  return { line: lineIdx, text, ranges: merged };
+}
+
+ipcMain.handle('search-notes', async (event, query: string, opts?: { maxResults?: number }) => {
+  const q = String(query || '').trim();
+  if (q.length < 2) return [];
+  const terms = q.toLowerCase().split(/\s+/).filter(t => t);
+  if (terms.length === 0) return [];
+  const maxFiles = Math.min(Math.max(1, opts?.maxResults || SEARCH_MAX_FILES), SEARCH_MAX_FILES);
+
+  const results: Array<{ fsPath: string; relPath: string; title: string; matchCount: number; snippets: any[] }> = [];
+  for (const doc of searchIndex.values()) {
+    let matchCount = 0;
+    const snippets: any[] = [];
+    for (let i = 0; i < doc.lines.length; i++) {
+      const lower = doc.lines[i].toLowerCase();
+      if (!terms.every(t => lower.includes(t))) continue;
+      matchCount++;
+      if (snippets.length < SEARCH_MAX_SNIPPETS) {
+        snippets.push(makeSearchSnippet(doc.lines[i], lower, terms, i));
+      }
+      if (matchCount >= SEARCH_MAX_LINE_MATCHES) break;
+    }
+    if (matchCount > 0) {
+      results.push({ fsPath: doc.fsPath, relPath: doc.relPath, title: doc.title, matchCount, snippets });
+    }
+  }
+
+  results.sort((a, b) => b.matchCount - a.matchCount || a.title.localeCompare(b.title));
+  return results.slice(0, maxFiles);
+});
 
 // Find notes that link to the given file ([[wiki-links]] or markdown links).
 // One IPC round-trip with parallel reads in the main process replaces the
@@ -755,6 +1167,21 @@ ipcMain.handle('rename-node', async (event, filePath, newName) => {
       // Rename the file on disk
       await fsp.rename(filePath, newPath);
 
+      // Keep the note's history attached to its new path
+      const oldHistDir = historyDirFor(settings.notebookRoot, filePath);
+      if (fs.existsSync(oldHistDir)) {
+        const newHistDir = historyDirFor(settings.notebookRoot, newPath);
+        try {
+          await fsp.rename(oldHistDir, newHistDir);
+          const relNew = path.relative(settings.notebookRoot, newPath).replace(/\\/g, '/');
+          const index = await readHistoryIndex(newHistDir, relNew);
+          index.relPath = relNew;
+          await writeHistoryIndex(newHistDir, index);
+        } catch (err) {
+          console.error('Failed to migrate note history on rename:', err);
+        }
+      }
+
       // Update folder manual ordering file
       const oldOrderName = path.basename(filePath).toLowerCase();
       const ord = await readOrderFile(dir);
@@ -798,6 +1225,72 @@ ipcMain.handle('move-node', async (event, dirPath, fileName, direction) => {
   await writeOrderFile(dirPath, ord);
   notifyFilesChanged();
   return true;
+});
+
+// ==========================================
+// ATTACHMENTS
+// ==========================================
+
+function resolveAttachmentsDir(settings: AppSettings): string {
+  return path.isAbsolute(settings.attachmentsFolder)
+    ? settings.attachmentsFolder
+    : path.join(settings.notebookRoot, settings.attachmentsFolder);
+}
+
+const ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024;
+
+function attachmentTimestamp(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+function sanitizeExt(name: string, fallback: string): string {
+  const ext = path.extname(name).slice(1).toLowerCase().replace(/[^a-z0-9]/g, '');
+  return ext || fallback;
+}
+
+async function storeAttachment(
+  data: Buffer,
+  baseName: string,
+  defaultExt: string,
+  notePath: string,
+): Promise<{ success: boolean; fsPath?: string; relPath?: string; reason?: string }> {
+  const settings = await readSettings();
+  if (!settings.notebookRoot) return { success: false, reason: 'No notebook open.' };
+  if (data.length === 0) return { success: false, reason: 'Empty attachment.' };
+  if (data.length > ATTACHMENT_MAX_BYTES) return { success: false, reason: 'Attachment exceeds 50 MB.' };
+
+  const dir = resolveAttachmentsDir(settings);
+  await fsp.mkdir(dir, { recursive: true });
+
+  const ext = sanitizeExt(baseName, defaultExt);
+  const stem = slug(path.basename(baseName, path.extname(baseName))) || 'pasted-image';
+  const filename = await uniqueFile(dir, `${attachmentTimestamp()}-${stem}`, ext);
+  const fsPath = path.join(dir, filename);
+
+  await fsp.writeFile(fsPath, data);
+  // Deliberately no notifyFilesChanged: attachments aren't in the tree.
+
+  const relPath = path.relative(path.dirname(notePath), fsPath).replace(/\\/g, '/');
+  return { success: true, fsPath, relPath };
+}
+
+ipcMain.handle('save-attachment', async (event, payload: { baseName: string; bytes: ArrayBuffer; notePath: string }) => {
+  try {
+    return await storeAttachment(Buffer.from(payload.bytes), payload.baseName || 'pasted-image.png', 'png', payload.notePath);
+  } catch (err: any) {
+    return { success: false, reason: err?.message || String(err) };
+  }
+});
+
+ipcMain.handle('import-attachment-file', async (event, payload: { sourcePath: string; notePath: string }) => {
+  try {
+    const data = await fsp.readFile(payload.sourcePath);
+    return await storeAttachment(data, path.basename(payload.sourcePath), 'bin', payload.notePath);
+  } catch (err: any) {
+    return { success: false, reason: err?.message || String(err) };
+  }
 });
 
 // Update a note's frontmatter metadata (created/tags/pinned) in place,

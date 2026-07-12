@@ -78,6 +78,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('onboarding').classList.remove('active');
     document.getElementById('settings-root-path').value = notebookRoot;
     await refreshNotebook();
+
+    // Restore the previous session's open tabs and active note
+    const restoredActive = restoreTabs();
+    if (restoredActive && !activeNote) {
+      await openNote(restoredActive);
+    }
   } else {
     document.getElementById('onboarding').classList.add('active');
   }
@@ -105,6 +111,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Initialize drag-to-pan inside the mermaid popout viewer
   initPopoutPan();
+
+  // Paste-image and drag-drop attachment handling in the editor
+  initAttachmentHandlers();
 
   // Setup outside click listener for editor dropdowns
   window.addEventListener('click', (event) => {
@@ -252,7 +261,10 @@ async function refreshNotebook(resetActiveNote = false) {
   
   // Render sidebar tree
   renderSidebarTree();
-  
+
+  // Drop tabs whose files were deleted/renamed out from under them
+  pruneTabs();
+
   // Refresh tags display
   renderTagsCloud();
 
@@ -485,15 +497,98 @@ function findNodeByPath(node, filePath) {
 }
 
 // Search handler (debounced: the tree rebuild + tooltip rebinding is too
-// heavy to run on every keystroke in large notebooks)
+// heavy to run on every keystroke in large notebooks). Title filtering stays
+// local; content matches come from the main-process full-text index.
 let searchDebounceTimer = null;
+let contentSearchToken = 0;
+
 function handleSearch(val) {
   searchQuery = val;
   if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
   searchDebounceTimer = setTimeout(() => {
     searchDebounceTimer = null;
     renderSidebarTree();
+    runContentSearch(val);
   }, 120);
+}
+
+// Build safe highlighted HTML from a snippet: each slice is escaped
+// individually (the ranges refer to the raw text), matches wrapped in <mark>
+function highlightSnippet(text, ranges) {
+  let html = '';
+  let cursor = 0;
+  (ranges || []).forEach(([start, length]) => {
+    html += escapeHtml(text.slice(cursor, start));
+    html += `<mark>${escapeHtml(text.slice(start, start + length))}</mark>`;
+    cursor = start + length;
+  });
+  html += escapeHtml(text.slice(cursor));
+  return html;
+}
+
+async function runContentSearch(query) {
+  const container = document.getElementById('content-search-results');
+  if (!container) return;
+  const q = (query || '').trim();
+  if (q.length < 2) {
+    container.style.display = 'none';
+    container.innerHTML = '';
+    return;
+  }
+
+  const token = ++contentSearchToken;
+  let results = [];
+  try {
+    results = await window.api.searchNotes(q);
+  } catch (err) {
+    console.error('Content search failed:', err);
+    return;
+  }
+  if (token !== contentSearchToken) return; // stale response
+
+  if (!results.length) {
+    container.style.display = 'block';
+    container.innerHTML = '<div class="content-search-header">In note contents</div><div class="content-search-empty">No content matches</div>';
+    return;
+  }
+
+  container.style.display = 'block';
+  container.innerHTML = '<div class="content-search-header">In note contents</div>' + results.map(r => {
+    const snippet = r.snippets && r.snippets[0];
+    return `
+      <div class="content-search-item" onclick="openNoteAtLine(${jsArg(r.fsPath)}, ${snippet ? snippet.line : 0})">
+        <div class="content-search-title">
+          <span>${escapeHtml(r.title)}</span>
+          <span class="content-search-count">${r.matchCount}</span>
+        </div>
+        ${snippet ? `<div class="content-search-snippet">${highlightSnippet(snippet.text, snippet.ranges)}</div>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+// Open a note and reveal the given line (best effort: exact caret placement
+// in edit/split; proportional scroll in preview, which has no line anchors)
+async function openNoteAtLine(fsPath, line) {
+  await openNote(fsPath);
+  const lineIdx = Math.max(0, parseInt(line, 10) || 0);
+  if (viewMode === 'edit' || viewMode === 'split') {
+    const textarea = document.getElementById('note-editor');
+    const lines = textarea.value.split('\n');
+    let offset = 0;
+    for (let i = 0; i < Math.min(lineIdx, lines.length - 1); i++) {
+      offset += lines[i].length + 1;
+    }
+    textarea.focus();
+    textarea.setSelectionRange(offset, offset);
+    scrollEditorCaretIntoView(textarea);
+  } else {
+    const preview = document.getElementById('preview-pane');
+    const totalLines = noteContent.split('\n').length || 1;
+    // wait one tick for the render queue to finish laying out
+    await renderMarkdownPreview();
+    preview.scrollTop = Math.max(0, (lineIdx / totalLines) * preview.scrollHeight - preview.clientHeight / 3);
+  }
 }
 
 // Global tags modal cloud
@@ -566,6 +661,13 @@ async function openNote(filePath) {
     const modeToggles = document.querySelector('.mode-toggles');
     if (modeToggles) modeToggles.style.display = 'flex';
 
+    // Track the note in the tab strip
+    if (!openTabs.includes(filePath)) {
+      openTabs.push(filePath);
+    }
+    renderTabStrip();
+    persistTabs();
+
     // Reset view to default preview first, without rendering: renderActiveNote
     // below renders the preview once (previously this rendered twice per open)
     setViewMode('preview', { render: false });
@@ -588,6 +690,7 @@ function closeNoteCanvas() {
   document.getElementById('landing-workspace').style.display = 'none';
   document.getElementById('empty-state-canvas').style.display = 'flex';
   renderSidebarTree();
+  renderTabStrip();
 }
 
 // Render active note Markdown + Editor text fields
@@ -659,7 +762,10 @@ function renderMarkdownPreview() {
 
 async function doRenderMarkdownPreview() {
   const preview = document.getElementById('preview-pane');
-  const renderedHtml = window.api.renderMarkdown(noteContent);
+  // resourceBase lets relative image links (attachments) resolve correctly
+  const renderedHtml = window.api.renderMarkdown(noteContent, {
+    resourceBase: activeNote ? pathDirname(activeNote) : '',
+  });
   preview.innerHTML = renderedHtml;
 
   // Remember each diagram's source before Mermaid replaces it with an SVG,
@@ -897,6 +1003,10 @@ function updateSaveStatus(edited) {
     status.innerText = 'Saved';
     status.style.color = 'var(--accent-green)';
   }
+  // Dirty dot on the active tab (only the active note can be dirty under
+  // the single-active-note model)
+  const activeTab = document.querySelector('#tab-strip .note-tab.active');
+  if (activeTab) activeTab.classList.toggle('dirty', !!edited);
 }
 
 // Line Numbers counter
@@ -2169,13 +2279,13 @@ async function savePageInfo() {
   }
 }
 
-// Delete note node dialog
+// Delete note node dialog (soft delete: items go to the notebook trash)
 async function deleteNode(fsPath) {
   const isDir = fsPath && !fsPath.endsWith('.md');
-  const confirmMsg = isDir 
-    ? 'Are you sure you want to delete this section folder and ALL files inside it permanently?' 
-    : 'Are you sure you want to delete this note page?';
-    
+  const confirmMsg = isDir
+    ? 'Move this section folder and everything inside it to the Trash?'
+    : 'Move this note page to the Trash?';
+
   if (confirm(confirmMsg)) {
     const success = await window.api.deleteNode(fsPath);
     if (success) {
@@ -2183,6 +2293,7 @@ async function deleteNode(fsPath) {
         closeNoteCanvas();
       }
       await refreshNotebook();
+      showToast('Moved to Trash — restore it any time from File Actions → Trash.');
     }
   }
 }
@@ -2475,6 +2586,7 @@ async function openSection(relPath, fsPath) {
 
   await renderSectionLanding();
   renderSidebarTree();
+  renderTabStrip(); // clear the active-tab highlight (landings have no tab)
 }
 
 async function openRootLanding() {
@@ -2493,6 +2605,7 @@ async function openRootLanding() {
 
   await renderRootLanding();
   renderSidebarTree();
+  renderTabStrip(); // clear the active-tab highlight (landings have no tab)
 }
 
 function findSectionNode(node, relPath) {
@@ -2956,6 +3069,9 @@ function handlePaletteSearch() {
     { label: 'Toggle Sidebar (Notes Directory)', subtitle: 'Action: /sidebar', action: () => toggleSidebarCollapsed() },
     { label: 'View Keyboard Shortcuts', subtitle: 'Action: /shortcuts', action: () => showShortcutsModal() },
     { label: 'Export Current Note to PDF', subtitle: 'Action: /pdf', action: () => exportToPdf() },
+    { label: 'Open Trash', subtitle: 'Action: /trash', action: () => showTrashModal() },
+    { label: 'Note History (Current Note)', subtitle: 'Action: /history', action: () => showHistoryModal() },
+    { label: 'Open Table Editor', subtitle: 'Action: /table', action: () => openTableEditor('insert') },
   ];
 
   const matchingCommands = commands.filter(cmd => 
@@ -2977,6 +3093,41 @@ function handlePaletteSearch() {
   }
 
   paletteFilteredItems = [...matchingCommands, ...matchingPages];
+  renderPaletteList();
+
+  // Async content matches: appended (never reordered) once the main-process
+  // search resolves, token-guarded against stale responses while typing.
+  if (query.length >= 2 && !query.startsWith('/')) {
+    const token = ++paletteContentToken;
+    window.api.searchNotes(query, { maxResults: 10 }).then(results => {
+      if (token !== paletteContentToken) return;
+      const currentQuery = document.getElementById('palette-search-input').value.trim().toLowerCase();
+      if (currentQuery !== query) return;
+
+      const openPaths = new Set(paletteFilteredItems.map(i => i.fsPath).filter(Boolean));
+      results.slice(0, 10).forEach(r => {
+        if (openPaths.has(r.fsPath)) return; // already listed via title match
+        const snippet = r.snippets && r.snippets[0];
+        paletteFilteredItems.push({
+          label: r.title,
+          subtitle: `${r.matchCount} content match${r.matchCount === 1 ? '' : 'es'}`,
+          subtitleHtml: snippet ? highlightSnippet(snippet.text, snippet.ranges) : '',
+          fsPath: r.fsPath,
+          kind: 'content',
+          action: () => openNoteAtLine(r.fsPath, snippet ? snippet.line : 0),
+        });
+      });
+      renderPaletteList();
+    }).catch(() => {});
+  }
+}
+
+let paletteContentToken = 0;
+
+function renderPaletteList() {
+  const listContainer = document.getElementById('palette-results-list');
+  if (!listContainer) return;
+  listContainer.innerHTML = '';
 
   if (paletteFilteredItems.length === 0) {
     listContainer.innerHTML = `<div style="font-size:12px; color:var(--text-muted); text-align:center; padding:16px;">No pages or commands matching query</div>`;
@@ -2986,18 +3137,25 @@ function handlePaletteSearch() {
   paletteFilteredItems.forEach((item, idx) => {
     const el = document.createElement('div');
     el.className = `palette-item ${idx === paletteSelectedIndex ? 'selected' : ''}`;
+    const isAction = item.subtitle.startsWith('Action:');
+    const isContent = item.kind === 'content';
+    const icon = isAction
+      ? '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>'
+      : isContent
+        ? '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>'
+        : '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>';
+    // subtitleHtml is pre-escaped highlight markup built by highlightSnippet
+    const subtitleHtml = item.subtitleHtml || escapeHtml(item.subtitle);
     el.innerHTML = `
       <div class="palette-item-content">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: ${item.subtitle.startsWith('Action:') ? 'var(--accent-teal)' : 'var(--accent-blue)'};">
-          ${item.subtitle.startsWith('Action:') 
-            ? '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>' 
-            : '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>'}
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: ${isAction ? 'var(--accent-teal)' : 'var(--accent-blue)'};">
+          ${icon}
         </svg>
         <span class="palette-item-label">${escapeHtml(item.label)}</span>
       </div>
-      <span class="palette-item-shortcut">${escapeHtml(item.subtitle)}</span>
+      <span class="palette-item-shortcut">${subtitleHtml}</span>
     `;
-    
+
     el.addEventListener('click', () => {
       hideCommandPalette();
       item.action();
@@ -3027,6 +3185,194 @@ function confirmPaletteSelection() {
   const selectedItem = paletteFilteredItems[paletteSelectedIndex];
   hideCommandPalette();
   selectedItem.action();
+}
+
+// ==========================================
+// TAB STRIP (MRU list of open notes; the active tab IS activeNote)
+// ==========================================
+
+let openTabs = []; // fsPath[], left-to-right order
+
+function tabStorageKey() {
+  return `mdnb-tabs:${notebookRoot}`;
+}
+
+function persistTabs() {
+  if (!notebookRoot) return;
+  try {
+    localStorage.setItem(tabStorageKey(), JSON.stringify({ tabs: openTabs, active: activeNote }));
+  } catch {}
+}
+
+function restoreTabs() {
+  if (!notebookRoot) return null;
+  try {
+    const saved = JSON.parse(localStorage.getItem(tabStorageKey()) || 'null');
+    if (!saved || !Array.isArray(saved.tabs)) return null;
+    openTabs = saved.tabs.filter(p => findNodeByPath(treeData, p) || isTemplatePath(p));
+    renderTabStrip();
+    return openTabs.includes(saved.active) ? saved.active : (openTabs[0] || null);
+  } catch {
+    return null;
+  }
+}
+
+function renderTabStrip() {
+  const strip = document.getElementById('tab-strip');
+  if (!strip) return;
+
+  if (openTabs.length === 0) {
+    strip.style.display = 'none';
+    strip.innerHTML = '';
+    return;
+  }
+
+  strip.style.display = 'flex';
+  strip.innerHTML = openTabs.map(fsPath => {
+    const node = findNodeByPath(treeData, fsPath);
+    const title = node ? node.title : pathBasename(fsPath, '.md');
+    const isActive = fsPath === activeNote;
+    return `
+      <div class="note-tab ${isActive ? 'active' : ''}"
+           onclick="openNote(${jsArg(fsPath)})"
+           onauxclick="if (event.button === 1) { event.preventDefault(); closeTab(${jsArg(fsPath)}); }"
+           title="${escapeHtml(fsPath)}">
+        <span class="note-tab-dirty" aria-hidden="true"></span>
+        <span class="note-tab-label">${escapeHtml(title)}</span>
+        <button class="note-tab-close" onclick="event.stopPropagation(); closeTab(${jsArg(fsPath)})" title="Close tab">&times;</button>
+      </div>
+    `;
+  }).join('');
+
+  const active = strip.querySelector('.note-tab.active');
+  if (active) active.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+}
+
+async function closeTab(fsPath) {
+  const idx = openTabs.indexOf(fsPath);
+  if (idx === -1) return;
+  openTabs.splice(idx, 1);
+
+  if (activeNote === fsPath) {
+    // Activate the right neighbor, else left, else close the canvas
+    const next = openTabs[idx] || openTabs[idx - 1];
+    if (next) {
+      await openNote(next);
+    } else {
+      closeNoteCanvas();
+    }
+  } else {
+    renderTabStrip();
+  }
+  persistTabs();
+}
+
+// Prune tabs whose files disappeared (delete/rename/move)
+function pruneTabs() {
+  const before = openTabs.length;
+  openTabs = openTabs.filter(p => findNodeByPath(treeData, p) || isTemplatePath(p));
+  if (openTabs.length !== before) {
+    persistTabs();
+  }
+  renderTabStrip();
+}
+
+// ==========================================
+// ATTACHMENTS (paste images / drop files into the editor)
+// ==========================================
+
+function insertAttachmentLink(relPath, isImage, label) {
+  const textarea = document.getElementById('note-editor');
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  const link = isImage ? `![](${relPath})` : `[${label || pathBasename(relPath)}](${relPath})`;
+  replaceEditorRange(textarea, start, end, link);
+}
+
+function initAttachmentHandlers() {
+  const textarea = document.getElementById('note-editor');
+  const editorPane = document.getElementById('editor-pane');
+  if (!textarea || !editorPane) return;
+
+  // Paste: intercept image data only; plain text pastes fall through
+  textarea.addEventListener('paste', async (e) => {
+    if (!e.clipboardData) return;
+    const imageItem = Array.from(e.clipboardData.items).find(item => item.type.startsWith('image/'));
+    if (!imageItem) return;
+
+    e.preventDefault();
+    if (!activeNote) {
+      showToast('Open a note before pasting images.', 'error');
+      return;
+    }
+    const file = imageItem.getAsFile();
+    if (!file) return;
+
+    try {
+      const bytes = await file.arrayBuffer();
+      const ext = (imageItem.type.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '') || 'png';
+      const result = await window.api.saveAttachment({
+        baseName: file.name || `pasted-image.${ext}`,
+        bytes,
+        notePath: activeNote,
+      });
+      if (result && result.success) {
+        insertAttachmentLink(result.relPath, true);
+        showToast(`Image saved to ${result.relPath}`);
+      } else {
+        showToast((result && result.reason) || 'Could not save the pasted image.', 'error');
+      }
+    } catch (err) {
+      showToast('Could not save the pasted image.', 'error');
+      console.error('Paste attachment failed:', err);
+    }
+  });
+
+  // Drag & drop files onto the editor pane. Scoped to #editor-pane so the
+  // sidebar tree's move-note drag/drop is unaffected; tree drags carry
+  // text/plain data and are ignored here.
+  editorPane.addEventListener('dragover', (e) => {
+    if (e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files')) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    }
+  });
+
+  editorPane.addEventListener('drop', async (e) => {
+    if (!e.dataTransfer || e.dataTransfer.files.length === 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (!activeNote) {
+      showToast('Open a note before dropping files.', 'error');
+      return;
+    }
+
+    for (const file of Array.from(e.dataTransfer.files)) {
+      try {
+        const sourcePath = window.api.getPathForFile(file);
+        let result;
+        if (sourcePath) {
+          result = await window.api.importAttachmentFile({ sourcePath, notePath: activeNote });
+        } else {
+          // Some drag sources (e.g. browser images) provide bytes but no path
+          result = await window.api.saveAttachment({
+            baseName: file.name || 'dropped-file',
+            bytes: await file.arrayBuffer(),
+            notePath: activeNote,
+          });
+        }
+        if (result && result.success) {
+          insertAttachmentLink(result.relPath, /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(result.relPath), file.name);
+          showToast(`Saved to ${result.relPath}`);
+        } else {
+          showToast((result && result.reason) || `Could not attach ${file.name}.`, 'error');
+        }
+      } catch (err) {
+        showToast(`Could not attach ${file.name}.`, 'error');
+        console.error('Drop attachment failed:', err);
+      }
+    }
+  });
 }
 
 // ==========================================
@@ -3110,11 +3456,451 @@ function promptCreateTemplate() {
 }
 
 // ==========================================
+// TRASH (restore / permanently delete soft-deleted notes)
+// ==========================================
+
+async function showTrashModal() {
+  closeAllEditorDropdowns();
+  document.getElementById('trash-modal').classList.add('active');
+  await renderTrashList();
+}
+
+function hideTrashModal() {
+  document.getElementById('trash-modal').classList.remove('active');
+}
+
+async function renderTrashList() {
+  const container = document.getElementById('trash-list');
+  container.innerHTML = '<div class="template-empty-notice">Loading…</div>';
+  const items = await window.api.listTrash();
+
+  if (!items || items.length === 0) {
+    container.innerHTML = '<div class="template-empty-notice">Trash is empty.</div>';
+    return;
+  }
+
+  container.innerHTML = items.map(item => {
+    const date = item.deletedAt ? new Date(item.deletedAt).toLocaleString() : '';
+    const icon = item.kind === 'section'
+      ? '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>'
+      : '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>';
+    return `
+      <div class="template-item">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-secondary); flex-shrink: 0;">${icon}</svg>
+        <div class="template-item-main">
+          <span class="template-item-title">${escapeHtml(item.title)}</span>
+          <span class="template-item-name">${escapeHtml(item.originalRelPath)}${date ? ' · ' + escapeHtml(date) : ''}</span>
+        </div>
+        <div class="template-item-actions">
+          <button class="btn btn-xs btn-outline" onclick="restoreTrashItem(${jsArg(item.trashName)})" title="Restore to its original location">Restore</button>
+          <button class="tree-node-btn" onclick="deleteTrashItemForever(${jsArg(item.trashName)})" title="Delete forever">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('\n');
+}
+
+async function restoreTrashItem(trashName) {
+  const result = await window.api.restoreTrashItem(trashName);
+  if (result && result.success) {
+    showToast(`Restored to ${pathBasename(result.restoredPath)}`);
+    await refreshNotebook();
+  } else {
+    showToast((result && result.reason) || 'Restore failed.', 'error');
+  }
+  await renderTrashList();
+}
+
+async function deleteTrashItemForever(trashName) {
+  if (!confirm('Permanently delete this item? This cannot be undone.')) return;
+  await window.api.deleteTrashItem(trashName);
+  await renderTrashList();
+}
+
+async function confirmEmptyTrash() {
+  if (!confirm('Permanently delete EVERYTHING in the trash? This cannot be undone.')) return;
+  const result = await window.api.emptyTrash();
+  showToast(`Trash emptied (${result.removed} item${result.removed === 1 ? '' : 's'} removed).`);
+  await renderTrashList();
+}
+
+// ==========================================
+// NOTE HISTORY (browse and restore save snapshots)
+// ==========================================
+
+let selectedHistoryId = null;
+
+async function showHistoryModal() {
+  closeAllEditorDropdowns();
+  if (!activeNote) {
+    showToast('Open a note to see its history.', 'error');
+    return;
+  }
+  selectedHistoryId = null;
+  document.getElementById('history-restore-btn').disabled = true;
+  document.getElementById('history-preview').innerHTML =
+    '<div class="builder-preview-placeholder">Select a snapshot to preview it</div>';
+  document.getElementById('history-modal').classList.add('active');
+
+  const list = document.getElementById('history-list');
+  list.innerHTML = '<div class="template-empty-notice">Loading…</div>';
+  const entries = await window.api.listNoteHistory(activeNote);
+
+  if (!entries || entries.length === 0) {
+    list.innerHTML = '<div class="template-empty-notice">No snapshots yet. Versions are saved automatically as you edit (at most one every few minutes).</div>';
+    return;
+  }
+
+  list.innerHTML = entries.map(e => {
+    const when = e.savedAt ? new Date(e.savedAt).toLocaleString() : e.id;
+    const size = e.size >= 1024 ? `${(e.size / 1024).toFixed(1)} KB` : `${e.size} B`;
+    return `
+      <div class="history-entry" data-id="${escapeHtml(e.id)}" onclick="previewHistoryEntry(${jsArg(e.id)})">
+        <span class="history-entry-date">${escapeHtml(when)}</span>
+        <span class="history-entry-size">${escapeHtml(size)}</span>
+      </div>
+    `;
+  }).join('\n');
+}
+
+function hideHistoryModal() {
+  document.getElementById('history-modal').classList.remove('active');
+  selectedHistoryId = null;
+}
+
+async function previewHistoryEntry(id) {
+  selectedHistoryId = id;
+  document.querySelectorAll('#history-list .history-entry').forEach(el => {
+    el.classList.toggle('selected', el.dataset.id === id);
+  });
+
+  const content = await window.api.readNoteHistory(activeNote, id);
+  const previewEl = document.getElementById('history-preview');
+  if (!content) {
+    previewEl.innerHTML = '<div class="builder-preview-placeholder">Snapshot could not be read.</div>';
+    document.getElementById('history-restore-btn').disabled = true;
+    return;
+  }
+  // This renders into the history modal's own pane, not #preview-pane,
+  // so the serialized preview queue is not involved.
+  previewEl.innerHTML = window.api.renderMarkdown(content, {
+    resourceBase: activeNote ? pathDirname(activeNote) : '',
+  });
+  document.getElementById('history-restore-btn').disabled = false;
+}
+
+async function restoreSelectedHistory() {
+  if (!activeNote || !selectedHistoryId) return;
+  if (!confirm('Replace the current note content with this snapshot? The current version is saved to history first.')) return;
+
+  const success = await window.api.restoreNoteHistory(activeNote, selectedHistoryId);
+  hideHistoryModal();
+  if (success) {
+    noteContent = await window.api.readNote(activeNote);
+    noteOriginalContent = noteContent;
+    renderActiveNote();
+    showToast('Snapshot restored.');
+  } else {
+    showToast('Restore failed.', 'error');
+  }
+}
+
+// Close any open toolbar dropdown (used when a dropdown action opens a modal)
+function closeAllEditorDropdowns() {
+  document.querySelectorAll('.dropdown-menu.active').forEach(menu => {
+    menu.classList.remove('active');
+    const container = menu.closest('.editor-dropdown');
+    const chev = container && container.querySelector('.chevron');
+    if (chev) chev.style.transform = 'rotate(0deg)';
+  });
+}
+
+// ==========================================
+// TABLE EDITOR (visual grid for markdown tables)
+// ==========================================
+
+let tableEditContext = null; // { charStart, charEnd } when editing in place
+let tableModel = { align: [], rows: [] }; // rows[0] is the header
+const TABLE_MAX_COLS = 26;
+
+// Find the table block surrounding the caret: contiguous |-prefixed lines
+// with a valid divider on the second line.
+function detectTableAtCaret(textarea) {
+  const text = textarea.value;
+  const caret = textarea.selectionStart;
+  const lines = text.split('\n');
+
+  let pos = 0;
+  let caretLine = lines.length - 1;
+  for (let i = 0; i < lines.length; i++) {
+    if (caret <= pos + lines[i].length) {
+      caretLine = i;
+      break;
+    }
+    pos += lines[i].length + 1;
+  }
+
+  const isTabular = (l) => /^\s*\|/.test(l || '');
+  if (!isTabular(lines[caretLine])) return null;
+
+  let start = caretLine;
+  let end = caretLine;
+  while (start > 0 && isTabular(lines[start - 1])) start--;
+  while (end < lines.length - 1 && isTabular(lines[end + 1])) end++;
+  if (end - start < 1) return null;
+
+  const dividerRe = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+  if (!dividerRe.test(lines[start + 1])) return null;
+
+  let charStart = 0;
+  for (let i = 0; i < start; i++) charStart += lines[i].length + 1;
+  const blockLines = lines.slice(start, end + 1);
+  const charEnd = charStart + blockLines.join('\n').length;
+
+  return { charStart, charEnd, blockLines };
+}
+
+const PIPE_PLACEHOLDER = '\u0000'; // cannot occur in note text
+
+function parseTableRowCells(line) {
+  // Protect escaped pipes so they survive the split as literal | in cells
+  let s = line.trim().replace(/\\\|/g, PIPE_PLACEHOLDER);
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|')) s = s.slice(0, -1);
+  return s.split('|').map(c => c.trim().split(PIPE_PLACEHOLDER).join('|'));
+}
+
+function parseMarkdownTable(blockLines) {
+  const header = parseTableRowCells(blockLines[0]);
+  const align = parseTableRowCells(blockLines[1]).map(cell => {
+    const c = cell.trim();
+    if (c.startsWith(':') && c.endsWith(':')) return 'c';
+    if (c.endsWith(':')) return 'r';
+    return 'l';
+  });
+  const rows = [header, ...blockLines.slice(2).map(parseTableRowCells)];
+
+  // Normalize: every row padded to the widest column count
+  const cols = Math.max(align.length, ...rows.map(r => r.length));
+  while (align.length < cols) align.push('l');
+  rows.forEach(r => { while (r.length < cols) r.push(''); });
+  return { align, rows };
+}
+
+function serializeMarkdownTable(model) {
+  const cols = model.align.length;
+  const esc = (c) => String(c ?? '').replace(/\|/g, '\\|');
+  const cells = model.rows.map(row => {
+    const out = [];
+    for (let i = 0; i < cols; i++) out.push(esc(row[i]));
+    return out;
+  });
+  const widths = model.align.map((a, i) => Math.max(3, ...cells.map(r => r[i].length)));
+  const pad = (s, w) => s + ' '.repeat(Math.max(0, w - s.length));
+  const rowStr = (r) => '| ' + r.map((c, i) => pad(c, widths[i])).join(' | ') + ' |';
+  const divider = '| ' + model.align.map((a, i) => {
+    const w = widths[i];
+    if (a === 'c') return ':' + '-'.repeat(Math.max(1, w - 2)) + ':';
+    if (a === 'r') return '-'.repeat(Math.max(2, w - 1)) + ':';
+    return '-'.repeat(w);
+  }).join(' | ') + ' |';
+
+  return [rowStr(cells[0]), divider, ...cells.slice(1).map(rowStr)].join('\n');
+}
+
+// mode: 'insert' (blank table) or 'edit' (table under the caret)
+function openTableEditor(mode) {
+  // Close the table dropdown that launched us
+  const menu = document.getElementById('dropdown-table');
+  if (menu) menu.classList.remove('active');
+
+  if (!activeNote) {
+    showToast('Open a note first.', 'error');
+    return;
+  }
+  // The editor pane must exist for caret work
+  if (viewMode === 'preview') {
+    setViewMode('split');
+  }
+
+  tableEditContext = null;
+  if (mode === 'edit') {
+    const textarea = document.getElementById('note-editor');
+    const found = detectTableAtCaret(textarea);
+    if (found) {
+      tableEditContext = { charStart: found.charStart, charEnd: found.charEnd };
+      tableModel = parseMarkdownTable(found.blockLines);
+    } else {
+      showToast('No table at the cursor — starting a new one.');
+    }
+  }
+  if (!tableEditContext) {
+    tableModel = {
+      align: ['l', 'l', 'l'],
+      rows: [['Header 1', 'Header 2', 'Header 3'], ['', '', ''], ['', '', '']],
+    };
+  }
+
+  document.getElementById('table-editor-apply').innerText = tableEditContext ? 'Update Table' : 'Insert Table';
+  renderTableEditorGrid();
+  document.getElementById('table-editor-modal').classList.add('active');
+}
+
+function hideTableEditorModal() {
+  document.getElementById('table-editor-modal').classList.remove('active');
+  tableEditContext = null;
+}
+
+const ALIGN_LABELS = { l: 'Left', c: 'Center', r: 'Right' };
+
+// Rebuild the grid DOM from tableModel. Cell values flow through input.value
+// (never innerHTML), so arbitrary content is safe.
+function renderTableEditorGrid() {
+  const grid = document.getElementById('table-editor-grid');
+  grid.innerHTML = '';
+  const cols = tableModel.align.length;
+
+  // Column controls row
+  const controls = document.createElement('div');
+  controls.className = 'table-editor-row table-editor-controls';
+  const gutterSpacer = document.createElement('span');
+  gutterSpacer.className = 'table-editor-gutter';
+  controls.appendChild(gutterSpacer);
+  tableModel.align.forEach((a, col) => {
+    const cell = document.createElement('div');
+    cell.className = 'table-editor-colctl';
+    const alignBtn = document.createElement('button');
+    alignBtn.className = 'btn btn-xs btn-outline';
+    alignBtn.innerText = ALIGN_LABELS[a];
+    alignBtn.title = 'Cycle column alignment';
+    alignBtn.onclick = () => {
+      syncTableModelFromInputs();
+      tableModel.align[col] = a === 'l' ? 'c' : a === 'c' ? 'r' : 'l';
+      renderTableEditorGrid();
+    };
+    cell.appendChild(alignBtn);
+    if (cols > 1) {
+      const rm = document.createElement('button');
+      rm.className = 'tree-node-btn';
+      rm.innerHTML = '&times;';
+      rm.title = 'Remove column';
+      rm.onclick = () => {
+        syncTableModelFromInputs();
+        tableModel.align.splice(col, 1);
+        tableModel.rows.forEach(r => r.splice(col, 1));
+        renderTableEditorGrid();
+      };
+      cell.appendChild(rm);
+    }
+    controls.appendChild(cell);
+  });
+  if (cols < TABLE_MAX_COLS) {
+    const addCol = document.createElement('button');
+    addCol.className = 'btn btn-xs btn-outline';
+    addCol.innerText = '+ Col';
+    addCol.title = 'Add column';
+    addCol.onclick = () => {
+      syncTableModelFromInputs();
+      tableModel.align.push('l');
+      tableModel.rows.forEach((r, i) => r.push(i === 0 ? `Header ${tableModel.align.length}` : ''));
+      renderTableEditorGrid();
+    };
+    controls.appendChild(addCol);
+  }
+  grid.appendChild(controls);
+
+  // Data rows (row 0 = header)
+  tableModel.rows.forEach((row, rowIdx) => {
+    const rowEl = document.createElement('div');
+    rowEl.className = `table-editor-row ${rowIdx === 0 ? 'header-row' : ''}`;
+    const gutter = document.createElement('span');
+    gutter.className = 'table-editor-gutter';
+    if (rowIdx > 0 && tableModel.rows.length > 2) {
+      const rm = document.createElement('button');
+      rm.className = 'tree-node-btn';
+      rm.innerHTML = '&times;';
+      rm.title = 'Remove row';
+      rm.onclick = () => {
+        syncTableModelFromInputs();
+        tableModel.rows.splice(rowIdx, 1);
+        renderTableEditorGrid();
+      };
+      gutter.appendChild(rm);
+    }
+    rowEl.appendChild(gutter);
+
+    row.forEach((cell, colIdx) => {
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'table-editor-cell';
+      input.value = cell;
+      input.dataset.row = rowIdx;
+      input.dataset.col = colIdx;
+      input.placeholder = rowIdx === 0 ? 'Header' : '';
+      input.addEventListener('input', () => {
+        tableModel.rows[rowIdx][colIdx] = input.value;
+        updateTableEditorOutput();
+      });
+      rowEl.appendChild(input);
+    });
+    grid.appendChild(rowEl);
+  });
+
+  const addRow = document.createElement('button');
+  addRow.className = 'btn btn-xs btn-outline table-editor-addrow';
+  addRow.innerText = '+ Row';
+  addRow.onclick = () => {
+    syncTableModelFromInputs();
+    tableModel.rows.push(new Array(tableModel.align.length).fill(''));
+    renderTableEditorGrid();
+  };
+  grid.appendChild(addRow);
+
+  updateTableEditorOutput();
+}
+
+function syncTableModelFromInputs() {
+  document.querySelectorAll('#table-editor-grid .table-editor-cell').forEach(input => {
+    const r = parseInt(input.dataset.row, 10);
+    const c = parseInt(input.dataset.col, 10);
+    if (tableModel.rows[r]) tableModel.rows[r][c] = input.value;
+  });
+}
+
+function updateTableEditorOutput() {
+  document.getElementById('table-editor-output').value = serializeMarkdownTable(tableModel);
+}
+
+function applyTableEditor() {
+  syncTableModelFromInputs();
+  const tableMd = serializeMarkdownTable(tableModel);
+  const textarea = document.getElementById('note-editor');
+
+  if (tableEditContext) {
+    const { charStart, charEnd } = tableEditContext;
+    const current = textarea.value.slice(charStart, charEnd);
+    if (/^\s*\|/.test(current)) {
+      replaceEditorRange(textarea, charStart, charEnd, tableMd);
+      hideTableEditorModal();
+      return;
+    }
+    showToast('The note changed while editing — inserting at the cursor instead.', 'error');
+  }
+
+  const caret = textarea.selectionStart;
+  replaceEditorRange(textarea, caret, textarea.selectionEnd, `\n${tableMd}\n`);
+  hideTableEditorModal();
+}
+
+// ==========================================
 // MERMAID DIAGRAM BUILDER
 // ==========================================
 
 let builderPreviewTimer = null;
 let builderRenderCounter = 0;
+let builderEditContext = null; // { line, originalSrc } while editing an existing block
 
 function showMermaidBuilder() {
   // Close the mermaid dropdown if it triggered us
@@ -3124,15 +3910,77 @@ function showMermaidBuilder() {
     const chev = menu.closest('.editor-dropdown').querySelector('.chevron');
     if (chev) chev.style.transform = 'rotate(0deg)';
   }
+  builderEditContext = null;
+  document.getElementById('builder-apply-btn').innerText = 'Insert into Note';
   document.getElementById('mermaid-builder-modal').classList.add('active');
-  updateBuilderCode();
+  switchBuilderType();
 }
 
 function hideMermaidBuilder() {
   document.getElementById('mermaid-builder-modal').classList.remove('active');
+  builderEditContext = null;
+  document.getElementById('builder-apply-btn').innerText = 'Insert into Note';
 }
 
-const BUILDER_TYPES = ['flowchart', 'sequence', 'pie', 'gantt', 'class', 'state', 'journey'];
+// "Edit Diagram" button on rendered mermaid blocks: reopen the builder in
+// raw-code mode with the block's source, and update it in place on apply.
+function editMermaidDiagram(btn) {
+  const container = btn.closest('.mermaid-block-container');
+  const pre = container ? container.querySelector('.notebook-mermaid') : null;
+  const src = pre ? (pre.dataset.mermaidSrc || '') : '';
+  if (!src.trim()) {
+    showToast('Could not read this diagram’s source.', 'error');
+    return;
+  }
+
+  showMermaidBuilder();
+  builderEditContext = {
+    line: parseInt(container.dataset.line, 10) || 0,
+    originalSrc: src,
+  };
+  document.getElementById('builder-type').value = 'custom';
+  switchBuilderType();
+  document.getElementById('builder-code').value = src.trim();
+  document.getElementById('builder-apply-btn').innerText = 'Update Diagram';
+  scheduleBuilderPreview();
+}
+
+// Locate a ```mermaid fence whose body matches `originalSrc`, preferring the
+// candidate nearest `hintLine`. Returns character offsets covering the whole
+// fence (opening line through closing line), or null.
+function findMermaidFenceRange(text, hintLine, originalSrc) {
+  const lines = text.split('\n');
+  const target = originalSrc.trim();
+  const candidates = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const open = lines[i].match(/^\s*(`{3,}|~{3,})\s*mermaid\b/i);
+    if (!open) continue;
+    const marker = open[1];
+    const body = [];
+    let j = i + 1;
+    while (j < lines.length && !lines[j].trim().startsWith(marker)) {
+      body.push(lines[j]);
+      j++;
+    }
+    if (j >= lines.length) continue; // unterminated fence
+    if (body.join('\n').trim() === target) {
+      candidates.push({ start: i, end: j });
+    }
+    i = j;
+  }
+
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => Math.abs(a.start - hintLine) - Math.abs(b.start - hintLine));
+  const { start, end } = candidates[0];
+
+  let charStart = 0;
+  for (let k = 0; k < start; k++) charStart += lines[k].length + 1;
+  const charEnd = charStart + lines.slice(start, end + 1).join('\n').length;
+  return { charStart, charEnd };
+}
+
+const BUILDER_TYPES = ['flowchart', 'sequence', 'pie', 'gantt', 'class', 'state', 'journey', 'er', 'timeline', 'mindmap', 'quadrant', 'custom'];
 
 function switchBuilderType() {
   const type = document.getElementById('builder-type').value;
@@ -3140,7 +3988,14 @@ function switchBuilderType() {
     const group = document.getElementById(`builder-fields-${t}`);
     if (group) group.style.display = t === type ? 'block' : 'none';
   });
-  updateBuilderCode();
+  // 'custom' is a raw-code mode: no form, no example to load
+  const exampleBtn = document.getElementById('builder-example-btn');
+  if (exampleBtn) exampleBtn.style.display = type === 'custom' ? 'none' : 'inline-flex';
+  if (type !== 'custom') {
+    updateBuilderCode();
+  } else {
+    scheduleBuilderPreview();
+  }
 }
 
 // "See Example" fills the current type's form with a working sample, so users
@@ -3170,6 +4025,22 @@ const BUILDER_EXAMPLES = {
     actor: 'Me',
     tasks: 'Wake up: 3\nMake coffee: 5\nCheck email: 2\nStart deep work: 4',
   },
+  er: {
+    entities: 'Customer: id, name, signup_date\nOrder: id, total, placed_at\nProduct: id, name, price',
+    relations: 'Customer one-to-many Order: places\nOrder many-to-many Product: contains',
+  },
+  timeline: {
+    title: 'Company milestones',
+    events: '2023: Founded; First hire\n2024: Product launch\n2025: 1000 customers; Series A',
+  },
+  mindmap: 'Project Plan\n  Research\n    Competitors\n    User interviews\n  Design\n    Wireframes\n  Build\n    MVP\n    Beta',
+  quadrant: {
+    title: 'Effort vs Impact',
+    xleft: 'Low Effort', xright: 'High Effort',
+    ybottom: 'Low Impact', ytop: 'High Impact',
+    q1: 'Strategic bets', q2: 'Quick wins', q3: 'Skip', q4: 'Money pits',
+    points: 'Dark mode: 0.2, 0.7\nRewrite backend: 0.9, 0.8\nNew logo: 0.3, 0.2',
+  },
 };
 
 function loadBuilderExample() {
@@ -3195,6 +4066,26 @@ function loadBuilderExample() {
     document.getElementById('builder-journey-title').value = BUILDER_EXAMPLES.journey.title;
     document.getElementById('builder-journey-actor').value = BUILDER_EXAMPLES.journey.actor;
     document.getElementById('builder-journey-tasks').value = BUILDER_EXAMPLES.journey.tasks;
+  } else if (type === 'er') {
+    document.getElementById('builder-er-entities').value = BUILDER_EXAMPLES.er.entities;
+    document.getElementById('builder-er-relations').value = BUILDER_EXAMPLES.er.relations;
+  } else if (type === 'timeline') {
+    document.getElementById('builder-timeline-title').value = BUILDER_EXAMPLES.timeline.title;
+    document.getElementById('builder-timeline-events').value = BUILDER_EXAMPLES.timeline.events;
+  } else if (type === 'mindmap') {
+    document.getElementById('builder-mindmap-outline').value = BUILDER_EXAMPLES.mindmap;
+  } else if (type === 'quadrant') {
+    const q = BUILDER_EXAMPLES.quadrant;
+    document.getElementById('builder-quadrant-title').value = q.title;
+    document.getElementById('builder-quadrant-xleft').value = q.xleft;
+    document.getElementById('builder-quadrant-xright').value = q.xright;
+    document.getElementById('builder-quadrant-ybottom').value = q.ybottom;
+    document.getElementById('builder-quadrant-ytop').value = q.ytop;
+    document.getElementById('builder-quadrant-q1').value = q.q1;
+    document.getElementById('builder-quadrant-q2').value = q.q2;
+    document.getElementById('builder-quadrant-q3').value = q.q3;
+    document.getElementById('builder-quadrant-q4').value = q.q4;
+    document.getElementById('builder-quadrant-points').value = q.points;
   }
   updateBuilderCode();
 }
@@ -3361,6 +4252,124 @@ function generateBuilderCode() {
     return lines.length > 2 ? lines.join('\n') : '';
   }
 
+  if (type === 'er') {
+    const entityRows = document.getElementById('builder-er-entities').value
+      .split('\n').map(s => s.trim()).filter(s => s);
+    const relRows = document.getElementById('builder-er-relations').value
+      .split('\n').map(s => s.trim()).filter(s => s);
+    if (entityRows.length === 0 && relRows.length === 0) return '';
+
+    const entityName = (s) => s.trim().replace(/\s+/g, '_');
+    const lines = ['erDiagram'];
+    entityRows.forEach(row => {
+      const m = row.match(/^(.+?)\s*:\s*(.*)$/);
+      const name = entityName(m ? m[1] : row);
+      const attrs = m ? m[2].split(',').map(a => a.trim()).filter(a => a) : [];
+      if (attrs.length === 0) {
+        lines.push(`    ${name} {`, '    }');
+        return;
+      }
+      lines.push(`    ${name} {`);
+      attrs.forEach(attr => {
+        const parts = attr.split(/\s+/);
+        // "int id" keeps its type; a bare "id" is typed string
+        if (parts.length >= 2) {
+          lines.push(`        ${parts[0]} ${parts.slice(1).join('_')}`);
+        } else {
+          lines.push(`        string ${parts[0]}`);
+        }
+      });
+      lines.push('    }');
+    });
+
+    const CARDINALITY = {
+      'one-to-one': '||--||', '1-1': '||--||',
+      'one-to-many': '||--o{', '1-n': '||--o{',
+      'many-to-one': '}o--||', 'n-1': '}o--||',
+      'many-to-many': '}o--o{', 'n-n': '}o--o{',
+    };
+    relRows.forEach(row => {
+      const m = row.match(/^(.+?)\s+(one-to-one|one-to-many|many-to-one|many-to-many|1-1|1-n|n-1|n-n)\s+(.+?)(?:\s*:\s*(.+))?$/i);
+      if (!m) return;
+      const symbol = CARDINALITY[m[2].toLowerCase()];
+      lines.push(`    ${entityName(m[1])} ${symbol} ${entityName(m[3])} : "${mermaidLabel(m[4] || 'has')}"`);
+    });
+    return lines.length > 1 ? lines.join('\n') : '';
+  }
+
+  if (type === 'timeline') {
+    const title = document.getElementById('builder-timeline-title').value.trim();
+    const rows = document.getElementById('builder-timeline-events').value
+      .split('\n').map(s => s.trim()).filter(s => s);
+    if (rows.length === 0) return '';
+
+    const lines = ['timeline'];
+    if (title) lines.push(`    title ${title}`);
+    rows.forEach(row => {
+      const m = row.match(/^(.+?)\s*:\s*(.+)$/);
+      if (!m) return;
+      const events = m[2].split(';').map(e => e.trim()).filter(e => e);
+      if (events.length) {
+        lines.push(`    ${m[1].trim()} : ${events.join(' : ')}`);
+      }
+    });
+    return lines.length > 1 ? lines.join('\n') : '';
+  }
+
+  if (type === 'mindmap') {
+    const rawLines = document.getElementById('builder-mindmap-outline').value
+      .split('\n').filter(l => l.trim());
+    if (rawLines.length === 0) return '';
+
+    const lines = ['mindmap'];
+    const rootLabel = rawLines[0].trim().replace(/[()]/g, '');
+    lines.push(`  root((${rootLabel}))`);
+    let prevDepth = 0;
+    rawLines.slice(1).forEach(raw => {
+      const leading = raw.match(/^\s*/)[0].length;
+      // two spaces per level, clamped so children never skip a generation
+      let depth = Math.min(Math.floor(leading / 2) + 1, prevDepth + 1);
+      if (depth < 1) depth = 1;
+      prevDepth = depth;
+      lines.push(`${'  '.repeat(depth + 1)}${raw.trim().replace(/[()]/g, '')}`);
+    });
+    return lines.length > 2 ? lines.join('\n') : (lines.length === 2 ? lines.join('\n') : '');
+  }
+
+  if (type === 'quadrant') {
+    const title = document.getElementById('builder-quadrant-title').value.trim();
+    const xLeft = document.getElementById('builder-quadrant-xleft').value.trim() || 'Low';
+    const xRight = document.getElementById('builder-quadrant-xright').value.trim() || 'High';
+    const yBottom = document.getElementById('builder-quadrant-ybottom').value.trim() || 'Low';
+    const yTop = document.getElementById('builder-quadrant-ytop').value.trim() || 'High';
+    const q1 = document.getElementById('builder-quadrant-q1').value.trim() || 'Quadrant 1';
+    const q2 = document.getElementById('builder-quadrant-q2').value.trim() || 'Quadrant 2';
+    const q3 = document.getElementById('builder-quadrant-q3').value.trim() || 'Quadrant 3';
+    const q4 = document.getElementById('builder-quadrant-q4').value.trim() || 'Quadrant 4';
+    const rows = document.getElementById('builder-quadrant-points').value
+      .split('\n').map(s => s.trim()).filter(s => s);
+    if (rows.length === 0) return '';
+
+    const clamp01 = (v) => Math.max(0, Math.min(1, parseFloat(v) || 0));
+    const lines = ['quadrantChart'];
+    if (title) lines.push(`    title ${title}`);
+    lines.push(`    x-axis ${xLeft} --> ${xRight}`);
+    lines.push(`    y-axis ${yBottom} --> ${yTop}`);
+    lines.push(`    quadrant-1 ${q1}`, `    quadrant-2 ${q2}`, `    quadrant-3 ${q3}`, `    quadrant-4 ${q4}`);
+    rows.forEach(row => {
+      const m = row.match(/^(.+?)\s*:\s*([\d.]+)\s*,\s*([\d.]+)\s*$/);
+      if (m) {
+        lines.push(`    ${m[1].trim()}: [${clamp01(m[2])}, ${clamp01(m[3])}]`);
+      }
+    });
+    return lines.length > 7 ? lines.join('\n') : '';
+  }
+
+  if (type === 'custom') {
+    // Raw-code mode: the code textarea is the source of truth
+    return document.getElementById('builder-code').value;
+  }
+
   return '';
 }
 
@@ -3413,14 +4422,26 @@ function insertBuilderDiagram() {
   }
 
   const textarea = document.getElementById('note-editor');
-  const start = textarea.selectionStart;
-  const end = textarea.selectionEnd;
-  const text = textarea.value;
-  const insertion = `\n\`\`\`mermaid\n${code}\n\`\`\`\n`;
+  const fenced = `\`\`\`mermaid\n${code}\n\`\`\``;
 
-  textarea.value = text.substring(0, start) + insertion + text.substring(end);
-  textarea.selectionStart = textarea.selectionEnd = start + insertion.length;
-  handleEditorInput();
+  // Update-in-place when launched from a rendered block's Edit button
+  if (builderEditContext) {
+    const range = findMermaidFenceRange(textarea.value, builderEditContext.line, builderEditContext.originalSrc);
+    if (range) {
+      replaceEditorRange(textarea, range.charStart, range.charEnd, fenced);
+      hideMermaidBuilder();
+      if (viewMode === 'preview') {
+        setViewMode('split');
+      } else if (viewMode === 'split') {
+        renderMarkdownPreview();
+      }
+      textarea.focus();
+      return;
+    }
+    showToast('Couldn’t find the original diagram — inserting at the cursor instead.', 'error');
+  }
+
+  replaceEditorRange(textarea, textarea.selectionStart, textarea.selectionEnd, `\n${fenced}\n`);
   hideMermaidBuilder();
 
   // Make sure the user sees the result immediately

@@ -11,7 +11,10 @@
     "start": "tsc && electron .",
     "pack": "electron-builder",
     "pretest:e2e": "tsc",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:renderer": "node tests/renderer/smoke.spec.mjs darwin && node tests/renderer/smoke.spec.mjs win32",
+    "test:ui-audit": "node tests/renderer/ui-audit.mjs",
+    "fonts:sync": "node scripts/sync-fonts.mjs"
   },
   "dependencies": {
     "chokidar": "^3.6.0",
@@ -19,6 +22,8 @@
     "markdown-it": "^14.1.0"
   },
   "devDependencies": {
+    "@fontsource/inter": "^5.2.8",
+    "@fontsource/outfit": "^5.2.8",
     "@playwright/test": "^1.61.1",
     "@types/markdown-it": "^14.1.1",
     "@types/node": "^20.11.24",
