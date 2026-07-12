@@ -2288,6 +2288,14 @@ body.sidebar-collapsed #btn-expand-sidebar {
   line-height: 1.5;
 }
 
+/* Small explanatory line under a settings/form field */
+.form-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 6px;
+  line-height: 1.5;
+}
+
 .builder-preview-wrap {
   display: flex;
   flex-direction: column;

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, globalShortcut } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
@@ -36,6 +36,8 @@ interface AppSettings {
   autoSaveEnabled: boolean;
   pandocPath?: string;
   pdfExport: PdfExportOptions;
+  /** Global (system-wide) quick-capture shortcut; empty string disables it. */
+  quickCaptureShortcut: string;
 }
 
 const defaultSettings: AppSettings = {
@@ -50,6 +52,7 @@ const defaultSettings: AppSettings = {
   scratchpadFile: 'scratchpad.md',
   autoSaveEnabled: false,
   pdfExport: { theme: 'light', pageSize: 'A4', openAfter: true, reveal: false },
+  quickCaptureShortcut: 'CommandOrControl+Shift+N',
 };
 
 // Migrate settings written by older versions to the current shape
@@ -176,8 +179,17 @@ ipcMain.handle('select-folder', async () => {
 });
 
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   createWindow();
+
+  // Register after the renderer loads so a registration failure (shortcut
+  // taken by another app) can surface as a toast instead of vanishing.
+  const settings = await readSettings();
+  if (mainWindow) {
+    mainWindow.webContents.once('did-finish-load', () => {
+      registerQuickCaptureShortcut(settings.quickCaptureShortcut);
+    });
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -492,6 +504,9 @@ ipcMain.handle('save-settings', async (event, settings) => {
   if (updated.notebookRoot !== before.notebookRoot ||
       JSON.stringify(updated.ignoreFolders) !== JSON.stringify(before.ignoreFolders)) {
     await updateWatcher();
+  }
+  if (updated.quickCaptureShortcut !== before.quickCaptureShortcut) {
+    registerQuickCaptureShortcut(updated.quickCaptureShortcut);
   }
   return updated;
 });
@@ -1992,6 +2007,139 @@ ipcMain.handle('copy-rich-text', async (event, htmlContent, plainText) => {
   } catch (err: any) {
     return { success: false, reason: err?.message || String(err) };
   }
+});
+
+// --- Quick capture: global shortcut -> tiny always-on-top jot window ---
+
+let captureWindow: BrowserWindow | null = null;
+let registeredCaptureShortcut = '';
+
+function createCaptureWindow(): BrowserWindow {
+  const win = new BrowserWindow({
+    width: 520,
+    height: 150,
+    show: false,
+    frame: false,
+    resizable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'capture-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+  win.loadFile(path.join(__dirname, '../renderer/capture.html'));
+  // A capture scratchpad shouldn't linger over other apps once you click away
+  win.on('blur', () => win.hide());
+  win.on('closed', () => {
+    if (captureWindow === win) captureWindow = null;
+  });
+  return win;
+}
+
+function toggleCaptureWindow() {
+  if (!captureWindow || captureWindow.isDestroyed()) {
+    captureWindow = createCaptureWindow();
+  }
+  if (captureWindow.isVisible()) {
+    captureWindow.hide();
+  } else {
+    captureWindow.center();
+    captureWindow.show();
+    captureWindow.focus();
+  }
+}
+
+// (Re-)register the system-wide shortcut. Returns true when the accelerator
+// is active, false when it's invalid or taken by another app; empty string
+// just unregisters (feature off).
+function registerQuickCaptureShortcut(accelerator: string): boolean {
+  if (registeredCaptureShortcut) {
+    try { globalShortcut.unregister(registeredCaptureShortcut); } catch { /* already gone */ }
+    registeredCaptureShortcut = '';
+  }
+  const shortcut = (accelerator || '').trim();
+  if (!shortcut) return true;
+  try {
+    if (globalShortcut.register(shortcut, toggleCaptureWindow)) {
+      registeredCaptureShortcut = shortcut;
+      return true;
+    }
+  } catch {
+    // invalid accelerator string
+  }
+  if (mainWindow) {
+    mainWindow.webContents.send('capture-shortcut-failed', shortcut);
+  }
+  return false;
+}
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+});
+
+ipcMain.on('hide-capture-window', () => {
+  if (captureWindow && !captureWindow.isDestroyed()) captureWindow.hide();
+});
+
+// Append one captured line to today's daily note, creating it (and the
+// "## Quick Capture" section) as needed. The daily note may live anywhere in
+// the notebook; it's found by basename so movers keep their note.
+ipcMain.handle('append-quick-capture', async (event, text: string) => {
+  const settings = await readSettings();
+  const root = settings.notebookRoot;
+  if (!root || !fs.existsSync(root)) return { success: false, reason: 'No notebook folder is set.' };
+
+  const trimmed = String(text || '').replace(/\s*\n\s*/g, ' ').trim();
+  if (!trimmed) return { success: false, reason: 'Nothing to capture.' };
+
+  const today = localDateString();
+  const dailyName = `${today}.md`;
+
+  // Find today's note anywhere in the tree
+  const ignore = new Set(settings.ignoreFolders.map(s => s.toLowerCase()));
+  const allFiles = await listMarkdownFiles(root, ignore, root);
+  let notePath = allFiles.find(f => path.basename(f).toLowerCase() === dailyName) || '';
+
+  if (!notePath) {
+    // Same skeleton as create-page, title = the date
+    const fm: string[] = ['---', `title: ${yamlValue(today)}`, `created: ${today}`];
+    if (settings.author) fm.push(`author: ${yamlValue(settings.author)}`);
+    fm.push(tagsYamlLine([]), '---', '', `# ${today}`, '');
+    notePath = path.join(root, await uniqueMd(root, today));
+    await fsp.writeFile(notePath, fm.join('\n'), 'utf8');
+    const ord = await readOrderFile(root);
+    ord.push(path.basename(notePath));
+    await writeOrderFile(root, ord);
+  }
+
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const entry = `- ${pad(now.getHours())}:${pad(now.getMinutes())} ${trimmed}`;
+
+  const content = await fsp.readFile(notePath, 'utf8');
+  const lines = content.split(/\r?\n/);
+  const headingIdx = lines.findIndex(l => /^##\s+Quick Capture\s*$/i.test(l));
+
+  if (headingIdx === -1) {
+    while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
+    lines.push('', '## Quick Capture', '', entry, '');
+  } else {
+    // End of the section: the next heading of any level, else EOF
+    let end = lines.length;
+    for (let i = headingIdx + 1; i < lines.length; i++) {
+      if (/^#{1,6}\s/.test(lines[i])) { end = i; break; }
+    }
+    let insertAt = end;
+    while (insertAt > headingIdx + 1 && lines[insertAt - 1].trim() === '') insertAt--;
+    lines.splice(insertAt, 0, entry);
+  }
+
+  await writeNoteFile(notePath, lines.join('\n'), { snapshot: true });
+  notifyFilesChanged();
+  return { success: true, notePath };
 });
 
 // Inline helper: toggle checkboxes inside markdown file text

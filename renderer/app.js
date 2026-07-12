@@ -93,6 +93,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     await refreshNotebook(false); // refresh tree without resetting active note
   });
 
+  // Quick-capture shortcut couldn't be registered (invalid or taken by
+  // another app) — tell the user so the feature doesn't silently not work
+  if (window.api.onCaptureShortcutFailed) {
+    window.api.onCaptureShortcutFailed((shortcut) => {
+      showToast(`Could not register quick capture shortcut "${shortcut}". Change it in Settings.`, 'error');
+    });
+  }
+
   // Set default page width label
   const labelMap = { 'standard': 'Standard', 'wide': 'Wide', 'full': 'Full' };
   document.getElementById('label-stretch-width').innerText = labelMap[appSettings.defaultPageWidth] || 'Standard';
@@ -2176,6 +2184,7 @@ function showSettingsModal() {
   document.getElementById('settings-templates-folder').value = appSettings.templatesFolder;
   document.getElementById('settings-author').value = appSettings.author;
   document.getElementById('settings-pandoc-path').value = appSettings.pandocPath || '';
+  document.getElementById('settings-capture-shortcut').value = appSettings.quickCaptureShortcut || '';
   document.getElementById('settings-ignore-folders').value = appSettings.ignoreFolders.join(', ');
   document.getElementById('settings-autosave').checked = autoSaveEnabled;
   modal.classList.add('active');
@@ -2192,6 +2201,7 @@ async function saveSettingsForm() {
   const templates = document.getElementById('settings-templates-folder').value.trim() || 'templates';
   const author = document.getElementById('settings-author').value.trim();
   const pandocPath = document.getElementById('settings-pandoc-path').value.trim();
+  const captureShortcut = document.getElementById('settings-capture-shortcut').value.trim();
   const ignore = document.getElementById('settings-ignore-folders').value.split(',').map(s => s.trim()).filter(s => s);
   const autosave = document.getElementById('settings-autosave').checked;
 
@@ -2202,6 +2212,7 @@ async function saveSettingsForm() {
     templatesFolder: templates,
     author: author,
     pandocPath: pandocPath,
+    quickCaptureShortcut: captureShortcut,
     scratchpadFile: appSettings.scratchpadFile,
     ignoreFolders: ignore,
     autoSaveEnabled: autosave,

@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# A newer push to the same ref supersedes any still-running CI for it
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # Fast path: typecheck + the 185-check renderer suite in plain Chromium.
   # No Electron binary needed, so this runs on every push cheaply.

@@ -272,6 +272,9 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.removeListener('files-changed', subscription);
     };
   },
+  onCaptureShortcutFailed: (callback: (shortcut: string) => void) => {
+    ipcRenderer.on('capture-shortcut-failed', (_event, shortcut: string) => callback(shortcut));
+  },
   
   // Inline actions in renderer
   toggleTaskAtLine: (filePath: string, line: number) => ipcRenderer.invoke('toggle-task-at-line', filePath, line),
