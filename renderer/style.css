@@ -2421,7 +2421,7 @@ body.sidebar-collapsed #btn-expand-sidebar {
 .note-tab-close {
   background: transparent;
   border: none;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 14px;
   line-height: 1;
   cursor: pointer;

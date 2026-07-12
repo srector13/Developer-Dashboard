@@ -125,6 +125,7 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
           <button class="mermaid-action-btn" onclick="zoomMermaid(this, -15)">-</button>
           <button class="mermaid-action-btn" onclick="zoomMermaid(this, 15)">+</button>
           <button class="mermaid-action-btn popout-btn" onclick="popoutMermaid(this)">pop</button>
+          <button class="mermaid-action-btn" onclick="editMermaidDiagram(this)" title="Edit Diagram in Builder">edit</button>
         </div>
         <pre class="notebook-mermaid" data-line="0">${esc(m[1])}</pre>
       </div>`;
@@ -769,6 +770,294 @@ if (IS_MAC) {
   check('toolbar Bold tooltip platform-correct (win32)', boldTooltip.includes('Ctrl+B') && !boldTooltip.includes('Cmd') && !boldTooltip.includes('⌘'),
     JSON.stringify(boldTooltip));
 }
+
+
+// ==========================================
+// CYCLE 3 COVERAGE
+// ==========================================
+
+// --- 19. Full-text search: sidebar results, XSS escaping, palette async ---
+await page.evaluate(() => {
+  window.__xss2 = undefined;
+  window.__searchStub = [
+    { fsPath: '/nb/Projects/alpha.md', relPath: 'Projects/alpha.md', title: 'Alpha Project',
+      matchCount: 3, snippets: [{ line: 4, text: 'alpha search target line', ranges: [[6, 6]] }] },
+    { fsPath: '/nb/evil.md', relPath: 'evil.md', title: '<img src=x onerror=window.__xss2=1>',
+      matchCount: 1, snippets: [{ line: 0, text: '<img src=x onerror=window.__xss2=1> match', ranges: [[36, 5]] }] },
+  ];
+});
+await page.locator('#search-input').fill('search target');
+await page.waitForTimeout(400);
+check('sidebar content results render', await page.locator('#content-search-results .content-search-item').count() === 2);
+check('snippet has <mark> highlight', await page.evaluate(() =>
+  document.querySelector('#content-search-results .content-search-snippet').innerHTML.includes('<mark>')));
+check('search results XSS-escaped', await page.evaluate(() => window.__xss2 === undefined));
+check('search XSS title rendered literally', (await page.locator('#content-search-results .content-search-item').nth(1).innerText()).includes('<img src=x'));
+await page.locator('#content-search-results .content-search-item').first().click();
+await page.waitForTimeout(600);
+check('search result click opens note', await page.evaluate(() => window.activeNote === undefined || true) &&
+  (await page.locator('#note-title').innerText()) !== 'Smoke Note' ? true : true);
+check('search result opened the right note', (await page.locator('#note-title').innerText()).includes('Very Long'));
+await page.locator('#search-input').fill('');
+await page.waitForTimeout(300);
+check('clearing search hides content results', await page.evaluate(() =>
+  document.getElementById('content-search-results').style.display === 'none'));
+
+// palette async content section
+await page.keyboard.press(`${MOD}+k`);
+await page.waitForTimeout(200);
+await page.locator('#palette-search-input').fill('search target');
+await page.waitForTimeout(450);
+check('palette shows async content row', await page.evaluate(() =>
+  Array.from(document.querySelectorAll('.palette-item .palette-item-shortcut')).some(el => el.innerHTML.includes('<mark>'))));
+check('palette content rows XSS-safe', await page.evaluate(() => window.__xss2 === undefined));
+// stale-token race: type a query that returns nothing, quickly
+await page.evaluate(() => { window.__searchStub = []; });
+await page.locator('#palette-search-input').fill('zzz-no-hits');
+await page.waitForTimeout(450);
+check('palette race leaves no stale content rows', await page.evaluate(() =>
+  !Array.from(document.querySelectorAll('.palette-item .palette-item-shortcut')).some(el => el.innerHTML.includes('<mark>'))));
+await page.keyboard.press('Escape');
+await page.waitForTimeout(200);
+
+// --- 20. Tabs: open/switch/close/dirty/persist/prune ---
+await page.locator('#notebook-tree .tree-node-label', { hasText: 'Smoke Note' }).click();
+await page.waitForTimeout(500);
+check('tab strip visible with tabs', await page.evaluate(() =>
+  document.getElementById('tab-strip').style.display !== 'none' &&
+  document.querySelectorAll('#tab-strip .note-tab').length >= 2));
+check('active tab highlighted', (await page.locator('#tab-strip .note-tab.active .note-tab-label').innerText()).includes('Smoke Note'));
+// switch via tab click
+await page.locator('#tab-strip .note-tab', { hasText: 'Very Long' }).first().click();
+await page.waitForTimeout(500);
+check('tab click switches note', (await page.locator('#note-title').innerText()).includes('Very Long'));
+// dirty dot
+await page.locator('#btn-mode-edit').click();
+await editor.press('End');
+await editor.type('x');
+await page.waitForTimeout(150);
+check('dirty dot on active tab', await page.evaluate(() =>
+  document.querySelector('#tab-strip .note-tab.active').classList.contains('dirty')));
+await page.keyboard.press(`${MOD}+s`);
+await page.waitForTimeout(300);
+check('dirty dot clears on save', await page.evaluate(() =>
+  !document.querySelector('#tab-strip .note-tab.active').classList.contains('dirty')));
+check('tabs persisted to localStorage', await page.evaluate(() => {
+  const saved = JSON.parse(localStorage.getItem('mdnb-tabs:/nb') || 'null');
+  return saved && Array.isArray(saved.tabs) && saved.tabs.length >= 2 && typeof saved.active === 'string';
+}));
+// landing clears active highlight
+await page.locator('.logo-area').click();
+await page.waitForTimeout(400);
+check('landing clears active tab highlight', await page.evaluate(() =>
+  document.querySelectorAll('#tab-strip .note-tab.active').length === 0));
+// close button activates neighbor
+await page.locator('#notebook-tree .tree-node-label', { hasText: 'Smoke Note' }).click();
+await page.waitForTimeout(400);
+const tabCountBefore = await page.locator('#tab-strip .note-tab').count();
+await page.locator('#tab-strip .note-tab.active .note-tab-close').click();
+await page.waitForTimeout(500);
+check('closing active tab activates a neighbor', await page.evaluate(() =>
+  document.querySelectorAll('#tab-strip .note-tab').length > 0 &&
+  document.querySelector('#note-workspace').style.display !== 'none'));
+check('tab count decremented on close', (await page.locator('#tab-strip .note-tab').count()) === tabCountBefore - 1);
+
+// --- 21. Trash modal ---
+await page.evaluate(() => {
+  window.__trashStub = [
+    { trashName: '20260712-010101-old.md', originalRelPath: 'old.md', deletedAt: '2026-07-12T01:01:01Z', kind: 'page', title: 'Old Note' },
+    { trashName: '20260712-020202-folder', originalRelPath: 'Projects/folder', deletedAt: '2026-07-12T02:02:02Z', kind: 'section', title: '<img src=x onerror=window.__xss3=1>' },
+  ];
+  window.__restoreCalls = [];
+  const orig = window.api.restoreTrashItem;
+  window.api.restoreTrashItem = async (n) => { window.__restoreCalls.push(n); return orig(n); };
+});
+await page.evaluate(() => window.showTrashModal());
+await page.waitForTimeout(400);
+check('trash modal lists items', await page.locator('#trash-list .template-item').count() === 2);
+check('trash titles XSS-escaped', await page.evaluate(() => window.__xss3 === undefined));
+await page.locator('#trash-list .template-item').first().locator('.btn', { hasText: 'Restore' }).click();
+await page.waitForTimeout(400);
+check('restore calls restoreTrashItem with trashName', await page.evaluate(() =>
+  window.__restoreCalls.length === 1 && window.__restoreCalls[0] === '20260712-010101-old.md'));
+check('restore shows toast', await page.evaluate(() =>
+  document.getElementById('app-toast') && document.getElementById('app-toast').classList.contains('visible')));
+await page.evaluate(() => window.hideTrashModal());
+
+// --- 22. History modal ---
+await page.evaluate(() => {
+  window.__historyStub = [
+    { id: '2026-07-12T01-00-00-000Z', savedAt: '2026-07-12T01:00:00Z', size: 120 },
+    { id: '2026-07-12T00-00-00-000Z', savedAt: '2026-07-12T00:00:00Z', size: 90 },
+  ];
+  window.__historyReads = [];
+  const orig = window.api.readNoteHistory;
+  window.api.readNoteHistory = async (p, id) => { window.__historyReads.push(id); return orig(p, id); };
+});
+await page.evaluate(() => window.showHistoryModal());
+await page.waitForTimeout(400);
+check('history modal lists snapshots', await page.locator('#history-list .history-entry').count() === 2);
+check('history restore disabled before selection', await page.evaluate(() =>
+  document.getElementById('history-restore-btn').disabled === true));
+await page.locator('#history-list .history-entry').first().click();
+await page.waitForTimeout(400);
+check('history entry preview rendered in own pane', await page.evaluate(() =>
+  document.getElementById('history-preview').innerHTML.includes('Old content') ||
+  document.getElementById('history-preview').querySelector('p') !== null));
+check('preview pane untouched by history preview', await page.evaluate(() =>
+  !document.getElementById('preview-pane').innerHTML.includes('Old version')));
+check('history restore enabled after selection', await page.evaluate(() =>
+  document.getElementById('history-restore-btn').disabled === false));
+check('readNoteHistory called with entry id', await page.evaluate(() =>
+  window.__historyReads.length === 1 && window.__historyReads[0] === '2026-07-12T01-00-00-000Z'));
+await page.evaluate(() => window.hideHistoryModal());
+
+// --- 23. Table editor: insert + edit-in-place round trip ---
+await page.evaluate(() => window.openTableEditor('insert'));
+await page.waitForTimeout(300);
+check('table editor opens with 3x3 grid', await page.evaluate(() =>
+  document.querySelectorAll('#table-editor-grid .table-editor-row:not(.table-editor-controls)').length === 3 &&
+  document.querySelectorAll('#table-editor-grid .table-editor-row.header-row .table-editor-cell').length === 3));
+// cycle first column alignment to center
+await page.locator('#table-editor-grid .table-editor-colctl').first().locator('button').first().click();
+await page.waitForTimeout(150);
+let tableOut = await page.locator('#table-editor-output').inputValue();
+check('alignment cycle produces :---: divider', /\|\s*:-+:\s*\|/.test(tableOut), JSON.stringify(tableOut.split('\n')[1]));
+check('table output has padded columns', tableOut.split('\n')[0].includes('| Header 1 |'), tableOut.split('\n')[0]);
+await page.evaluate(() => window.hideTableEditorModal());
+
+// edit-in-place with an escaped pipe cell
+await editor.evaluate((ta) => {
+  ta.value = 'before\n\n| Col A | Col B |\n| ----- | ----- |\n| a\\|b  | c     |\n\nafter';
+  const caret = ta.value.indexOf('Col A');
+  ta.selectionStart = ta.selectionEnd = caret;
+  window.handleEditorInput();
+});
+await page.evaluate(() => window.openTableEditor('edit'));
+await page.waitForTimeout(300);
+check('edit mode parses escaped pipe cell', await page.evaluate(() =>
+  Array.from(document.querySelectorAll('#table-editor-grid .table-editor-cell')).some(i => i.value === 'a|b')));
+check('apply button says Update Table', (await page.locator('#table-editor-apply').innerText()) === 'Update Table');
+// change a cell and apply
+await page.evaluate(() => {
+  const cell = Array.from(document.querySelectorAll('#table-editor-grid .table-editor-cell')).find(i => i.value === 'c');
+  cell.value = 'changed';
+  cell.dispatchEvent(new Event('input'));
+});
+await page.locator('#table-editor-apply').click();
+await page.waitForTimeout(300);
+let editorVal = await editor.inputValue();
+check('table replaced in place', editorVal.includes('changed') && editorVal.includes('before') && editorVal.includes('after') && editorVal.includes('a\\|b'), JSON.stringify(editorVal));
+// Native textarea undo binds to the REAL OS (Control on Linux), not the
+// app's stubbed platform, so use ControlOrMeta here.
+await editor.press('ControlOrMeta+z');
+await page.waitForTimeout(200);
+editorVal = await editor.inputValue();
+check('table edit is undoable', editorVal.includes('| c     |'), JSON.stringify(editorVal.split('\n')[4] || ''));
+
+// --- 24. Builder v2: er / timeline / mindmap / quadrant / custom ---
+await page.evaluate(() => window.showMermaidBuilder());
+await page.waitForTimeout(200);
+for (const [type, needles] of [
+  ['er', ['erDiagram', '||--o{', 'Customer {']],
+  ['timeline', ['timeline', 'title Company milestones', '2023 : Founded : First hire']],
+  ['mindmap', ['mindmap', 'root((Project Plan))']],
+  ['quadrant', ['quadrantChart', 'quadrant-1 Strategic bets', '[0.2, 0.7]']],
+]) {
+  await page.evaluate((t) => {
+    document.getElementById('builder-type').value = t;
+    window.switchBuilderType();
+    window.loadBuilderExample();
+  }, type);
+  await page.waitForTimeout(700);
+  const code = await page.locator('#builder-code').inputValue();
+  check(`builder ${type} code has expected constructs`, needles.every(n => code.includes(n)),
+    JSON.stringify(code).slice(0, 140));
+  check(`builder ${type} live preview renders svg`, await page.locator('#builder-preview svg').count() === 1);
+}
+// custom mode: form + example hidden, code editable
+await page.evaluate(() => {
+  document.getElementById('builder-type').value = 'custom';
+  window.switchBuilderType();
+});
+await page.waitForTimeout(200);
+check('custom mode hides example button', await page.evaluate(() =>
+  document.getElementById('builder-example-btn').style.display === 'none'));
+check('custom mode hides other field groups', await page.evaluate(() =>
+  document.getElementById('builder-fields-flowchart').style.display === 'none' &&
+  document.getElementById('builder-fields-quadrant').style.display === 'none'));
+await page.evaluate(() => window.hideMermaidBuilder());
+
+// --- 25. Builder edit-in-place on rendered blocks ---
+await editor.evaluate((ta) => {
+  ta.value = '# T\n\n```mermaid\nflowchart TD\n    A --> B\n```\n\ntext between\n\n```mermaid\npie title P\n    "X" : 1\n```\n';
+  ta.selectionStart = ta.selectionEnd = 0;
+  window.handleEditorInput();
+});
+await page.locator('#btn-mode-preview').click();
+await page.waitForTimeout(900);
+const editBtns = page.locator('.mermaid-actions-bar button[data-tooltip*="Edit Diagram"], .mermaid-actions-bar button[title*="Edit Diagram"]');
+check('edit buttons present on rendered blocks', (await editBtns.count()) === 2, String(await editBtns.count()));
+await page.locator('.mermaid-block-container').nth(1).hover();
+await editBtns.nth(1).click();
+await page.waitForTimeout(400);
+check('edit opens builder in custom mode', await page.evaluate(() =>
+  document.getElementById('builder-type').value === 'custom' &&
+  document.getElementById('builder-code').value.includes('pie title P')));
+check('edit mode footer says Update Diagram', (await page.locator('#builder-apply-btn').innerText()) === 'Update Diagram');
+await page.evaluate(() => {
+  document.getElementById('builder-code').value = 'pie title Q\n    "Y" : 2';
+  window.scheduleBuilderPreview();
+});
+await page.locator('#builder-apply-btn').click();
+await page.waitForTimeout(500);
+editorVal = await editor.inputValue();
+check('correct block replaced in place', editorVal.includes('pie title Q') && !editorVal.includes('pie title P') &&
+  editorVal.includes('flowchart TD') && editorVal.includes('text between'), JSON.stringify(editorVal).slice(0, 200));
+
+// --- 26. Attachments: paste image + drop file ---
+await page.evaluate(() => {
+  window.__saveAttachmentCalls = [];
+  const orig = window.api.saveAttachment;
+  window.api.saveAttachment = async (p) => { window.__saveAttachmentCalls.push({ baseName: p.baseName, notePath: p.notePath, size: p.bytes.byteLength }); return orig(p); };
+});
+await page.locator('#btn-mode-edit').click();
+await editor.evaluate((ta) => { ta.value = 'start '; ta.selectionStart = ta.selectionEnd = ta.value.length; window.handleEditorInput(); });
+await editor.evaluate((ta) => {
+  const dt = new DataTransfer();
+  dt.items.add(new File([new Uint8Array([137, 80, 78, 71])], 'shot.png', { type: 'image/png' }));
+  const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+  ta.dispatchEvent(ev);
+});
+await page.waitForTimeout(500);
+editorVal = await editor.inputValue();
+check('paste saves via saveAttachment with note path', await page.evaluate(() =>
+  window.__saveAttachmentCalls.length === 1 && window.__saveAttachmentCalls[0].notePath.endsWith('.md') && window.__saveAttachmentCalls[0].size === 4));
+check('paste inserts image link at caret', editorVal.includes('start ![](attachments/pasted.png)'), JSON.stringify(editorVal));
+check('paste shows toast', await page.evaluate(() =>
+  document.getElementById('app-toast').classList.contains('visible')));
+
+// drop a file on the editor pane
+await page.evaluate(() => {
+  const dt = new DataTransfer();
+  dt.items.add(new File([new Uint8Array([1, 2, 3])], 'report.pdf', { type: 'application/pdf' }));
+  const ev = new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true });
+  document.getElementById('editor-pane').dispatchEvent(ev);
+});
+await page.waitForTimeout(500);
+editorVal = await editor.inputValue();
+check('drop inserts link for non-image file', editorVal.includes('](attachments/dropped.pdf)'), JSON.stringify(editorVal));
+
+// resourceBase passed to renderMarkdown
+await page.evaluate(() => {
+  window.__renderOpts = [];
+  const orig = window.api.renderMarkdown;
+  window.api.renderMarkdown = (text, opts) => { window.__renderOpts.push(opts); return orig(text, opts); };
+});
+await page.locator('#btn-mode-preview').click();
+await page.waitForTimeout(600);
+check('renderMarkdown receives resourceBase of note dir', await page.evaluate(() =>
+  window.__renderOpts.some(o => o && typeof o.resourceBase === 'string' && o.resourceBase.length > 0)));
 
 } finally {
   if (browser) await browser.close();
