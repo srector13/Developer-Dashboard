@@ -20,6 +20,8 @@ The portable target keeps **all app state next to the executable** instead of `%
 
 The zip distribution can opt in to the same behavior: create a folder named `MarkdownNotebookData` next to the executable once, and the app becomes self-contained from then on. Without that folder, zip builds use the normal per-user location.
 
+Independent of portable state, the app maintains a per-user pointer file (`~/.markdown-notebook/last-notebook.json`) recording the active notebook path. A fresh portable copy — or one whose data folder was deleted — falls back to that pointer, so the notebook reopens without re-selection; the folder chooser appears only when neither settings nor the pointer resolve to an existing directory.
+
 ## Code signing
 
 Signing is **automatic when the secrets exist and silently skipped when they don't** — unsigned builds always succeed, so forks and test releases work without certificates. Signing applies to *every* Windows artifact (installer, portable, zip contents), not just the installer; a signed portable exe is much less likely to be blocked by SmartScreen or corporate AV.

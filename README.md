@@ -67,6 +67,8 @@ The only optional extra is [Pandoc](https://pandoc.org/installing.html), needed 
 
 Every note is a plain `.md` text file in a folder you chose. The app adds only small housekeeping files (page ordering, trash, version history) inside that folder, all plain text and safe to commit to git. There's no account, no cloud, and no database — which also means any sync tool you already use just works.
 
+The app also keeps one tiny reminder file in your home folder (`.markdown-notebook/last-notebook.json`) recording where your notebook lives — so even a fresh copy of the portable version reopens the right notebook. If it can't find your notebook anywhere, it simply asks again.
+
 ## Building from source
 
 ```bash

@@ -94,6 +94,44 @@ function migrateSettings(raw: Partial<AppSettings>): AppSettings {
   return merged;
 }
 
+// Notebook pointer: a tiny per-user file OUTSIDE the app's own state that
+// remembers where the notebook lives. Settings travel with the app (and in
+// portable mode, with the .exe) — the pointer stays in the user's home
+// folder, so a fresh unzip, a moved portable exe, or a wiped data folder
+// still reopens the same notebook. Only when both are missing/invalid does
+// the "where is your notebook?" screen appear.
+const POINTER_DIR = path.join(app.getPath('home'), '.markdown-notebook');
+const POINTER_FILE = path.join(POINTER_DIR, 'last-notebook.json');
+
+function readNotebookPointer(): string {
+  try {
+    const data = JSON.parse(fs.readFileSync(POINTER_FILE, 'utf8'));
+    return typeof data?.notebookRoot === 'string' ? data.notebookRoot : '';
+  } catch {
+    return '';
+  }
+}
+
+function writeNotebookPointer(root: string): void {
+  if (!root) return;
+  try {
+    fs.mkdirSync(POINTER_DIR, { recursive: true });
+    fs.writeFileSync(POINTER_FILE, JSON.stringify({ notebookRoot: root }, null, 2), 'utf8');
+  } catch {
+    // best effort: a read-only home dir shouldn't break the app
+  }
+}
+
+// Fall back to the pointer when settings have no usable notebook root.
+// The fallback is applied in memory only — nothing is written until the
+// user actually picks or confirms a folder.
+function resolveNotebookRoot(settings: AppSettings): AppSettings {
+  if (settings.notebookRoot && fs.existsSync(settings.notebookRoot)) return settings;
+  const pointer = readNotebookPointer();
+  settings.notebookRoot = pointer && fs.existsSync(pointer) ? pointer : '';
+  return settings;
+}
+
 // Config manager helpers. Settings are cached in memory: they're read on
 // nearly every IPC call, and the disk copy only changes through writeSettings.
 let settingsCache: AppSettings | null = null;
@@ -102,9 +140,9 @@ async function readSettings(): Promise<AppSettings> {
   if (settingsCache) return settingsCache;
   try {
     const data = await fsp.readFile(SETTINGS_FILE, 'utf8');
-    settingsCache = migrateSettings(JSON.parse(data));
+    settingsCache = resolveNotebookRoot(migrateSettings(JSON.parse(data)));
   } catch {
-    settingsCache = { ...defaultSettings };
+    settingsCache = resolveNotebookRoot({ ...defaultSettings });
   }
   return settingsCache;
 }
@@ -114,6 +152,7 @@ async function writeSettings(settings: Partial<AppSettings>): Promise<AppSetting
   const updated = migrateSettings({ ...current, ...settings });
   await fsp.writeFile(SETTINGS_FILE, JSON.stringify(updated, null, 2), 'utf8');
   settingsCache = updated;
+  writeNotebookPointer(updated.notebookRoot);
   return updated;
 }
 
@@ -164,6 +203,30 @@ function wireSpellcheckMenu(win: BrowserWindow) {
   });
 }
 
+// Splash: a tiny frameless window that paints instantly while the real
+// window loads the renderer and scans the notebook. Closed on first paint
+// of the main window.
+let splashWindow: BrowserWindow | null = null;
+
+function createSplashWindow() {
+  splashWindow = new BrowserWindow({
+    width: 340,
+    height: 400,
+    frame: false,
+    resizable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    webPreferences: { contextIsolation: true, nodeIntegration: false },
+  });
+  splashWindow.loadFile(path.join(__dirname, '../renderer/splash.html'));
+  splashWindow.on('closed', () => { splashWindow = null; });
+}
+
+function closeSplash() {
+  if (splashWindow && !splashWindow.isDestroyed()) splashWindow.destroy();
+  splashWindow = null;
+}
+
 // Window manager
 function createWindow() {
   const iconPath = path.join(__dirname, '../build/icon.png');
@@ -172,6 +235,7 @@ function createWindow() {
     height: 800,
     minWidth: 800,
     minHeight: 600,
+    show: false, // shown on ready-to-show; the splash covers the gap
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     trafficLightPosition: { x: 12, y: 20 },
     ...(fs.existsSync(iconPath) ? { icon: iconPath } : {}),
@@ -185,6 +249,15 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   wireSpellcheckMenu(mainWindow);
+
+  const reveal = () => {
+    if (mainWindow && !mainWindow.isVisible()) mainWindow.show();
+    closeSplash();
+  };
+  mainWindow.once('ready-to-show', reveal);
+  // Belt and braces: never leave the user stuck on the splash if the
+  // renderer paints slowly or ready-to-show fails to fire
+  setTimeout(reveal, 15000);
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -252,11 +325,14 @@ ipcMain.handle('select-folder', async () => {
 
 
 app.whenReady().then(async () => {
+  createSplashWindow();
   createWindow();
 
   // Register after the renderer loads so a registration failure (shortcut
   // taken by another app) can surface as a toast instead of vanishing.
   const settings = await readSettings();
+  // Seed the per-user pointer for installs that predate it
+  writeNotebookPointer(settings.notebookRoot);
   if (mainWindow) {
     mainWindow.webContents.once('did-finish-load', () => {
       registerQuickCaptureShortcut(settings.quickCaptureShortcut);
