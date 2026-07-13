@@ -93,6 +93,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     await refreshNotebook(false); // refresh tree without resetting active note
   });
 
+  // Quick-capture shortcut couldn't be registered (invalid or taken by
+  // another app) — tell the user so the feature doesn't silently not work
+  if (window.api.onCaptureShortcutFailed) {
+    window.api.onCaptureShortcutFailed((shortcut) => {
+      showToast(`Could not register quick capture shortcut "${shortcut}". Change it in Settings.`, 'error');
+    });
+  }
+
   // Set default page width label
   const labelMap = { 'standard': 'Standard', 'wide': 'Wide', 'full': 'Full' };
   document.getElementById('label-stretch-width').innerText = labelMap[appSettings.defaultPageWidth] || 'Standard';
@@ -233,6 +241,32 @@ function applyTheme(theme) {
   }
 }
 
+// Mermaid theme to use for each exportable document theme
+const PDF_MERMAID_THEME = { light: 'default', minimal: 'default', dark: 'dark' };
+
+function mermaidInit(theme) {
+  window.mermaid.initialize({ startOnLoad: false, theme, securityLevel: 'loose' });
+}
+
+// Run `fn` with mermaid initialized to an export theme, restoring the app
+// theme afterwards. mermaid.initialize is GLOBAL, so this must never
+// interleave with an in-app preview render — chaining onto the serialized
+// previewRenderQueue is what guarantees that.
+function withMermaidTheme(exportTheme, fn) {
+  previewRenderQueue = previewRenderQueue.then(async () => {
+    if (!window.mermaid) return fn();
+    mermaidInit(exportTheme);
+    try {
+      return await fn();
+    } finally {
+      mermaidInit(THEMES[resolveThemeName(appSettings.theme)].mermaid);
+    }
+  }).catch(err => {
+    console.error('Themed mermaid render failed:', err);
+  });
+  return previewRenderQueue;
+}
+
 // Quick toggle flips between the light/dark base themes; the full palette
 // list lives in Settings.
 async function toggleGlobalTheme() {
@@ -333,13 +367,20 @@ function toggleFolderCollapse(relativePath, element) {
   renderSidebarTree();
 }
 
-// Recursive tag scanner
-function scanGlobalTags(node) {
-  if (!node) return;
-  if (node.kind === 'section') {
-    node.pages.forEach(p => p.tags.forEach(t => tagSet.add(t)));
-    node.sections.forEach(s => scanGlobalTags(s));
+// Recursive tag scanner. Also counts how many pages carry each tag for the
+// search panel's Tags group.
+let tagCounts = new Map(); // tag -> page count
+function scanGlobalTags(node, counts = null) {
+  const top = counts === null;
+  if (top) counts = new Map();
+  if (node && node.kind === 'section') {
+    node.pages.forEach(p => p.tags.forEach(t => {
+      tagSet.add(t);
+      counts.set(t, (counts.get(t) || 0) + 1);
+    }));
+    node.sections.forEach(s => scanGlobalTags(s, counts));
   }
+  if (top) tagCounts = counts;
 }
 
 // Sidebar notebook tree HTML generator
@@ -497,19 +538,181 @@ function findNodeByPath(node, filePath) {
 }
 
 // Search handler (debounced: the tree rebuild + tooltip rebinding is too
-// heavy to run on every keystroke in large notebooks). Title filtering stays
-// local; content matches come from the main-process full-text index.
+// heavy to run on every keystroke in large notebooks). The results panel
+// shows three collapsible groups — Titles, Content, Tags — and a leading
+// '#' switches the whole panel into tag-autocomplete mode.
 let searchDebounceTimer = null;
 let contentSearchToken = 0;
 
+// Collapse state per group, persisted app-wide
+let searchGroupCollapsed = { titles: false, content: false, tags: false };
+try {
+  const saved = JSON.parse(localStorage.getItem('mdnb-search-groups') || 'null');
+  if (saved && typeof saved === 'object') {
+    searchGroupCollapsed = { ...searchGroupCollapsed, ...saved };
+  }
+} catch {}
+
 function handleSearch(val) {
-  searchQuery = val;
+  // In '#' tag mode the tree must not be title-filtered ('#foo' matches no
+  // titles and would blank the tree); the panel does the work instead.
+  const tagMode = val.startsWith('#');
+  searchQuery = tagMode ? '' : val;
   if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
   searchDebounceTimer = setTimeout(() => {
     searchDebounceTimer = null;
     renderSidebarTree();
-    runContentSearch(val);
+    renderSearchGroups(val);
   }, 120);
+}
+
+function toggleSearchGroup(name) {
+  searchGroupCollapsed[name] = !searchGroupCollapsed[name];
+  try {
+    localStorage.setItem('mdnb-search-groups', JSON.stringify(searchGroupCollapsed));
+  } catch {}
+  // Flip classes in place: a full re-render would drop the async Content fill
+  const group = document.querySelector(`#content-search-results .search-group[data-group="${name}"]`);
+  if (group) {
+    const chevron = group.querySelector('.search-group-chevron');
+    const body = group.querySelector('.search-group-body');
+    if (chevron) chevron.classList.toggle('collapsed', searchGroupCollapsed[name]);
+    if (body) body.classList.toggle('collapsed', searchGroupCollapsed[name]);
+  }
+}
+
+function searchGroupHtml(name, label, count, bodyHtml) {
+  const collapsed = !!searchGroupCollapsed[name];
+  return `
+    <div class="search-group" data-group="${name}">
+      <div class="search-group-header" onclick="toggleSearchGroup('${name}')">
+        <span class="search-group-chevron ${collapsed ? 'collapsed' : ''}">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </span>
+        <span class="search-group-label">${escapeHtml(label)}</span>
+        <span class="search-group-count">${count}</span>
+      </div>
+      <div class="search-group-body ${collapsed ? 'collapsed' : ''}">${bodyHtml}</div>
+    </div>
+  `;
+}
+
+function tagRowsHtml(tags) {
+  if (tags.length === 0) {
+    return '<div class="content-search-empty">No matching tags</div>';
+  }
+  return tags.map(tag => `
+    <div class="search-tag-row ${activeTagFilter === tag ? 'active' : ''}" onclick="selectSearchTag(${jsArg(tag)})">
+      <span class="tag-pill">#${escapeHtml(tag)}</span>
+      <span class="search-group-count">${tagCounts.get(tag) || 0}</span>
+    </div>
+  `).join('');
+}
+
+// Apply a tag from the search panel: the active-tag indicator carries the
+// state from here on, so the query box is cleared.
+function selectSearchTag(tag) {
+  toggleTagFilter(tag);
+  const input = document.getElementById('search-input');
+  if (input) input.value = '';
+  handleSearch('');
+}
+
+// Render the three-group results panel (or the tag-autocomplete panel)
+function renderSearchGroups(rawQuery) {
+  const container = document.getElementById('content-search-results');
+  if (!container) return;
+
+  const raw = rawQuery || '';
+  const tagMode = raw.startsWith('#');
+  const q = (tagMode ? raw.slice(1) : raw).trim().toLowerCase();
+
+  // Any new render invalidates in-flight content responses
+  const token = ++contentSearchToken;
+
+  if (!tagMode && raw.trim().length === 0) {
+    container.style.display = 'none';
+    container.innerHTML = '';
+    return;
+  }
+  container.style.display = 'block';
+
+  const allTags = Array.from(tagSet).sort((a, b) => a.localeCompare(b));
+
+  if (tagMode) {
+    // '#' alone lists every registered tag; typing filters the list live
+    const matches = q ? allTags.filter(t => t.toLowerCase().includes(q)) : allTags;
+    container.innerHTML = searchGroupHtml('tags', 'Tags — autocomplete', matches.length, tagRowsHtml(matches));
+    return;
+  }
+
+  // --- Titles group (sync) ---
+  const pages = treeData ? gatherPagesRecursively(treeData) : [];
+  const titleMatches = pages.filter(p =>
+    p.title.toLowerCase().includes(q) || p.name.toLowerCase().includes(q));
+  const shownTitles = titleMatches.slice(0, 20);
+  const titlesBody = shownTitles.length === 0
+    ? '<div class="content-search-empty">No matches</div>'
+    : shownTitles.map(p => `
+        <div class="content-search-item" onclick="openNote(${jsArg(p.fsPath)})">
+          <div class="content-search-title">
+            <span>${escapeHtml(p.title)}</span>
+          </div>
+          <div class="content-search-snippet">${escapeHtml(pathDirname(p.relPath) || 'Notebook root')}</div>
+        </div>
+      `).join('') + (titleMatches.length > 20
+        ? `<div class="content-search-empty">+${titleMatches.length - 20} more</div>` : '');
+
+  // --- Tags group (sync) ---
+  const tagMatches = allTags.filter(t => t.toLowerCase().includes(q)).slice(0, 25);
+
+  // --- Content group (async; placeholder now, filled when the IPC lands) ---
+  const contentPlaceholder = q.length >= 2
+    ? '<div class="content-search-empty">Searching…</div>'
+    : '<div class="content-search-empty">Type at least 2 characters</div>';
+
+  container.innerHTML =
+    searchGroupHtml('titles', 'Titles', titleMatches.length, titlesBody) +
+    searchGroupHtml('content', 'Content', 0, contentPlaceholder) +
+    searchGroupHtml('tags', 'Tags', tagMatches.length, tagRowsHtml(tagMatches));
+
+  if (q.length >= 2) {
+    fillContentGroup(raw.trim(), token);
+  }
+}
+
+async function fillContentGroup(query, token) {
+  let results = [];
+  try {
+    results = await window.api.searchNotes(query);
+  } catch (err) {
+    console.error('Content search failed:', err);
+    return;
+  }
+  if (token !== contentSearchToken) return; // stale response
+
+  const group = document.querySelector('#content-search-results .search-group[data-group="content"]');
+  if (!group) return;
+  const body = group.querySelector('.search-group-body');
+  const count = group.querySelector('.search-group-count');
+  if (count) count.textContent = String(results.length);
+
+  if (!results.length) {
+    body.innerHTML = '<div class="content-search-empty">No matches</div>';
+    return;
+  }
+  body.innerHTML = results.slice(0, 20).map(r => {
+    const snippet = r.snippets && r.snippets[0];
+    return `
+      <div class="content-search-item" onclick="openNoteAtLine(${jsArg(r.fsPath)}, ${snippet ? snippet.line : 0})">
+        <div class="content-search-title">
+          <span>${escapeHtml(r.title)}</span>
+          <span class="content-search-count">${r.matchCount}</span>
+        </div>
+        ${snippet ? `<div class="content-search-snippet">${highlightSnippet(snippet.text, snippet.ranges)}</div>` : ''}
+      </div>
+    `;
+  }).join('');
 }
 
 // Build safe highlighted HTML from a snippet: each slice is escaped
@@ -524,47 +727,6 @@ function highlightSnippet(text, ranges) {
   });
   html += escapeHtml(text.slice(cursor));
   return html;
-}
-
-async function runContentSearch(query) {
-  const container = document.getElementById('content-search-results');
-  if (!container) return;
-  const q = (query || '').trim();
-  if (q.length < 2) {
-    container.style.display = 'none';
-    container.innerHTML = '';
-    return;
-  }
-
-  const token = ++contentSearchToken;
-  let results = [];
-  try {
-    results = await window.api.searchNotes(q);
-  } catch (err) {
-    console.error('Content search failed:', err);
-    return;
-  }
-  if (token !== contentSearchToken) return; // stale response
-
-  if (!results.length) {
-    container.style.display = 'block';
-    container.innerHTML = '<div class="content-search-header">In note contents</div><div class="content-search-empty">No content matches</div>';
-    return;
-  }
-
-  container.style.display = 'block';
-  container.innerHTML = '<div class="content-search-header">In note contents</div>' + results.map(r => {
-    const snippet = r.snippets && r.snippets[0];
-    return `
-      <div class="content-search-item" onclick="openNoteAtLine(${jsArg(r.fsPath)}, ${snippet ? snippet.line : 0})">
-        <div class="content-search-title">
-          <span>${escapeHtml(r.title)}</span>
-          <span class="content-search-count">${r.matchCount}</span>
-        </div>
-        ${snippet ? `<div class="content-search-snippet">${highlightSnippet(snippet.text, snippet.ranges)}</div>` : ''}
-      </div>
-    `;
-  }).join('');
 }
 
 // Open a note and reveal the given line (best effort: exact caret placement
@@ -667,6 +829,7 @@ async function openNote(filePath) {
     }
     renderTabStrip();
     persistTabs();
+    recordRecentNote(filePath);
 
     // Reset view to default preview first, without rendering: renderActiveNote
     // below renders the preview once (previously this rendered twice per open)
@@ -780,10 +943,44 @@ async function doRenderMarkdownPreview() {
       e.preventDefault();
       const lineIdx = parseInt(link.getAttribute('data-line'), 10);
       if (isNaN(lineIdx)) return;
-      
+
+      // Optimistic in-place toggle: no re-read, no full preview re-render
+      // (which would re-run every mermaid diagram just to flip a checkbox).
+      // The current state comes from the SOURCE line, not the DOM: when the
+      // click lands on the <input> itself the browser has already toggled
+      // it (and reverts it again after preventDefault), so checkbox.checked
+      // is unreliable at this point.
+      const checkbox = link.querySelector('.task-checkbox');
+      const checkboxRe = /^([ \t]*([-*+]\s+|\d+\.\s+)?)\[([ xX])\]/;
+      const lines = noteContent.split(/\r?\n/);
+      const m = lines[lineIdx] !== undefined ? lines[lineIdx].match(checkboxRe) : null;
+      const wasChecked = m ? m[3] !== ' ' : (checkbox ? checkbox.checked : false);
+      if (checkbox) checkbox.checked = !wasChecked;
+
       const success = await window.api.toggleTaskAtLine(activeNote, lineIdx);
-      if (success) {
-        // Read file contents refreshed
+      if (!success) {
+        if (checkbox) checkbox.checked = wasChecked;
+        showToast('Could not toggle the task.', 'error');
+        return;
+      }
+      // Re-assert in a NEW task: the canceled native click reverts the
+      // input when dispatch completes — which runs after this handler's
+      // microtask continuations, so only a macrotask reliably wins.
+      if (checkbox) setTimeout(() => { checkbox.checked = !wasChecked; }, 0);
+
+      // Patch local state to EXACTLY what main wrote. toggle-task-at-line
+      // splits /\r?\n/ and joins with '\n' (normalizes CRLF) — replicate
+      // that so the debounced files-changed refresh sees matching content
+      // and skips the preview re-render.
+      if (m) {
+        lines[lineIdx] = lines[lineIdx].replace(checkboxRe, `$1[${m[3] === ' ' ? 'x' : ' '}]`);
+        noteContent = lines.join('\n');
+        noteOriginalContent = noteContent;
+        document.getElementById('note-editor').value = noteContent;
+        updateWordCount();
+      } else {
+        // Line didn't look like a checkbox (note changed underneath us):
+        // fall back to the full re-read + re-render path
         noteContent = await window.api.readNote(activeNote);
         noteOriginalContent = noteContent;
         renderActiveNote();
@@ -1009,17 +1206,30 @@ function updateSaveStatus(edited) {
   if (activeTab) activeTab.classList.toggle('dirty', !!edited);
 }
 
-// Line Numbers counter
+// Line Numbers counter. Incremental: row i always reads "i", so only
+// trailing rows ever need to be added or removed — no innerHTML rebuild.
 function updateLineNumbers() {
   const textarea = document.getElementById('note-editor');
   const lineNumbers = document.getElementById('line-numbers');
   const lines = textarea.value.split('\n').length;
-  let html = '';
-  for (let i = 1; i <= lines; i++) {
-    html += `<div>${i}</div>`;
+  const rendered = lineNumbers.childElementCount;
+
+  if (lines === rendered) return;
+
+  if (lines > rendered) {
+    const fragment = document.createDocumentFragment();
+    for (let i = rendered + 1; i <= lines; i++) {
+      const div = document.createElement('div');
+      div.textContent = String(i);
+      fragment.appendChild(div);
+    }
+    lineNumbers.appendChild(fragment);
+  } else {
+    while (lineNumbers.childElementCount > lines) {
+      lineNumbers.lastElementChild.remove();
+    }
   }
-  lineNumbers.innerHTML = html;
-  syncEditorScroll(); // rebuilding the gutter resets its scroll position
+  syncEditorScroll(); // line-count changes can shift the textarea's scroll
 }
 
 // Word count + estimated reading time shown in the note header meta row
@@ -1982,6 +2192,7 @@ function showSettingsModal() {
   document.getElementById('settings-templates-folder').value = appSettings.templatesFolder;
   document.getElementById('settings-author').value = appSettings.author;
   document.getElementById('settings-pandoc-path').value = appSettings.pandocPath || '';
+  document.getElementById('settings-capture-shortcut').value = appSettings.quickCaptureShortcut || '';
   document.getElementById('settings-ignore-folders').value = appSettings.ignoreFolders.join(', ');
   document.getElementById('settings-autosave').checked = autoSaveEnabled;
   modal.classList.add('active');
@@ -1998,6 +2209,7 @@ async function saveSettingsForm() {
   const templates = document.getElementById('settings-templates-folder').value.trim() || 'templates';
   const author = document.getElementById('settings-author').value.trim();
   const pandocPath = document.getElementById('settings-pandoc-path').value.trim();
+  const captureShortcut = document.getElementById('settings-capture-shortcut').value.trim();
   const ignore = document.getElementById('settings-ignore-folders').value.split(',').map(s => s.trim()).filter(s => s);
   const autosave = document.getElementById('settings-autosave').checked;
 
@@ -2008,6 +2220,7 @@ async function saveSettingsForm() {
     templatesFolder: templates,
     author: author,
     pandocPath: pandocPath,
+    quickCaptureShortcut: captureShortcut,
     scratchpadFile: appSettings.scratchpadFile,
     ignoreFolders: ignore,
     autoSaveEnabled: autosave,
@@ -2377,11 +2590,12 @@ function isTemplatePath(fsPath) {
 // reset Mermaid SVG sizing. On screen the SVGs are stretched to 100% width,
 // which in print blows tall diagrams up over multiple pages and produces
 // blank pages around them; exporting at natural (viewBox) size fixes that.
-function getSanitizedPreviewHtml() {
-  const preview = document.getElementById('preview-pane');
-  const clone = preview.cloneNode(true);
-  clone.querySelectorAll('.mermaid-actions-bar, .code-block-copy-btn').forEach(el => el.remove());
-  clone.querySelectorAll('.notebook-mermaid').forEach(pre => {
+// Shared export sanitizer: strips interactive UI chrome and clamps mermaid
+// SVG sizing for print. Used by single-note PDF, batch PDF, HTML export and
+// copy-as-rich-text so the strip list can never drift between them.
+function sanitizeExportDom(root) {
+  root.querySelectorAll('.mermaid-actions-bar, .code-block-copy-btn').forEach(el => el.remove());
+  root.querySelectorAll('.notebook-mermaid').forEach(pre => {
     const svg = pre.querySelector('svg');
     if (svg) {
       const viewBox = svg.viewBox && svg.viewBox.baseVal;
@@ -2393,18 +2607,96 @@ function getSanitizedPreviewHtml() {
       svg.removeAttribute('height');
     }
   });
-  return clone.innerHTML;
+  return root;
 }
 
-// Opens the export options dialog (prefilled with the last-used choices)
-function exportToPdf() {
-  if (!activeNote) return;
+function getSanitizedPreviewClone() {
+  const preview = document.getElementById('preview-pane');
+  return sanitizeExportDom(preview.cloneNode(true));
+}
+
+function getSanitizedPreviewHtml() {
+  return getSanitizedPreviewClone().innerHTML;
+}
+
+// Re-render every mermaid block inside `root` from its stored source using
+// the CURRENT mermaid theme (callers wrap this in withMermaidTheme). A block
+// that fails keeps whatever it already shows.
+let exportRenderCounter = 0;
+async function rethemeMermaidIn(root) {
+  for (const pre of root.querySelectorAll('.notebook-mermaid')) {
+    const source = (pre.dataset.mermaidSrc || '').trim();
+    if (!source) continue;
+    try {
+      const { svg } = await window.mermaid.render(`mdnb-export-${++exportRenderCounter}`, source);
+      pre.innerHTML = svg;
+      const el = pre.querySelector('svg');
+      if (el) {
+        const viewBox = el.viewBox && el.viewBox.baseVal;
+        const naturalWidth = (viewBox && viewBox.width) ? viewBox.width : 0;
+        el.style.maxWidth = naturalWidth ? `${Math.min(Math.round(naturalWidth), 660)}px` : '100%';
+        el.style.width = '100%';
+        el.style.height = 'auto';
+        el.removeAttribute('height');
+      }
+    } catch (err) {
+      console.error('Export diagram render failed; keeping existing SVG:', err);
+    }
+  }
+}
+
+// Opens the export options dialog (prefilled with the last-used choices).
+// scopePreset: 'note' | 'section' | 'notebook' selects the default scope.
+function exportToPdf(scopePreset = 'note') {
   const opts = (appSettings && appSettings.pdfExport) || {};
   document.getElementById('pdf-theme').value = opts.theme || 'light';
   document.getElementById('pdf-page-size').value = opts.pageSize || 'A4';
   document.getElementById('pdf-open-after').checked = opts.openAfter !== false;
   document.getElementById('pdf-reveal').checked = !!opts.reveal;
+
+  // Populate the scope select with live page counts
+  const scopeSelect = document.getElementById('pdf-scope');
+  const sectionNode = getExportSectionNode();
+  const sectionCount = sectionNode ? gatherPagesRecursively(sectionNode).length : 0;
+  const notebookCount = treeData ? gatherPagesRecursively(treeData).length : 0;
+  scopeSelect.innerHTML = `
+    <option value="note" ${activeNote ? '' : 'disabled'}>Current note</option>
+    <option value="section" ${sectionNode ? '' : 'disabled'}>This section (${sectionCount} page${sectionCount === 1 ? '' : 's'})</option>
+    <option value="notebook">Entire notebook (${notebookCount} page${notebookCount === 1 ? '' : 's'})</option>
+  `;
+  if (scopePreset === 'note' && !activeNote) scopePreset = sectionNode ? 'section' : 'notebook';
+  if (scopePreset === 'section' && !sectionNode) scopePreset = 'notebook';
+  scopeSelect.value = scopePreset;
+
   document.getElementById('pdf-export-modal').classList.add('active');
+}
+
+// The section an export would cover: the open section landing, or the
+// active note's parent section.
+function getExportSectionNode() {
+  if (activeSection && activeSection.relPath) {
+    return findSectionNode(treeData, activeSection.relPath);
+  }
+  if (activeNote && treeData) {
+    const dir = pathDirname(activeNote);
+    const normalize = p => String(p).replace(/\\/g, '/');
+    if (normalize(dir) === normalize(notebookRoot)) return null; // root notes -> notebook scope
+    const findByFsPath = (node) => {
+      if (!node) return null;
+      if (node.kind === 'section' && normalize(node.fsPath) === normalize(dir)) return node;
+      for (const s of (node.sections || [])) {
+        const hit = findByFsPath(s);
+        if (hit) return hit;
+      }
+      return null;
+    };
+    return findByFsPath(treeData);
+  }
+  return null;
+}
+
+function exportSectionToPdf() {
+  exportToPdf(activeSection && !activeSection.relPath ? 'notebook' : 'section');
 }
 
 function hidePdfExportModal() {
@@ -2412,21 +2704,164 @@ function hidePdfExportModal() {
 }
 
 async function confirmPdfExport() {
-  if (!activeNote) return;
   const options = {
     theme: document.getElementById('pdf-theme').value,
     pageSize: document.getElementById('pdf-page-size').value,
     openAfter: document.getElementById('pdf-open-after').checked,
     reveal: document.getElementById('pdf-reveal').checked,
   };
+  const scope = document.getElementById('pdf-scope').value;
   hidePdfExportModal();
 
-  const result = await window.api.exportToPdf(activeNote, getSanitizedPreviewHtml(), options);
+  if (scope === 'section' || scope === 'notebook') {
+    const sectionNode = scope === 'section' ? getExportSectionNode() : treeData;
+    if (!sectionNode) {
+      showToast('Nothing to export for that scope.', 'error');
+      return;
+    }
+    await confirmBatchPdfExport(sectionNode, scope, options);
+    return;
+  }
+
+  if (!activeNote) return;
+
+  // Single note: re-render diagrams to match the PDF theme (not the app
+  // theme), inside the mermaid mutex
+  const clone = getSanitizedPreviewClone();
+  await withMermaidTheme(PDF_MERMAID_THEME[options.theme] || 'default', () => rethemeMermaidIn(clone));
+
+  const result = await window.api.exportToPdf(activeNote, clone.innerHTML, options);
   if (result && result.success) {
     if (appSettings) appSettings.pdfExport = options; // main persisted it
     showToast(`PDF exported: ${pathBasename(result.pdfPath)}`);
   } else if (result && !result.canceled) {
     showToast(result.reason || 'PDF export failed.', 'error');
+  }
+}
+
+// ==========================================
+// SHARING (standalone HTML, Word via pandoc, rich-text clipboard)
+// ==========================================
+
+// Standalone .html file with the note's images inlined as data: URIs (done
+// in main). Diagrams are re-rendered to match the export theme, same as PDF.
+async function exportAsHtml() {
+  if (!activeNote) { showToast('Open a note to export it.', 'error'); return; }
+  const theme = (appSettings && appSettings.pdfExport && appSettings.pdfExport.theme) || 'light';
+  const clone = getSanitizedPreviewClone();
+  await withMermaidTheme(PDF_MERMAID_THEME[theme] || 'default', () => rethemeMermaidIn(clone));
+  const result = await window.api.exportToHtml(activeNote, clone.innerHTML, { theme });
+  if (result && result.success) {
+    showToast(`HTML exported: ${pathBasename(result.htmlPath)}`);
+  } else if (result && !result.canceled) {
+    showToast(result.reason || 'HTML export failed.', 'error');
+  }
+}
+
+// Word export runs pandoc over the markdown file itself (not the preview
+// DOM), so it needs no open editor state beyond knowing which note.
+async function exportAsDocx() {
+  if (!activeNote) { showToast('Open a note to export it.', 'error'); return; }
+  const result = await window.api.exportToDocx(activeNote);
+  if (result && result.success) {
+    showToast(`Word document exported: ${pathBasename(result.docxPath)}`);
+  } else if (result && !result.canceled) {
+    showToast(result.reason || 'Word export failed.', 'error');
+  }
+}
+
+// Puts the rendered note on the clipboard as HTML + plain-markdown text, so
+// pasting into Gmail/Word/Slack keeps formatting while plain-text targets
+// get the raw markdown.
+async function copyAsRichText() {
+  if (!activeNote) { showToast('Open a note to copy it.', 'error'); return; }
+  const result = await window.api.copyRichText(getSanitizedPreviewHtml(), noteContent || '');
+  if (result && result.success) {
+    showToast('Copied note as rich text.');
+  } else {
+    showToast((result && result.reason) || 'Copy failed.', 'error');
+  }
+}
+
+// ==========================================
+// BATCH PDF EXPORT (section / notebook -> one merged PDF with a TOC)
+// ==========================================
+
+async function confirmBatchPdfExport(sectionNode, scope, options) {
+  const pages = gatherPagesRecursively(sectionNode);
+  if (pages.length === 0) {
+    showToast('No pages to export.', 'error');
+    return;
+  }
+  if (pages.length > 150 &&
+      !confirm(`This will export ${pages.length} pages into one PDF, which can take a while. Continue?`)) {
+    return;
+  }
+
+  const docTitle = scope === 'notebook' ? 'Notebook' : (sectionNode.name || 'Section');
+  let skipped = 0;
+
+  const html = await withMermaidTheme(PDF_MERMAID_THEME[options.theme] || 'default', async () => {
+    const sections = [];
+    for (let i = 0; i < pages.length; i++) {
+      const p = pages[i];
+      showToast(`Exporting ${i + 1}/${pages.length} — ${p.title}`, 'progress');
+      await new Promise(r => setTimeout(r)); // let the toast paint
+      let text;
+      try {
+        text = await window.api.readNote(p.fsPath);
+      } catch {
+        skipped++;
+        continue;
+      }
+      // Render offscreen: never touches #preview-pane
+      const div = document.createElement('div');
+      div.innerHTML = window.api.renderMarkdown(text, { resourceBase: pathDirname(p.fsPath) });
+      sanitizeExportDom(div);
+
+      for (const pre of div.querySelectorAll('.notebook-mermaid')) {
+        const source = (pre.dataset.mermaidSrc || pre.textContent || '').trim();
+        try {
+          const { svg } = await window.mermaid.render(`mdnb-batch-${++exportRenderCounter}`, source);
+          pre.innerHTML = svg;
+        } catch {
+          const container = pre.closest('.mermaid-block-container') || pre;
+          const fallback = document.createElement('pre');
+          fallback.textContent = source + '\n\n(Diagram failed to render)';
+          container.replaceWith(fallback);
+        }
+      }
+
+      sections.push(`<section class="pdf-note" id="note-${i}"><h1 class="pdf-note-title">${escapeHtml(p.title)}</h1>${div.innerHTML}</section>`);
+    }
+
+    const toc = `
+      <section class="pdf-toc">
+        <h1>${escapeHtml(docTitle)}</h1>
+        <ol>
+          ${pages.map((p, i) => `<li><a href="#note-${i}">${escapeHtml(p.title)}</a><span class="pdf-toc-path">${escapeHtml(pathDirname(p.relPath) || '')}</span></li>`).join('')}
+        </ol>
+      </section>
+    `;
+    return toc + sections.join('');
+  });
+
+  if (!html) {
+    showToast('Export failed while rendering notes.', 'error');
+    return;
+  }
+
+  const suggestedPath = scope === 'notebook'
+    ? `${notebookRoot}/notebook.pdf`
+    : `${sectionNode.fsPath}.pdf`;
+  const result = await window.api.exportToPdf(suggestedPath, html, options);
+  if (result && result.success) {
+    if (appSettings) appSettings.pdfExport = options;
+    showToast(`PDF exported (${pages.length - skipped} pages${skipped ? `, ${skipped} skipped` : ''}): ${pathBasename(result.pdfPath)}`);
+  } else if (result && !result.canceled) {
+    showToast(result.reason || 'PDF export failed.', 'error');
+  } else {
+    hideToast();
   }
 }
 
@@ -2446,7 +2881,16 @@ function showToast(message, type = 'success') {
   el.classList.toggle('error', type === 'error');
   el.classList.add('visible');
   if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('visible'), 3500);
+  // 'progress' toasts stick until replaced by a final success/error toast
+  if (type !== 'progress') {
+    toastTimer = setTimeout(() => el.classList.remove('visible'), 3500);
+  }
+}
+
+function hideToast() {
+  const el = document.getElementById('app-toast');
+  if (el) el.classList.remove('visible');
+  if (toastTimer) clearTimeout(toastTimer);
 }
 
 // ==========================================
@@ -3069,6 +3513,11 @@ function handlePaletteSearch() {
     { label: 'Toggle Sidebar (Notes Directory)', subtitle: 'Action: /sidebar', action: () => toggleSidebarCollapsed() },
     { label: 'View Keyboard Shortcuts', subtitle: 'Action: /shortcuts', action: () => showShortcutsModal() },
     { label: 'Export Current Note to PDF', subtitle: 'Action: /pdf', action: () => exportToPdf() },
+    { label: 'Export Section to PDF', subtitle: 'Action: /pdfsection', action: () => exportToPdf('section') },
+    { label: 'Export Notebook to PDF', subtitle: 'Action: /pdfbook', action: () => exportToPdf('notebook') },
+    { label: 'Export Current Note to HTML', subtitle: 'Action: /html', action: () => exportAsHtml() },
+    { label: 'Export Current Note to Word (DOCX)', subtitle: 'Action: /docx', action: () => exportAsDocx() },
+    { label: 'Copy Note as Rich Text', subtitle: 'Action: /copyrich', action: () => copyAsRichText() },
     { label: 'Open Trash', subtitle: 'Action: /trash', action: () => showTrashModal() },
     { label: 'Note History (Current Note)', subtitle: 'Action: /history', action: () => showHistoryModal() },
     { label: 'Open Table Editor', subtitle: 'Action: /table', action: () => openTableEditor('insert') },
@@ -3093,6 +3542,26 @@ function handlePaletteSearch() {
   }
 
   paletteFilteredItems = [...matchingCommands, ...matchingPages];
+
+  // Empty query: lead with recently opened notes (lazy-pruned against the tree)
+  if (query === '') {
+    const recents = getRecentNotes()
+      .filter(p => p !== activeNote && (findNodeByPath(treeData, p) || isTemplatePath(p)))
+      .slice(0, 8)
+      .map(p => {
+        const node = findNodeByPath(treeData, p);
+        return {
+          label: node ? node.title : pathBasename(p, '.md'),
+          subtitle: 'Recently opened',
+          group: 'Recent',
+          action: () => openNote(p),
+        };
+      });
+    if (recents.length) {
+      paletteFilteredItems.forEach(item => { if (!item.group) item.group = 'Commands'; });
+      paletteFilteredItems = [...recents, ...paletteFilteredItems];
+    }
+  }
   renderPaletteList();
 
   // Async content matches: appended (never reordered) once the main-process
@@ -3134,7 +3603,16 @@ function renderPaletteList() {
     return;
   }
 
+  let prevGroup = null;
   paletteFilteredItems.forEach((item, idx) => {
+    if (item.group && item.group !== prevGroup) {
+      const header = document.createElement('div');
+      header.className = 'palette-group-header';
+      header.textContent = item.group;
+      listContainer.appendChild(header);
+    }
+    prevGroup = item.group || prevGroup;
+
     const el = document.createElement('div');
     el.className = `palette-item ${idx === paletteSelectedIndex ? 'selected' : ''}`;
     const isAction = item.subtitle.startsWith('Action:');
@@ -3195,6 +3673,30 @@ let openTabs = []; // fsPath[], left-to-right order
 
 function tabStorageKey() {
   return `mdnb-tabs:${notebookRoot}`;
+}
+
+// MRU of opened notes for the palette's "Recent" group (15 stored, 8 shown)
+function recentsStorageKey() {
+  return `mdnb-recents:${notebookRoot}`;
+}
+
+function recordRecentNote(fsPath) {
+  if (!notebookRoot) return;
+  try {
+    const list = JSON.parse(localStorage.getItem(recentsStorageKey()) || '[]')
+      .filter(p => p !== fsPath);
+    list.unshift(fsPath);
+    localStorage.setItem(recentsStorageKey(), JSON.stringify(list.slice(0, 15)));
+  } catch {}
+}
+
+function getRecentNotes() {
+  if (!notebookRoot) return [];
+  try {
+    return JSON.parse(localStorage.getItem(recentsStorageKey()) || '[]');
+  } catch {
+    return [];
+  }
 }
 
 function persistTabs() {

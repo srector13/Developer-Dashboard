@@ -9,12 +9,14 @@
     "compile": "tsc",
     "watch": "tsc -w",
     "start": "tsc && electron .",
-    "pack": "electron-builder",
+    "pack": "tsc && electron-builder",
     "pretest:e2e": "tsc",
     "test:e2e": "playwright test",
     "test:renderer": "node tests/renderer/smoke.spec.mjs darwin && node tests/renderer/smoke.spec.mjs win32",
     "test:ui-audit": "node tests/renderer/ui-audit.mjs",
-    "fonts:sync": "node scripts/sync-fonts.mjs"
+    "fonts:sync": "node scripts/sync-fonts.mjs",
+    "pack:win": "tsc && electron-builder --win",
+    "pack:mac": "tsc && electron-builder --mac"
   },
   "dependencies": {
     "chokidar": "^3.6.0",
@@ -40,16 +42,54 @@
     "files": [
       "out/**/*",
       "renderer/**/*",
-      "build/icon.png"
+      "build/icon.png",
+      "!renderer/**/*.map"
     ],
     "mac": {
-      "target": "zip",
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "category": "public.app-category.productivity",
-      "icon": "build/icon.png"
+      "icon": "build/icon.png",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": false,
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
     },
     "win": {
-      "target": "portable",
-      "icon": "build/icon.png"
+      "target": [
+        "nsis",
+        "portable",
+        "zip"
+      ],
+      "icon": "build/icon.png",
+      "artifactName": "${productName}-${version}-win-${arch}.${ext}"
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "build/icon.png",
+      "category": "Office"
+    },
+    "publish": {
+      "provider": "github"
     }
   }
 }

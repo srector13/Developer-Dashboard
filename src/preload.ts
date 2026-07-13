@@ -238,6 +238,9 @@ contextBridge.exposeInMainWorld('api', {
   importClipboard: (destDir: string, meta?: { title?: string; created?: string; tags?: string[] }) => ipcRenderer.invoke('import-clipboard', destDir, meta),
   importDocument: (destDir: string) => ipcRenderer.invoke('import-document', destDir),
   exportToPdf: (filePath: string, htmlContent: string, options?: { theme?: string; pageSize?: string; openAfter?: boolean; reveal?: boolean }) => ipcRenderer.invoke('export-to-pdf', filePath, htmlContent, options),
+  exportToHtml: (filePath: string, htmlContent: string, options?: { theme?: string }) => ipcRenderer.invoke('export-to-html', filePath, htmlContent, options),
+  exportToDocx: (filePath: string) => ipcRenderer.invoke('export-to-docx', filePath),
+  copyRichText: (htmlContent: string, plainText: string) => ipcRenderer.invoke('copy-rich-text', htmlContent, plainText),
 
   // Backlinks (computed in the main process in one pass)
   getBacklinks: (filePath: string) => ipcRenderer.invoke('get-backlinks', filePath),
@@ -268,6 +271,9 @@ contextBridge.exposeInMainWorld('api', {
     return () => {
       ipcRenderer.removeListener('files-changed', subscription);
     };
+  },
+  onCaptureShortcutFailed: (callback: (shortcut: string) => void) => {
+    ipcRenderer.on('capture-shortcut-failed', (_event, shortcut: string) => callback(shortcut));
   },
   
   // Inline actions in renderer

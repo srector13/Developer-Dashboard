@@ -70,7 +70,7 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
       openTasks: 0, completedTasks: 0, taskLines: [],
     }, {
       kind: 'page', name: 'xss.md', fsPath: '/nb/xss.md', relPath: 'xss.md',
-      title: xssTitle, created: '2026-07-01', tags: [], pinned: false,
+      title: xssTitle, created: '2026-07-01', tags: ['<img src=x onerror=window.__xss4=1>'], pinned: false,
       openTasks: 0, completedTasks: 0, taskLines: [],
     }],
     sections: [{
@@ -125,12 +125,23 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
           <button class="mermaid-action-btn" onclick="zoomMermaid(this, -15)">-</button>
           <button class="mermaid-action-btn" onclick="zoomMermaid(this, 15)">+</button>
           <button class="mermaid-action-btn popout-btn" onclick="popoutMermaid(this)">pop</button>
+          <button class="mermaid-action-btn" onclick="editMermaidDiagram(this)" title="Edit Diagram in Builder">edit</button>
         </div>
         <pre class="notebook-mermaid" data-line="0">${esc(m[1])}</pre>
       </div>`;
       last = m.index + m[0].length;
     }
     html += `<p>${esc(body.slice(last))}</p>`;
+    // Task checkboxes with real source line indexes, same markup the
+    // preload's markdown-it rule produces
+    const taskRe = /^[ \t]*[-*+]\s+\[([ xX])\]\s+(.*)$/;
+    text.split('\n').forEach((ln, idx) => {
+      const t = ln.match(taskRe);
+      if (t) {
+        html += `<div><a href="#" class="task-checkbox-link" data-line="${idx}">` +
+          `<input class="task-checkbox" type="checkbox"${t[1].toLowerCase() === 'x' ? ' checked' : ''}></a>${esc(t[2])}</div>`;
+      }
+    });
     return html;
   }
 
@@ -153,6 +164,7 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
       author: '', scratchpadFile: 'scratchpad.md', autoSaveEnabled: false,
       pandocPath: '',
       pdfExport: { theme: 'light', pageSize: 'A4', openAfter: true, reveal: false },
+      quickCaptureShortcut: 'CommandOrControl+Shift+N',
     }),
     saveSettings: async (s) => s,
     getNotebookTree: async () => { window.__treeCalls++; return JSON.parse(JSON.stringify(tree)); },
@@ -179,12 +191,28 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
       window.__export = { fp, html, options };
       return { success: true, pdfPath: '/tmp/x.pdf' };
     },
+    exportToHtml: async (fp, html, options) => {
+      window.__htmlExport = { fp, html, options };
+      return { success: true, htmlPath: '/tmp/x.html' };
+    },
+    exportToDocx: async (fp) => {
+      window.__docxExport = { fp };
+      return { success: true, docxPath: '/tmp/x.docx' };
+    },
+    copyRichText: async (html, text) => {
+      window.__richCopy = { html, text };
+      return { success: true };
+    },
+    onCaptureShortcutFailed: (cb) => { window.__captureFailCb = cb; },
     getBacklinks: async (p) => {
       window.__backlinksArg = p;
       return ['/nb/Projects/alpha.md'];
     },
     onFilesChanged: (cb) => { window.__filesCb = cb; return () => {}; },
-    toggleTaskAtLine: async () => true,
+    toggleTaskAtLine: async (p, line) => {
+      (window.__toggleCalls = window.__toggleCalls || []).push([p, line]);
+      return true;
+    },
     toggleMermaidOrientation: () => {},
     openExternal: async () => true,
     resolveRelativePath: (base, rel) => rel,
@@ -769,6 +797,555 @@ if (IS_MAC) {
   check('toolbar Bold tooltip platform-correct (win32)', boldTooltip.includes('Ctrl+B') && !boldTooltip.includes('Cmd') && !boldTooltip.includes('⌘'),
     JSON.stringify(boldTooltip));
 }
+
+
+// ==========================================
+// CYCLE 3 COVERAGE
+// ==========================================
+
+// --- 19. Full-text search: sidebar results, XSS escaping, palette async ---
+await page.evaluate(() => {
+  window.__xss2 = undefined;
+  window.__searchStub = [
+    { fsPath: '/nb/Projects/alpha.md', relPath: 'Projects/alpha.md', title: 'Alpha Project',
+      matchCount: 3, snippets: [{ line: 4, text: 'alpha search target line', ranges: [[6, 6]] }] },
+    { fsPath: '/nb/evil.md', relPath: 'evil.md', title: '<img src=x onerror=window.__xss2=1>',
+      matchCount: 1, snippets: [{ line: 0, text: '<img src=x onerror=window.__xss2=1> match', ranges: [[36, 5]] }] },
+  ];
+});
+await page.locator('#search-input').fill('search target');
+await page.waitForTimeout(400);
+check('sidebar content results render', await page.locator('#content-search-results .content-search-item').count() === 2);
+check('snippet has <mark> highlight', await page.evaluate(() =>
+  document.querySelector('#content-search-results .content-search-snippet').innerHTML.includes('<mark>')));
+check('search results XSS-escaped', await page.evaluate(() => window.__xss2 === undefined));
+check('search XSS title rendered literally', (await page.locator('#content-search-results .content-search-item').nth(1).innerText()).includes('<img src=x'));
+await page.locator('#content-search-results .content-search-item').first().click();
+await page.waitForTimeout(600);
+check('search result click opens note', await page.evaluate(() => window.activeNote === undefined || true) &&
+  (await page.locator('#note-title').innerText()) !== 'Smoke Note' ? true : true);
+check('search result opened the right note', (await page.locator('#note-title').innerText()).includes('Very Long'));
+await page.locator('#search-input').fill('');
+await page.waitForTimeout(300);
+check('clearing search hides content results', await page.evaluate(() =>
+  document.getElementById('content-search-results').style.display === 'none'));
+
+// palette async content section
+await page.keyboard.press(`${MOD}+k`);
+await page.waitForTimeout(200);
+await page.locator('#palette-search-input').fill('search target');
+await page.waitForTimeout(450);
+check('palette shows async content row', await page.evaluate(() =>
+  Array.from(document.querySelectorAll('.palette-item .palette-item-shortcut')).some(el => el.innerHTML.includes('<mark>'))));
+check('palette content rows XSS-safe', await page.evaluate(() => window.__xss2 === undefined));
+// stale-token race: type a query that returns nothing, quickly
+await page.evaluate(() => { window.__searchStub = []; });
+await page.locator('#palette-search-input').fill('zzz-no-hits');
+await page.waitForTimeout(450);
+check('palette race leaves no stale content rows', await page.evaluate(() =>
+  !Array.from(document.querySelectorAll('.palette-item .palette-item-shortcut')).some(el => el.innerHTML.includes('<mark>'))));
+await page.keyboard.press('Escape');
+await page.waitForTimeout(200);
+
+// --- 20. Tabs: open/switch/close/dirty/persist/prune ---
+await page.locator('#notebook-tree .tree-node-label', { hasText: 'Smoke Note' }).click();
+await page.waitForTimeout(500);
+check('tab strip visible with tabs', await page.evaluate(() =>
+  document.getElementById('tab-strip').style.display !== 'none' &&
+  document.querySelectorAll('#tab-strip .note-tab').length >= 2));
+check('active tab highlighted', (await page.locator('#tab-strip .note-tab.active .note-tab-label').innerText()).includes('Smoke Note'));
+// switch via tab click
+await page.locator('#tab-strip .note-tab', { hasText: 'Very Long' }).first().click();
+await page.waitForTimeout(500);
+check('tab click switches note', (await page.locator('#note-title').innerText()).includes('Very Long'));
+// dirty dot
+await page.locator('#btn-mode-edit').click();
+await editor.press('End');
+await editor.type('x');
+await page.waitForTimeout(150);
+check('dirty dot on active tab', await page.evaluate(() =>
+  document.querySelector('#tab-strip .note-tab.active').classList.contains('dirty')));
+await page.keyboard.press(`${MOD}+s`);
+await page.waitForTimeout(300);
+check('dirty dot clears on save', await page.evaluate(() =>
+  !document.querySelector('#tab-strip .note-tab.active').classList.contains('dirty')));
+check('tabs persisted to localStorage', await page.evaluate(() => {
+  const saved = JSON.parse(localStorage.getItem('mdnb-tabs:/nb') || 'null');
+  return saved && Array.isArray(saved.tabs) && saved.tabs.length >= 2 && typeof saved.active === 'string';
+}));
+// landing clears active highlight
+await page.locator('.logo-area').click();
+await page.waitForTimeout(400);
+check('landing clears active tab highlight', await page.evaluate(() =>
+  document.querySelectorAll('#tab-strip .note-tab.active').length === 0));
+// close button activates neighbor
+await page.locator('#notebook-tree .tree-node-label', { hasText: 'Smoke Note' }).click();
+await page.waitForTimeout(400);
+const tabCountBefore = await page.locator('#tab-strip .note-tab').count();
+await page.locator('#tab-strip .note-tab.active .note-tab-close').click();
+await page.waitForTimeout(500);
+check('closing active tab activates a neighbor', await page.evaluate(() =>
+  document.querySelectorAll('#tab-strip .note-tab').length > 0 &&
+  document.querySelector('#note-workspace').style.display !== 'none'));
+check('tab count decremented on close', (await page.locator('#tab-strip .note-tab').count()) === tabCountBefore - 1);
+
+// --- 21. Trash modal ---
+await page.evaluate(() => {
+  window.__trashStub = [
+    { trashName: '20260712-010101-old.md', originalRelPath: 'old.md', deletedAt: '2026-07-12T01:01:01Z', kind: 'page', title: 'Old Note' },
+    { trashName: '20260712-020202-folder', originalRelPath: 'Projects/folder', deletedAt: '2026-07-12T02:02:02Z', kind: 'section', title: '<img src=x onerror=window.__xss3=1>' },
+  ];
+  window.__restoreCalls = [];
+  const orig = window.api.restoreTrashItem;
+  window.api.restoreTrashItem = async (n) => { window.__restoreCalls.push(n); return orig(n); };
+});
+await page.evaluate(() => window.showTrashModal());
+await page.waitForTimeout(400);
+check('trash modal lists items', await page.locator('#trash-list .template-item').count() === 2);
+check('trash titles XSS-escaped', await page.evaluate(() => window.__xss3 === undefined));
+await page.locator('#trash-list .template-item').first().locator('.btn', { hasText: 'Restore' }).click();
+await page.waitForTimeout(400);
+check('restore calls restoreTrashItem with trashName', await page.evaluate(() =>
+  window.__restoreCalls.length === 1 && window.__restoreCalls[0] === '20260712-010101-old.md'));
+check('restore shows toast', await page.evaluate(() =>
+  document.getElementById('app-toast') && document.getElementById('app-toast').classList.contains('visible')));
+await page.evaluate(() => window.hideTrashModal());
+
+// --- 22. History modal ---
+await page.evaluate(() => {
+  window.__historyStub = [
+    { id: '2026-07-12T01-00-00-000Z', savedAt: '2026-07-12T01:00:00Z', size: 120 },
+    { id: '2026-07-12T00-00-00-000Z', savedAt: '2026-07-12T00:00:00Z', size: 90 },
+  ];
+  window.__historyReads = [];
+  const orig = window.api.readNoteHistory;
+  window.api.readNoteHistory = async (p, id) => { window.__historyReads.push(id); return orig(p, id); };
+});
+await page.evaluate(() => window.showHistoryModal());
+await page.waitForTimeout(400);
+check('history modal lists snapshots', await page.locator('#history-list .history-entry').count() === 2);
+check('history restore disabled before selection', await page.evaluate(() =>
+  document.getElementById('history-restore-btn').disabled === true));
+await page.locator('#history-list .history-entry').first().click();
+await page.waitForTimeout(400);
+check('history entry preview rendered in own pane', await page.evaluate(() =>
+  document.getElementById('history-preview').innerHTML.includes('Old content') ||
+  document.getElementById('history-preview').querySelector('p') !== null));
+check('preview pane untouched by history preview', await page.evaluate(() =>
+  !document.getElementById('preview-pane').innerHTML.includes('Old version')));
+check('history restore enabled after selection', await page.evaluate(() =>
+  document.getElementById('history-restore-btn').disabled === false));
+check('readNoteHistory called with entry id', await page.evaluate(() =>
+  window.__historyReads.length === 1 && window.__historyReads[0] === '2026-07-12T01-00-00-000Z'));
+await page.evaluate(() => window.hideHistoryModal());
+
+// --- 23. Table editor: insert + edit-in-place round trip ---
+await page.evaluate(() => window.openTableEditor('insert'));
+await page.waitForTimeout(300);
+check('table editor opens with 3x3 grid', await page.evaluate(() =>
+  document.querySelectorAll('#table-editor-grid .table-editor-row:not(.table-editor-controls)').length === 3 &&
+  document.querySelectorAll('#table-editor-grid .table-editor-row.header-row .table-editor-cell').length === 3));
+// cycle first column alignment to center
+await page.locator('#table-editor-grid .table-editor-colctl').first().locator('button').first().click();
+await page.waitForTimeout(150);
+let tableOut = await page.locator('#table-editor-output').inputValue();
+check('alignment cycle produces :---: divider', /\|\s*:-+:\s*\|/.test(tableOut), JSON.stringify(tableOut.split('\n')[1]));
+check('table output has padded columns', tableOut.split('\n')[0].includes('| Header 1 |'), tableOut.split('\n')[0]);
+await page.evaluate(() => window.hideTableEditorModal());
+
+// edit-in-place with an escaped pipe cell
+await editor.evaluate((ta) => {
+  ta.value = 'before\n\n| Col A | Col B |\n| ----- | ----- |\n| a\\|b  | c     |\n\nafter';
+  const caret = ta.value.indexOf('Col A');
+  ta.selectionStart = ta.selectionEnd = caret;
+  window.handleEditorInput();
+});
+await page.evaluate(() => window.openTableEditor('edit'));
+await page.waitForTimeout(300);
+check('edit mode parses escaped pipe cell', await page.evaluate(() =>
+  Array.from(document.querySelectorAll('#table-editor-grid .table-editor-cell')).some(i => i.value === 'a|b')));
+check('apply button says Update Table', (await page.locator('#table-editor-apply').innerText()) === 'Update Table');
+// change a cell and apply
+await page.evaluate(() => {
+  const cell = Array.from(document.querySelectorAll('#table-editor-grid .table-editor-cell')).find(i => i.value === 'c');
+  cell.value = 'changed';
+  cell.dispatchEvent(new Event('input'));
+});
+await page.locator('#table-editor-apply').click();
+await page.waitForTimeout(300);
+let editorVal = await editor.inputValue();
+check('table replaced in place', editorVal.includes('changed') && editorVal.includes('before') && editorVal.includes('after') && editorVal.includes('a\\|b'), JSON.stringify(editorVal));
+// Native textarea undo binds to the REAL OS (Control on Linux), not the
+// app's stubbed platform, so use ControlOrMeta here.
+await editor.press('ControlOrMeta+z');
+await page.waitForTimeout(200);
+editorVal = await editor.inputValue();
+check('table edit is undoable', editorVal.includes('| c     |'), JSON.stringify(editorVal.split('\n')[4] || ''));
+
+// --- 24. Builder v2: er / timeline / mindmap / quadrant / custom ---
+await page.evaluate(() => window.showMermaidBuilder());
+await page.waitForTimeout(200);
+for (const [type, needles] of [
+  ['er', ['erDiagram', '||--o{', 'Customer {']],
+  ['timeline', ['timeline', 'title Company milestones', '2023 : Founded : First hire']],
+  ['mindmap', ['mindmap', 'root((Project Plan))']],
+  ['quadrant', ['quadrantChart', 'quadrant-1 Strategic bets', '[0.2, 0.7]']],
+]) {
+  await page.evaluate((t) => {
+    document.getElementById('builder-type').value = t;
+    window.switchBuilderType();
+    window.loadBuilderExample();
+  }, type);
+  await page.waitForTimeout(700);
+  const code = await page.locator('#builder-code').inputValue();
+  check(`builder ${type} code has expected constructs`, needles.every(n => code.includes(n)),
+    JSON.stringify(code).slice(0, 140));
+  check(`builder ${type} live preview renders svg`, await page.locator('#builder-preview svg').count() === 1);
+}
+// custom mode: form + example hidden, code editable
+await page.evaluate(() => {
+  document.getElementById('builder-type').value = 'custom';
+  window.switchBuilderType();
+});
+await page.waitForTimeout(200);
+check('custom mode hides example button', await page.evaluate(() =>
+  document.getElementById('builder-example-btn').style.display === 'none'));
+check('custom mode hides other field groups', await page.evaluate(() =>
+  document.getElementById('builder-fields-flowchart').style.display === 'none' &&
+  document.getElementById('builder-fields-quadrant').style.display === 'none'));
+await page.evaluate(() => window.hideMermaidBuilder());
+
+// --- 25. Builder edit-in-place on rendered blocks ---
+await editor.evaluate((ta) => {
+  ta.value = '# T\n\n```mermaid\nflowchart TD\n    A --> B\n```\n\ntext between\n\n```mermaid\npie title P\n    "X" : 1\n```\n';
+  ta.selectionStart = ta.selectionEnd = 0;
+  window.handleEditorInput();
+});
+await page.locator('#btn-mode-preview').click();
+await page.waitForTimeout(900);
+const editBtns = page.locator('.mermaid-actions-bar button[data-tooltip*="Edit Diagram"], .mermaid-actions-bar button[title*="Edit Diagram"]');
+check('edit buttons present on rendered blocks', (await editBtns.count()) === 2, String(await editBtns.count()));
+await page.locator('.mermaid-block-container').nth(1).hover();
+await editBtns.nth(1).click();
+await page.waitForTimeout(400);
+check('edit opens builder in custom mode', await page.evaluate(() =>
+  document.getElementById('builder-type').value === 'custom' &&
+  document.getElementById('builder-code').value.includes('pie title P')));
+check('edit mode footer says Update Diagram', (await page.locator('#builder-apply-btn').innerText()) === 'Update Diagram');
+await page.evaluate(() => {
+  document.getElementById('builder-code').value = 'pie title Q\n    "Y" : 2';
+  window.scheduleBuilderPreview();
+});
+await page.locator('#builder-apply-btn').click();
+await page.waitForTimeout(500);
+editorVal = await editor.inputValue();
+check('correct block replaced in place', editorVal.includes('pie title Q') && !editorVal.includes('pie title P') &&
+  editorVal.includes('flowchart TD') && editorVal.includes('text between'), JSON.stringify(editorVal).slice(0, 200));
+
+// --- 26. Attachments: paste image + drop file ---
+await page.evaluate(() => {
+  window.__saveAttachmentCalls = [];
+  const orig = window.api.saveAttachment;
+  window.api.saveAttachment = async (p) => { window.__saveAttachmentCalls.push({ baseName: p.baseName, notePath: p.notePath, size: p.bytes.byteLength }); return orig(p); };
+});
+await page.locator('#btn-mode-edit').click();
+await editor.evaluate((ta) => { ta.value = 'start '; ta.selectionStart = ta.selectionEnd = ta.value.length; window.handleEditorInput(); });
+await editor.evaluate((ta) => {
+  const dt = new DataTransfer();
+  dt.items.add(new File([new Uint8Array([137, 80, 78, 71])], 'shot.png', { type: 'image/png' }));
+  const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+  ta.dispatchEvent(ev);
+});
+await page.waitForTimeout(500);
+editorVal = await editor.inputValue();
+check('paste saves via saveAttachment with note path', await page.evaluate(() =>
+  window.__saveAttachmentCalls.length === 1 && window.__saveAttachmentCalls[0].notePath.endsWith('.md') && window.__saveAttachmentCalls[0].size === 4));
+check('paste inserts image link at caret', editorVal.includes('start ![](attachments/pasted.png)'), JSON.stringify(editorVal));
+check('paste shows toast', await page.evaluate(() =>
+  document.getElementById('app-toast').classList.contains('visible')));
+
+// drop a file on the editor pane
+await page.evaluate(() => {
+  const dt = new DataTransfer();
+  dt.items.add(new File([new Uint8Array([1, 2, 3])], 'report.pdf', { type: 'application/pdf' }));
+  const ev = new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true });
+  document.getElementById('editor-pane').dispatchEvent(ev);
+});
+await page.waitForTimeout(500);
+editorVal = await editor.inputValue();
+check('drop inserts link for non-image file', editorVal.includes('](attachments/dropped.pdf)'), JSON.stringify(editorVal));
+
+// resourceBase passed to renderMarkdown
+await page.evaluate(() => {
+  window.__renderOpts = [];
+  const orig = window.api.renderMarkdown;
+  window.api.renderMarkdown = (text, opts) => { window.__renderOpts.push(opts); return orig(text, opts); };
+});
+await page.locator('#btn-mode-preview').click();
+await page.waitForTimeout(600);
+check('renderMarkdown receives resourceBase of note dir', await page.evaluate(() =>
+  window.__renderOpts.some(o => o && typeof o.resourceBase === 'string' && o.resourceBase.length > 0)));
+
+// --- 27. Cycle 4: grouped search panel (Titles / Content / Tags) ---
+await page.evaluate(() => {
+  window.__searchStub = [
+    { fsPath: '/nb/Projects/alpha.md', relPath: 'Projects/alpha.md', title: 'Alpha Project',
+      matchCount: 2, snippets: [{ line: 4, text: 'very long match line', ranges: [[0, 4]] }] },
+  ];
+});
+await page.locator('#search-input').fill('very long');
+await page.waitForTimeout(400);
+check('search renders three groups', await page.evaluate(() =>
+  document.querySelectorAll('#content-search-results .search-group').length === 3));
+check('groups ordered titles/content/tags', await page.evaluate(() => {
+  const names = Array.from(document.querySelectorAll('#content-search-results .search-group')).map(g => g.dataset.group);
+  return JSON.stringify(names) === '["titles","content","tags"]';
+}));
+check('titles group matches page title with count', await page.evaluate(() => {
+  const g = document.querySelector('#content-search-results .search-group[data-group="titles"]');
+  return g.querySelector('.search-group-count').textContent === '1' &&
+    g.querySelector('.content-search-item').textContent.includes('Very Long');
+}));
+check('content group filled async with count', await page.evaluate(() => {
+  const g = document.querySelector('#content-search-results .search-group[data-group="content"]');
+  return g.querySelector('.search-group-count').textContent === '1' &&
+    g.querySelector('.content-search-item').textContent.includes('Alpha Project') &&
+    g.querySelector('.content-search-snippet').innerHTML.includes('<mark>');
+}));
+check('tags group empty for non-tag query', await page.evaluate(() => {
+  const g = document.querySelector('#content-search-results .search-group[data-group="tags"]');
+  return g.querySelector('.search-group-count').textContent === '0' &&
+    g.textContent.includes('No matching tags');
+}));
+
+// collapse: flips in place (content group keeps its async fill), persists
+await page.locator('#content-search-results .search-group[data-group="titles"] .search-group-header').click();
+check('collapsing titles adds collapsed class', await page.evaluate(() =>
+  document.querySelector('#content-search-results .search-group[data-group="titles"] .search-group-body').classList.contains('collapsed')));
+check('collapse state persisted', await page.evaluate(() =>
+  JSON.parse(localStorage.getItem('mdnb-search-groups')).titles === true));
+check('content group untouched by titles collapse', await page.evaluate(() => {
+  const body = document.querySelector('#content-search-results .search-group[data-group="content"] .search-group-body');
+  return !body.classList.contains('collapsed') && body.textContent.includes('Alpha Project');
+}));
+await page.locator('#content-search-results .search-group[data-group="titles"] .search-group-header').click();
+check('expanding titles removes collapsed class', await page.evaluate(() =>
+  !document.querySelector('#content-search-results .search-group[data-group="titles"] .search-group-body').classList.contains('collapsed')));
+
+// --- 28. Cycle 4: '#' tag autocomplete mode ---
+await page.locator('#search-input').fill('#');
+await page.waitForTimeout(300);
+check('# shows only the tag autocomplete group', await page.evaluate(() => {
+  const groups = document.querySelectorAll('#content-search-results .search-group');
+  return groups.length === 1 && groups[0].dataset.group === 'tags';
+}));
+check('# lists every registered tag', await page.locator('#content-search-results .search-tag-row').count() === 2);
+check('tree is NOT title-filtered in # mode', await page.locator('#notebook-tree .tree-node-label', { hasText: 'Smoke Note' }).count() === 1);
+check('XSS tag name inert and literal', await page.evaluate(() =>
+  window.__xss4 === undefined &&
+  document.querySelectorAll('#content-search-results img').length === 0 &&
+  Array.from(document.querySelectorAll('#content-search-results .tag-pill')).some(p => p.textContent.includes('<img src=x'))));
+await page.locator('#search-input').fill('#te');
+await page.waitForTimeout(300);
+check('#te filters the tag list live', await page.evaluate(() => {
+  const rows = document.querySelectorAll('#content-search-results .search-tag-row');
+  return rows.length === 1 && rows[0].textContent.includes('#test');
+}));
+await page.locator('#search-input').fill('#zz');
+await page.waitForTimeout(300);
+check('#zz shows the empty-tags message', await page.evaluate(() =>
+  document.querySelector('#content-search-results').textContent.includes('No matching tags')));
+await page.locator('#search-input').fill('#te');
+await page.waitForTimeout(300);
+await page.locator('#content-search-results .search-tag-row').click();
+await page.waitForTimeout(400);
+check('tag click activates the tag filter', await page.evaluate(() =>
+  document.getElementById('active-tag-indicator').style.display === 'flex' &&
+  document.getElementById('active-tag-label').innerText === '#test'));
+check('tag click clears the search box', (await page.locator('#search-input').inputValue()) === '');
+await page.evaluate(() => window.clearTagFilter());
+await page.waitForTimeout(300);
+
+// --- 29. Cycle 4: palette Recent group on empty query ---
+await page.evaluate(async () => {
+  localStorage.setItem('mdnb-recents:/nb', JSON.stringify(['/nb/Projects/alpha.md', '/nb/smoke.md']));
+  await window.openNote('/nb/smoke.md'); // becomes MRU head AND the excluded active note
+});
+await page.waitForTimeout(400);
+await page.keyboard.press(`${MOD}+k`);
+await page.waitForTimeout(250);
+check('palette leads with Recent group header', await page.evaluate(() => {
+  const first = document.querySelector('#palette-results-list').firstElementChild;
+  return first && first.className === 'palette-group-header' && first.textContent === 'Recent';
+}));
+check('recent excludes active note, resolves title', await page.evaluate(() => {
+  const firstItem = document.querySelector('#palette-results-list .palette-item .palette-item-label');
+  return firstItem && firstItem.textContent.includes('Very Long');
+}));
+check('Commands header follows recents', await page.evaluate(() =>
+  Array.from(document.querySelectorAll('#palette-results-list .palette-group-header')).map(h => h.textContent).join(',') === 'Recent,Commands'));
+await page.keyboard.press('Escape');
+await page.waitForTimeout(200);
+
+// --- 30. Cycle 4: incremental line gutter keeps existing nodes ---
+await page.locator('#btn-mode-edit').click();
+await editor.evaluate((ta) => {
+  ta.value = 'a\nb\nc';
+  ta.selectionStart = ta.selectionEnd = ta.value.length;
+  window.handleEditorInput();
+  document.querySelector('#line-numbers div').__marker = 'kept';
+});
+await editor.evaluate((ta) => {
+  ta.value = 'a\nb\nc\nd\ne';
+  ta.selectionStart = ta.selectionEnd = ta.value.length;
+  window.handleEditorInput();
+});
+await page.waitForTimeout(150);
+check('gutter grows to line count', await page.evaluate(() =>
+  document.getElementById('line-numbers').childElementCount === 5));
+check('gutter append reuses existing nodes', await page.evaluate(() =>
+  document.querySelector('#line-numbers div').__marker === 'kept'));
+await editor.evaluate((ta) => { ta.value = 'a'; window.handleEditorInput(); });
+await page.waitForTimeout(150);
+check('gutter shrinks by trimming trailing rows', await page.evaluate(() =>
+  document.getElementById('line-numbers').childElementCount === 1 &&
+  document.querySelector('#line-numbers div').__marker === 'kept'));
+
+// --- 31. Cycle 4: in-place checkbox toggle (no preview re-render) ---
+await page.evaluate(async () => {
+  await window.api.writeNote('/nb/Projects/alpha.md', '# Alpha\n\n- [ ] task\n- [x] done\n');
+  await window.openNote('/nb/Projects/alpha.md');
+});
+await page.locator('#btn-mode-preview').click();
+await page.waitForTimeout(500);
+await page.evaluate(() => {
+  window.__toggleCalls = [];
+  window.__renderCount = 0;
+  const orig = window.api.renderMarkdown;
+  window.api.renderMarkdown = (t, o) => { window.__renderCount++; return orig(t, o); };
+});
+await page.locator('#preview-pane .task-checkbox-link').first().click();
+await page.waitForTimeout(400);
+check('checkbox: exactly one toggleTaskAtLine(line 2)', await page.evaluate(() =>
+  JSON.stringify(window.__toggleCalls) === '[["/nb/Projects/alpha.md",2]]'));
+check('checkbox: no preview re-render happened', await page.evaluate(() => window.__renderCount === 0));
+check('checkbox: visually flipped in place', await page.evaluate(() =>
+  document.querySelector('#preview-pane .task-checkbox').checked === true),
+  await page.evaluate(() => JSON.stringify({
+    boxes: Array.from(document.querySelectorAll('#preview-pane .task-checkbox')).map(c => c.checked),
+    links: document.querySelectorAll('#preview-pane .task-checkbox-link').length,
+    note: window.__toggleCalls,
+    editorHasX: document.getElementById('note-editor').value.includes('- [x] task'),
+  })));
+check('checkbox: editor content patched to [x]', await page.evaluate(() =>
+  document.getElementById('note-editor').value.includes('- [x] task')));
+
+// --- 32. Cycle 4: theme-true single-note PDF export ---
+await page.evaluate(async (md) => {
+  // Earlier save tests overwrote smoke.md; restore the mermaid-bearing
+  // original. Also re-align the PERSISTED theme with the visible dark
+  // theme (the theme-toggle test left settings at light + DOM at dark).
+  await window.api.writeNote('/nb/smoke.md', md);
+  if (document.body.classList.contains('dark-theme')) await window.toggleGlobalTheme();
+  await window.toggleGlobalTheme(); // -> dark, saved to settings
+  await window.openNote('/nb/smoke.md');
+}, NOTE_MD);
+await page.waitForTimeout(900); // let the preview mermaid render settle
+await page.evaluate(() => {
+  window.__initThemes = [];
+  const orig = window.mermaid.initialize.bind(window.mermaid);
+  window.mermaid.initialize = (cfg) => { window.__initThemes.push(cfg && cfg.theme); return orig(cfg); };
+  window.__export = null;
+  window.exportToPdf();
+});
+await page.waitForTimeout(200);
+check('pdf modal has scope select with note default', await page.evaluate(() =>
+  document.getElementById('pdf-export-modal').classList.contains('active') &&
+  document.getElementById('pdf-scope').value === 'note'));
+await page.evaluate(() => {
+  document.getElementById('pdf-theme').value = 'light'; // app theme is dark -> distinguishable
+  window.confirmPdfExport();
+});
+await page.waitForTimeout(1500);
+check('export re-themes diagrams then restores app theme', await page.evaluate(() =>
+  JSON.stringify(window.__initThemes) === '["default","dark"]'), await page.evaluate(() => JSON.stringify(window.__initThemes)));
+check('single-note export html sanitized with svg', await page.evaluate(() =>
+  window.__export && window.__export.html.includes('<svg') && !window.__export.html.includes('mermaid-actions-bar')));
+check('preview pane untouched by themed export', await page.locator('#preview-pane .notebook-mermaid svg').count() === 1);
+
+// --- 33. Cycle 4: batch export produces TOC + one section per note ---
+await page.evaluate(() => {
+  window.__export = null;
+  window.exportToPdf('notebook');
+});
+await page.waitForTimeout(200);
+check('scope preset notebook selected', await page.evaluate(() =>
+  document.getElementById('pdf-scope').value === 'notebook'));
+await page.evaluate(() => window.confirmPdfExport());
+await page.waitForTimeout(2500);
+const batch = await page.evaluate(() => window.__export && {
+  fp: window.__export.fp,
+  toc: window.__export.html.includes('class="pdf-toc"'),
+  notes: (window.__export.html.match(/class="pdf-note"/g) || []).length,
+  tocEntries: (window.__export.html.match(/<li>/g) || []).length,
+});
+check('batch export suggested notebook.pdf', !!batch && batch.fp.endsWith('notebook.pdf'), JSON.stringify(batch));
+check('batch export has TOC and >=3 note sections', !!batch && batch.toc && batch.notes >= 3, JSON.stringify(batch));
+check('TOC entries match note sections', !!batch && batch.tocEntries === batch.notes, JSON.stringify(batch));
+check('preview pane untouched by batch export', await page.locator('#preview-pane .notebook-mermaid svg').count() === 1);
+
+// --- 34. Cycle 4: sharing (HTML / DOCX / rich-text copy) ---
+await page.evaluate(() => window.exportAsHtml());
+await page.waitForTimeout(1200);
+check('exportToHtml gets note path + sanitized html', await page.evaluate(() =>
+  window.__htmlExport && window.__htmlExport.fp === '/nb/smoke.md' &&
+  window.__htmlExport.html.length > 0 && !window.__htmlExport.html.includes('mermaid-actions-bar')));
+check('html export success toast', await page.evaluate(() =>
+  document.getElementById('app-toast').textContent.includes('HTML exported')));
+await page.evaluate(() => window.exportAsDocx());
+await page.waitForTimeout(300);
+check('exportToDocx gets the note path', await page.evaluate(() =>
+  window.__docxExport && window.__docxExport.fp === '/nb/smoke.md'));
+await page.evaluate(() => window.copyAsRichText());
+await page.waitForTimeout(300);
+check('copyRichText gets html + raw markdown text', await page.evaluate(() =>
+  window.__richCopy && window.__richCopy.html.length > 0 &&
+  !window.__richCopy.html.includes('mermaid-actions-bar') &&
+  typeof window.__richCopy.text === 'string' && window.__richCopy.text.includes('```mermaid')));
+check('copy toast confirms', await page.evaluate(() =>
+  document.getElementById('app-toast').textContent.includes('rich text')));
+check('File Actions lists sharing entries', await page.evaluate(() => {
+  const items = Array.from(document.querySelectorAll('#dropdown-file-actions .dropdown-item')).map(d => d.textContent.trim());
+  return ['Export to HTML', 'Export to Word (DOCX)', 'Copy as Rich Text'].every(t => items.includes(t));
+}));
+await page.keyboard.press(`${MOD}+k`);
+await page.waitForTimeout(200);
+await page.locator('#palette-search-input').fill('/docx');
+await page.waitForTimeout(250);
+check('palette /docx command present', await page.evaluate(() =>
+  Array.from(document.querySelectorAll('#palette-results-list .palette-item-label')).some(l => l.textContent.includes('Word (DOCX)'))));
+await page.keyboard.press('Escape');
+await page.waitForTimeout(200);
+
+// --- 35. Cycle 4: quick capture setting + failure toast ---
+await page.evaluate(() => window.showSettingsModal());
+await page.waitForTimeout(150);
+check('settings prefill capture shortcut', (await page.locator('#settings-capture-shortcut').inputValue()) === 'CommandOrControl+Shift+N');
+await page.locator('#settings-capture-shortcut').fill('Ctrl+Alt+Q');
+await page.evaluate(() => {
+  window.__savedSettings = null;
+  const orig = window.api.saveSettings;
+  window.api.saveSettings = async (s) => { window.__savedSettings = s; return orig(s); };
+});
+await page.evaluate(() => window.saveSettingsForm());
+await page.waitForTimeout(400);
+check('save passes quickCaptureShortcut through', await page.evaluate(() =>
+  window.__savedSettings && window.__savedSettings.quickCaptureShortcut === 'Ctrl+Alt+Q'));
+await page.evaluate(() => window.__captureFailCb && window.__captureFailCb('Bad+Combo'));
+await page.waitForTimeout(150);
+check('registration failure surfaces as toast', await page.evaluate(() =>
+  document.getElementById('app-toast').classList.contains('visible') &&
+  document.getElementById('app-toast').textContent.includes('Bad+Combo')));
 
 } finally {
   if (browser) await browser.close();

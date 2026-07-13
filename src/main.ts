@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, globalShortcut } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
@@ -9,6 +9,30 @@ const execFileAsync = promisify(execFile);
 const fsp = fs.promises;
 
 let mainWindow: BrowserWindow | null = null;
+
+// Portable mode: keep ALL app state (settings, window state, caches) next to
+// the executable instead of %APPDATA%/~Library. Active when either
+//  - running the electron-builder `portable` target (it sets
+//    PORTABLE_EXECUTABLE_DIR to the folder holding the .exe), or
+//  - a `MarkdownNotebookData` folder exists beside the executable (opt-in
+//    for the zip distribution: create the folder once and the app is
+//    self-contained from then on).
+// Must run before anything derives a path from `userData`.
+function resolvePortableUserData(): string | null {
+  const portableDir = process.env.PORTABLE_EXECUTABLE_DIR;
+  if (portableDir) return path.join(portableDir, 'MarkdownNotebookData');
+  try {
+    const sidecar = path.join(path.dirname(process.execPath), 'MarkdownNotebookData');
+    if (fs.existsSync(sidecar)) return sidecar;
+  } catch { /* sandboxed/odd execPath: fall through to the default */ }
+  return null;
+}
+const portableUserData = resolvePortableUserData();
+if (portableUserData) {
+  try { fs.mkdirSync(portableUserData, { recursive: true }); } catch { /* fs errors surface on first write */ }
+  app.setPath('userData', portableUserData);
+}
+
 const SETTINGS_FILE = path.join(app.getPath('userData'), 'settings.json');
 const ORDER_FILE = '.notebook-order';
 
@@ -36,6 +60,8 @@ interface AppSettings {
   autoSaveEnabled: boolean;
   pandocPath?: string;
   pdfExport: PdfExportOptions;
+  /** Global (system-wide) quick-capture shortcut; empty string disables it. */
+  quickCaptureShortcut: string;
 }
 
 const defaultSettings: AppSettings = {
@@ -50,6 +76,7 @@ const defaultSettings: AppSettings = {
   scratchpadFile: 'scratchpad.md',
   autoSaveEnabled: false,
   pdfExport: { theme: 'light', pageSize: 'A4', openAfter: true, reveal: false },
+  quickCaptureShortcut: 'CommandOrControl+Shift+N',
 };
 
 // Migrate settings written by older versions to the current shape
@@ -176,8 +203,17 @@ ipcMain.handle('select-folder', async () => {
 });
 
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   createWindow();
+
+  // Register after the renderer loads so a registration failure (shortcut
+  // taken by another app) can surface as a toast instead of vanishing.
+  const settings = await readSettings();
+  if (mainWindow) {
+    mainWindow.webContents.once('did-finish-load', () => {
+      registerQuickCaptureShortcut(settings.quickCaptureShortcut);
+    });
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -337,6 +373,21 @@ interface SearchDoc {
 let searchIndex: Map<string, SearchDoc> = new Map();
 const SEARCH_MAX_INDEXED_FILE = 1_000_000; // bytes; skip pathological files
 
+// Scan cache: parsed metadata + search doc keyed on (mtime, size), so steady-
+// state rescans only re-read files that actually changed. The searchIndex
+// holds references to the SAME SearchDoc objects — note text lives once.
+interface ScanCacheEntry {
+  mtimeMs: number;
+  size: number;
+  meta: ReturnType<typeof parseNoteMeta>;
+  doc: SearchDoc | null; // null when the file exceeds SEARCH_MAX_INDEXED_FILE
+}
+const scanCache = new Map<string, ScanCacheEntry>();
+const SCAN_CACHE_MAX = 5000;
+// Files modified in the last 2s are always re-read: sub-second mtime
+// granularity on some filesystems plus the app's own write→rescan races.
+const SCAN_CACHE_FRESHNESS_MS = 2000;
+
 async function scanDirectory(
   dir: string,
   rootDir: string,
@@ -344,6 +395,7 @@ async function scanDirectory(
   scratchpadFile: string,
   shallow = false, // skip subdirectory recursion (move-node only needs one dir)
   collector?: Map<string, SearchDoc>, // populated only by get-notebook-tree
+  seen?: Set<string>, // every .md path encountered; full scans prune the cache against it
 ): Promise<SectionNode> {
   const relative = path.relative(rootDir, dir).replace(/\\/g, '/');
   const sectionNode: SectionNode = {
@@ -366,7 +418,7 @@ async function scanDirectory(
 
     if (entry.isDirectory()) {
       if (!shallow) {
-        const childSec = await scanDirectory(fullPath, rootDir, ignore, scratchpadFile, false, collector);
+        const childSec = await scanDirectory(fullPath, rootDir, ignore, scratchpadFile, false, collector, seen);
         sectionNode.sections.push(childSec);
       }
     } else if (entry.isFile() && entry.name.endsWith('.md')) {
@@ -375,15 +427,34 @@ async function scanDirectory(
         continue;
       }
       try {
-        const text = await fsp.readFile(fullPath, 'utf8');
-        const meta = parseNoteMeta(text, fullPath);
-        if (collector && text.length <= SEARCH_MAX_INDEXED_FILE) {
-          collector.set(fullPath, {
-            fsPath: fullPath,
-            relPath: path.relative(rootDir, fullPath).replace(/\\/g, '/'),
-            title: meta.title,
-            lines: text.split(/\r?\n/),
-          });
+        if (seen) seen.add(fullPath);
+
+        // Serve unchanged files from the scan cache — no read, no parse
+        const st = await fsp.stat(fullPath);
+        const cached = scanCache.get(fullPath);
+        let meta: ReturnType<typeof parseNoteMeta>;
+        let doc: SearchDoc | null;
+
+        if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size &&
+            Date.now() - st.mtimeMs > SCAN_CACHE_FRESHNESS_MS) {
+          meta = cached.meta;
+          doc = cached.doc;
+        } else {
+          const text = await fsp.readFile(fullPath, 'utf8');
+          meta = parseNoteMeta(text, fullPath);
+          doc = text.length <= SEARCH_MAX_INDEXED_FILE
+            ? {
+                fsPath: fullPath,
+                relPath: path.relative(rootDir, fullPath).replace(/\\/g, '/'),
+                title: meta.title,
+                lines: text.split(/\r?\n/),
+              }
+            : null;
+          scanCache.set(fullPath, { mtimeMs: st.mtimeMs, size: st.size, meta, doc });
+        }
+
+        if (collector && doc) {
+          collector.set(fullPath, doc);
         }
         sectionNode.pages.push({
           kind: 'page',
@@ -458,6 +529,9 @@ ipcMain.handle('save-settings', async (event, settings) => {
       JSON.stringify(updated.ignoreFolders) !== JSON.stringify(before.ignoreFolders)) {
     await updateWatcher();
   }
+  if (updated.quickCaptureShortcut !== before.quickCaptureShortcut) {
+    registerQuickCaptureShortcut(updated.quickCaptureShortcut);
+  }
   return updated;
 });
 
@@ -466,8 +540,17 @@ ipcMain.handle('get-notebook-tree', async (event, rootPath, filterTag) => {
   const settings = await readSettings();
   const ignore = new Set(settings.ignoreFolders.map(s => s.toLowerCase()));
   const collector = new Map<string, SearchDoc>();
-  const rootNode = await scanDirectory(rootPath, rootPath, ignore, settings.scratchpadFile, false, collector);
+  const seen = new Set<string>();
+  const rootNode = await scanDirectory(rootPath, rootPath, ignore, settings.scratchpadFile, false, collector, seen);
   searchIndex = collector; // atomic swap: deleted files vanish from search
+
+  // Prune cache entries for files that no longer exist (full scans only)
+  for (const key of scanCache.keys()) {
+    if (!seen.has(key)) scanCache.delete(key);
+  }
+  if (scanCache.size > SCAN_CACHE_MAX) {
+    scanCache.clear(); // belt-and-braces bound; next scan rebuilds
+  }
 
   // Apply Tag Filtering recursively if filterTag is present
   if (filterTag) {
@@ -1676,6 +1759,14 @@ const PDF_BASE_CSS = `
     height: auto !important;
   }
 
+  /* Batch export: table of contents + one note per section */
+  .pdf-toc { page-break-after: always; }
+  .pdf-toc ol { padding-left: 20px; }
+  .pdf-toc li { margin-bottom: 6px; display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+  .pdf-toc a { color: var(--pdf-link); }
+  .pdf-toc-path { color: var(--pdf-muted); font-size: 11px; }
+  .pdf-note { page-break-before: always; }
+
   /* Hide notebook UI elements for clean write-up export */
   .toolbar, .code-header, .code-header-bar, .copy-btn, .copy-code-btn,
   .mermaid-actions-bar, .code-block-copy-btn,
@@ -1794,6 +1885,285 @@ ipcMain.handle('export-to-pdf', async (event, filePath, htmlContent, options?: P
     printWindow.destroy();
     fsp.unlink(tempHtmlPath).catch(() => {});
   }
+});
+
+// --- Sharing: standalone HTML, DOCX (pandoc), rich-text clipboard ---
+
+// Data-URI inlining caps: one oversized screenshot shouldn't balloon the
+// exported HTML past what browsers/mail clients will open.
+const HTML_INLINE_IMAGE_MAX = 10 * 1024 * 1024;
+const HTML_INLINE_TOTAL_MAX = 40 * 1024 * 1024;
+const IMAGE_MIME: Record<string, string> = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
+  '.bmp': 'image/bmp', '.avif': 'image/avif', '.ico': 'image/x-icon',
+};
+
+// Rewrite file:// image sources into data: URIs so the exported HTML is a
+// single self-contained file. Images that are missing, non-image, or over
+// the size caps keep their original src.
+async function inlineFileImages(html: string): Promise<string> {
+  let total = 0;
+  const srcRe = /(<img\b[^>]*?\ssrc=")(file:\/\/[^"]+)(")/gi;
+  const matches = [...html.matchAll(srcRe)];
+  const replacements = new Map<string, string>();
+  for (const m of matches) {
+    const fileUrl = m[2];
+    if (replacements.has(fileUrl)) continue;
+    try {
+      const decoded = decodeURI(fileUrl.replace(/^file:\/\//, ''));
+      // Windows file URLs look like file:///C:/... — strip the leading slash
+      const fsPath = process.platform === 'win32' && /^\/[a-zA-Z]:/.test(decoded)
+        ? decoded.slice(1) : decoded;
+      const mime = IMAGE_MIME[path.extname(fsPath).toLowerCase()];
+      if (!mime) continue;
+      const stat = await fsp.stat(fsPath);
+      if (stat.size > HTML_INLINE_IMAGE_MAX || total + stat.size > HTML_INLINE_TOTAL_MAX) continue;
+      const buf = await fsp.readFile(fsPath);
+      total += stat.size;
+      replacements.set(fileUrl, `data:${mime};base64,${buf.toString('base64')}`);
+    } catch {
+      // unreadable image: leave the original src in place
+    }
+  }
+  if (!replacements.size) return html;
+  return html.replace(srcRe, (whole, pre, url, post) =>
+    replacements.has(url) ? pre + replacements.get(url) + post : whole);
+}
+
+ipcMain.handle('export-to-html', async (event, filePath, htmlContent, options?: { theme?: PdfExportOptions['theme'] }) => {
+  const settings = await readSettings();
+  const theme = options?.theme || settings.pdfExport.theme || 'light';
+
+  const result = await dialog.showSaveDialog(mainWindow!, {
+    title: 'Export to HTML',
+    defaultPath: filePath.replace(/\.md$/i, '.html'),
+    filters: [{ name: 'HTML Document', extensions: ['html'] }],
+  });
+  if (result.canceled || !result.filePath) return { success: false, canceled: true };
+
+  try {
+    const inlined = await inlineFileImages(htmlContent);
+    const themeCss = PDF_THEMES[theme] || PDF_THEMES.light;
+    const title = path.basename(filePath).replace(/\.md$/i, '');
+    const doc = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${title.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</title>
+<style>${themeCss}</style>
+<style>${PDF_BASE_CSS}</style>
+<style>body { max-width: 860px; margin: 0 auto; }</style>
+</head>
+<body>
+${inlined}
+</body>
+</html>
+`;
+    await fsp.writeFile(result.filePath, doc, 'utf8');
+    shell.showItemInFolder(result.filePath);
+    return { success: true, htmlPath: result.filePath };
+  } catch (err: any) {
+    console.error('Failed to export HTML:', err);
+    return { success: false, reason: err?.message || String(err) };
+  }
+});
+
+// Convert an on-disk markdown file to another format with pandoc, writing
+// straight to outPath. cwd is the note's folder so relative image links resolve.
+function runPandocToFile(inputPath: string, outPath: string, format: string, cwd: string): Promise<void> {
+  return new Promise(async (resolve, reject) => {
+    const settings = await readSettings();
+    const pandocPath = settings.pandocPath || (process.platform === 'darwin' && fs.existsSync('/opt/homebrew/bin/pandoc')
+      ? '/opt/homebrew/bin/pandoc'
+      : 'pandoc');
+    execFile(
+      pandocPath,
+      [inputPath, '-f', 'gfm', '-t', format, '-o', outPath, '--wrap=none'],
+      { timeout: 60000, cwd },
+      (err, stdout, stderr) => {
+        if (err) reject(new Error(stderr || err.message));
+        else resolve();
+      }
+    );
+  });
+}
+
+ipcMain.handle('export-to-docx', async (event, filePath) => {
+  if (!fs.existsSync(filePath)) return { success: false, reason: 'Note file not found.' };
+
+  const result = await dialog.showSaveDialog(mainWindow!, {
+    title: 'Export to Word',
+    defaultPath: filePath.replace(/\.md$/i, '.docx'),
+    filters: [{ name: 'Word Document', extensions: ['docx'] }],
+  });
+  if (result.canceled || !result.filePath) return { success: false, canceled: true };
+
+  // Pandoc's gfm reader would print the YAML frontmatter as a table, so hand
+  // it a temp copy with the frontmatter stripped. Mermaid blocks come through
+  // as plain code blocks — pandoc has no renderer for them.
+  const raw = await fsp.readFile(filePath, 'utf8');
+  const body = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '');
+  const tempMd = path.join(app.getPath('temp'), `mdnb-docx-${Date.now()}.md`);
+  try {
+    await fsp.writeFile(tempMd, body, 'utf8');
+    await runPandocToFile(tempMd, result.filePath, 'docx', path.dirname(filePath));
+    shell.showItemInFolder(result.filePath);
+    return { success: true, docxPath: result.filePath };
+  } catch (err: any) {
+    const msg = err?.message || String(err);
+    const reason = /ENOENT/.test(msg)
+      ? 'Pandoc is required for Word export but was not found. Install pandoc or set its path in Settings.'
+      : `Pandoc conversion failed: ${msg}`;
+    return { success: false, reason };
+  } finally {
+    fsp.unlink(tempMd).catch(() => {});
+  }
+});
+
+ipcMain.handle('copy-rich-text', async (event, htmlContent, plainText) => {
+  try {
+    const { clipboard } = require('electron');
+    const inlined = await inlineFileImages(htmlContent);
+    clipboard.write({ html: inlined, text: plainText || '' });
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, reason: err?.message || String(err) };
+  }
+});
+
+// --- Quick capture: global shortcut -> tiny always-on-top jot window ---
+
+let captureWindow: BrowserWindow | null = null;
+let registeredCaptureShortcut = '';
+
+function createCaptureWindow(): BrowserWindow {
+  const win = new BrowserWindow({
+    width: 520,
+    height: 150,
+    show: false,
+    frame: false,
+    resizable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'capture-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+  win.loadFile(path.join(__dirname, '../renderer/capture.html'));
+  // A capture scratchpad shouldn't linger over other apps once you click away
+  win.on('blur', () => win.hide());
+  win.on('closed', () => {
+    if (captureWindow === win) captureWindow = null;
+  });
+  return win;
+}
+
+function toggleCaptureWindow() {
+  if (!captureWindow || captureWindow.isDestroyed()) {
+    captureWindow = createCaptureWindow();
+  }
+  if (captureWindow.isVisible()) {
+    captureWindow.hide();
+  } else {
+    captureWindow.center();
+    captureWindow.show();
+    captureWindow.focus();
+  }
+}
+
+// (Re-)register the system-wide shortcut. Returns true when the accelerator
+// is active, false when it's invalid or taken by another app; empty string
+// just unregisters (feature off).
+function registerQuickCaptureShortcut(accelerator: string): boolean {
+  if (registeredCaptureShortcut) {
+    try { globalShortcut.unregister(registeredCaptureShortcut); } catch { /* already gone */ }
+    registeredCaptureShortcut = '';
+  }
+  const shortcut = (accelerator || '').trim();
+  if (!shortcut) return true;
+  try {
+    if (globalShortcut.register(shortcut, toggleCaptureWindow)) {
+      registeredCaptureShortcut = shortcut;
+      return true;
+    }
+  } catch {
+    // invalid accelerator string
+  }
+  if (mainWindow) {
+    mainWindow.webContents.send('capture-shortcut-failed', shortcut);
+  }
+  return false;
+}
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+});
+
+ipcMain.on('hide-capture-window', () => {
+  if (captureWindow && !captureWindow.isDestroyed()) captureWindow.hide();
+});
+
+// Append one captured line to today's daily note, creating it (and the
+// "## Quick Capture" section) as needed. The daily note may live anywhere in
+// the notebook; it's found by basename so movers keep their note.
+ipcMain.handle('append-quick-capture', async (event, text: string) => {
+  const settings = await readSettings();
+  const root = settings.notebookRoot;
+  if (!root || !fs.existsSync(root)) return { success: false, reason: 'No notebook folder is set.' };
+
+  const trimmed = String(text || '').replace(/\s*\n\s*/g, ' ').trim();
+  if (!trimmed) return { success: false, reason: 'Nothing to capture.' };
+
+  const today = localDateString();
+  const dailyName = `${today}.md`;
+
+  // Find today's note anywhere in the tree
+  const ignore = new Set(settings.ignoreFolders.map(s => s.toLowerCase()));
+  const allFiles = await listMarkdownFiles(root, ignore, root);
+  let notePath = allFiles.find(f => path.basename(f).toLowerCase() === dailyName) || '';
+
+  if (!notePath) {
+    // Same skeleton as create-page, title = the date
+    const fm: string[] = ['---', `title: ${yamlValue(today)}`, `created: ${today}`];
+    if (settings.author) fm.push(`author: ${yamlValue(settings.author)}`);
+    fm.push(tagsYamlLine([]), '---', '', `# ${today}`, '');
+    notePath = path.join(root, await uniqueMd(root, today));
+    await fsp.writeFile(notePath, fm.join('\n'), 'utf8');
+    const ord = await readOrderFile(root);
+    ord.push(path.basename(notePath));
+    await writeOrderFile(root, ord);
+  }
+
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const entry = `- ${pad(now.getHours())}:${pad(now.getMinutes())} ${trimmed}`;
+
+  const content = await fsp.readFile(notePath, 'utf8');
+  const lines = content.split(/\r?\n/);
+  const headingIdx = lines.findIndex(l => /^##\s+Quick Capture\s*$/i.test(l));
+
+  if (headingIdx === -1) {
+    while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
+    lines.push('', '## Quick Capture', '', entry, '');
+  } else {
+    // End of the section: the next heading of any level, else EOF
+    let end = lines.length;
+    for (let i = headingIdx + 1; i < lines.length; i++) {
+      if (/^#{1,6}\s/.test(lines[i])) { end = i; break; }
+    }
+    let insertAt = end;
+    while (insertAt > headingIdx + 1 && lines[insertAt - 1].trim() === '') insertAt--;
+    lines.splice(insertAt, 0, entry);
+  }
+
+  await writeNoteFile(notePath, lines.join('\n'), { snapshot: true });
+  notifyFilesChanged();
+  return { success: true, notePath };
 });
 
 // Inline helper: toggle checkboxes inside markdown file text

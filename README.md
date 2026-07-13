@@ -1,184 +1,80 @@
 # Markdown Notebook
 
-**A OneNote-style notebook for VS Code — built on plain Markdown files.**
+**A friendly desktop notebook for your work notes — that never takes your notes hostage.**
 
 By Stephen Rector.
 
-Markdown Notebook turns any folder into a friendly notebook: sections, pages, templates, daily notes, task tracking, and one-click import of Word documents or copied emails. Your notes are ordinary `.md` files on disk the whole time, so they work with git, sync tools, and GitHub Copilot — and you can stop using the extension any time without losing a thing.
+Markdown Notebook turns any folder on your computer into a proper notebook: sections and pages, daily notes, to-do tracking, diagrams, and polished PDF exports. Behind the scenes your notes are ordinary text files the whole time — they sync with anything (iCloud, OneDrive, git), open in any editor, and if you ever stop using the app, you lose nothing.
 
 ```mermaid
 flowchart LR
-    folder["📁 Any folder<br/>of .md files"] <--> view["📔 Notebook view<br/>sections & pages"]
-    view --> daily["🗓️ Daily notes"]
-    view --> tasks["✅ Tasks dashboard"]
-    view --> pdf["📄 PDF / HTML export"]
-    docs["📝 Word, PowerPoint,<br/>emails, clipboard"] -->|import| view
+    folder["📁 A folder of<br/>plain text files"] <--> app["📔 Markdown Notebook<br/>sections · pages · search"]
+    paste["📋 Screenshots, emails,<br/>Word documents"] -->|paste / import| app
+    app -->|share| out["📄 PDF · Word · HTML<br/>or paste into email/Slack"]
 ```
 
-## Getting started
+## Everything in one place
 
-1. Install the extension.
-2. Open a folder (or create an empty one) — this becomes your notebook.
-3. Click the **Notebook** icon in the activity bar (left edge of VS Code).
-4. Press the **+** button to create your first page or section.
+- **Sections and pages.** Folders are sections, files are pages. Drag pages between sections, pin the important ones, and reorder things however you like.
+- **Daily notes.** Name a page with a date (`2026-07-13`) and it gets a calendar icon and sorts newest-first — a running work journal with zero setup.
+- **Tabs.** Keep several notes open at once, just like a browser, with a dot marking anything unsaved.
+- **Write your way.** A distraction-free reading view, a plain editor, or both side by side. Checkboxes in the reading view are clickable — tick off tasks without switching modes.
+- **To-dos that follow you.** Every `- [ ]` you jot down is counted in the sidebar and gathered on the section overview pages, so open tasks never hide in old notes.
+- **Templates.** Meeting notes, weekly reviews, project kickoffs — make a template once and new pages fill in the date, title, and your name automatically.
 
-That's it for note-taking. For importing documents and exporting PDFs, install [Pandoc](https://pandoc.org/installing.html) (see [What you need](#what-you-need) below).
+## Find anything fast
 
-## The Notebook view
+- **One search box, three answers.** Type in the sidebar and results come back grouped: pages whose *title* matches, pages whose *content* matches (with the matching line shown and highlighted), and matching *tags*.
+- **Tags with autocomplete.** Type `#` in the search box and every tag you've ever used pops up — keep typing to narrow the list, click one to filter the whole notebook.
+- **Jump anywhere.** One shortcut (⌘K / Ctrl+K) opens a command palette that starts with your recently opened notes and finds any page or action as you type.
+- **Connected notes.** Link between pages with `[[double brackets]]`; every note shows what links back to it.
 
-The Notebook sidebar shows your folder the way a notebook should look:
+## Diagrams and tables without the fiddly syntax
 
-- **Folders are sections**, with a page count. **`.md` files are pages.**
-- Page names come from the note's title, not its filename.
-- 📌 Notes with `pinned: true` in their header float to the top with a star.
-- 🗓️ Date-named notes (like `2026-06-10.md`) get a calendar icon, friendly labels ("today", "yesterday"), and sort newest-first.
-- Each page shows its modified date, the first few `#tags`, and how many open `- [ ]` tasks it has.
-- Housekeeping folders (`.git`, `templates`, `attachments`, …) are hidden automatically.
+- **Diagram Builder.** Flowcharts, timelines, org-style charts, Gantt schedules, mind maps and more — filled in through a simple form with a live preview. No diagram syntax to learn, and an Edit button on any existing diagram reopens it in the builder.
+- **Table editor.** Build and edit tables in a visual grid instead of counting pipe characters.
+- **Paste screenshots.** Paste an image straight into a note and it's saved and linked for you. Dragging in files works too.
 
-Right-click anything for actions: new page, rename, move up/down, export to PDF, delete. You can also **drag and drop** pages between sections.
+## Share your notes the way people want them
 
-### Tables of contents — automatic
+- **PDF** — one note, a whole section, or the entire notebook as a single PDF with a generated table of contents. Pick light, dark, or minimal styling and the diagrams re-color themselves to match.
+- **Word** — export a note as `.docx` for the people who live in Office.
+- **HTML** — a single self-contained file (images included) you can email or drop on a shared drive.
+- **Copy as rich text** — paste a fully formatted note directly into an email, Slack, or a wiki.
+- **Import, too.** Paste a copied email or web page as a clean new note, or import Word / PowerPoint / Excel files into the section of your choice.
 
-Every section gets a hidden table-of-contents page, kept up to date for you. It lists the section's pages, shows task-completion stats, and each note gets a small "← back to TOC" link at the top. Click a section in the sidebar to see its TOC. There's also a notebook-wide dashboard and a **Tasks Dashboard** (checklist icon in the toolbar) that gathers every open task across all your notes.
+## Little comforts
 
-### Daily notes
+- **Quick capture.** A system-wide shortcut (⌘⇧N / Ctrl+Shift+N) pops up a small note-jotting window from anywhere — even when the app is in the background — and files what you type into today's daily note.
+- **Six looks.** Light, Dark, Midnight, Forest, Sepia, or follow your system.
+- **A safety net.** Deleted notes go to a built-in trash you can restore from, and the app quietly keeps earlier versions of each note so you can bring back last Tuesday's wording.
+- **Keyboard friendly.** Shortcuts adapt to Mac and Windows conventions, and a shortcut reference lives right in the app.
 
-Click the calendar icon (or run **Notebook: New Daily Note**) to open today's note — it's created in a `Daily` section if it doesn't exist yet. If you have a template named `daily.md`, it's used automatically.
+## Getting it
 
-### Templates
+Grab the latest release for your platform from the **Releases** page:
 
-**New from Template** creates a page from any `.md` file in your `templates/` folder. Templates can include placeholders that are filled in when the page is created:
+- **Windows installer** — installs just for you; it never asks for an administrator password.
+- **Windows portable** — a single `.exe` that runs from anywhere (Downloads folder, USB stick, a locked-down work machine) with nothing to install. Its settings live in a folder right next to it, so it travels well.
+- **macOS** — a standard drag-and-drop disk image.
 
-`{{title}}`, `{{date}}`, `{{time}}`, `{{datetime}}`, `{{year}}`, `{{month}}`, `{{day}}`, `{{weekday}}`, `{{slug}}`, and `{{cursor}}` (where your cursor should land).
+First launch: pick (or create) a folder to be your notebook, and start writing.
 
-No templates yet? The command offers to create starter `daily` and `meeting` templates for you.
+The only optional extra is [Pandoc](https://pandoc.org/installing.html), needed just for Word/PowerPoint/Excel import and Word export — everything else works out of the box, entirely offline.
 
-### Renaming without breaking links
+## Your files stay yours
 
-**Rename (update links)** — the pencil icon on a page — renames a note *and* updates every `[[wiki-link]]` to it across your notebook, including links with aliases (`[[note|shown text]]`) and section links (`[[note#Heading]]`). Changes to other notes are left as unsaved edits so you can review them before saving. If two notes share the same file name, ambiguous links are left untouched rather than guessed at.
-
-## Importing — get things *into* your notebook
-
-```mermaid
-flowchart TD
-    clip["📋 Copied text or email"] -->|"Import Clipboard as Note"| pandoc["Pandoc tidies it into Markdown"]
-    file["📄 Word / PowerPoint / Excel file"] -->|"Import Document…"| pandoc
-    rclick["Right-click a file in Explorer"] -->|"Convert to Markdown"| pandoc
-    pandoc --> note["✨ A clean note with title,<br/>date, author and tags"]
-    note --> section["…filed into the section you choose"]
-```
-
-Three ways in:
-
-- **Import Clipboard as Note** (clipboard icon): copy anything — an email chain, a web page section, plain text — and it becomes a clean Markdown note. Rich text keeps its links, quoting, and tables. You pick the title and where it goes.
-- **Import Document…** (download icon): pick a Word, PowerPoint, Excel, or other document from anywhere on your computer; it's converted and filed into the section you choose. The original file is never touched.
-- **Right-click a file in the Explorer → Convert to Markdown (Pandoc)**: converts a document that's already in your folder. By default the original is moved to the OS Trash afterwards (recoverable — and you can turn this off).
-
-Converted notes get a proper title (taken from the document's first heading), creation date, your author name, and a `converted` or `imported` tag — so they show up in the Notebook view looking like they belong.
-
-| You can import | Notes |
-|----------------|-------|
-| `.docx` Word | Embedded images are extracted alongside the note |
-| `.pptx` PowerPoint | Needs Pandoc 3.8.3 or newer |
-| `.xlsx` Excel | Needs Pandoc 3.8.3 or newer — each worksheet becomes a table |
-| `.odt`, `.rtf`, `.epub`, `.html` | Also supported |
-
-> Old-style `.doc` / `.ppt` / `.xls` files aren't supported — re-save them in Office as the modern `x` format first.
-
-## Writing and formatting
-
-A **Markdown Format** menu lives in the editor title bar (and the right-click menu) for common formatting, or use the shortcuts:
-
-| Shortcut (Windows/Linux · Mac) | Does |
-|-------------------------------|------|
-| `Alt+Shift+M` · `Cmd+Alt+M` | Open the format picker |
-| `Ctrl+Shift+B` · `Cmd+Shift+B` | **Bold** |
-| `Ctrl+Shift+I` · `Cmd+Shift+I` | *Italic* |
-| `Ctrl+Alt+1/2/3` · `Cmd+Alt+1/2/3` | Heading 1 / 2 / 3 |
-| `Ctrl+Alt+B` · `Cmd+Alt+B` | Bulleted list |
-| `Ctrl+Alt+N` · `Cmd+Alt+N` | Numbered list |
-| `Ctrl+Alt+X` · `Cmd+Alt+X` | Task list item |
-| `Ctrl+Alt+C` · `Cmd+Alt+C` | Check / uncheck a task |
-| `Ctrl+Alt+-` · `Cmd+Alt+-` | Horizontal separator |
-| `Alt+Shift+S` · `Cmd+Alt+S` | Jump from preview to the Markdown source |
-
-## A better preview
-
-The extension upgrades VS Code's built-in Markdown preview (`Ctrl+K V`) — nothing new to learn:
-
-- **GitHub styling** that follows your light/dark mode, with **Standard / Wide / Full** width buttons right in the preview.
-- **Mermaid diagrams**: fence a block with ` ```mermaid ` and it renders as a diagram (like the ones in this README), themed to match your editor and with zoom controls. Works offline.
-- **Task checkboxes** you can see at a glance, and `==highlighted text==` support.
-- Prefer the plain VS Code preview? Set `markdownNotebook.previewTheme` to `off`. Want dark always? Set it to `github-dark`.
-- Want notes to *open* in the pretty preview by default? Turn on `markdownNotebook.alwaysShowPreview`.
-
-An **Outline** panel below the Notebook view tracks the headings of whatever note you're reading and follows along as you scroll.
-
-## Export to PDF (or HTML)
-
-Right-click any note — in the Notebook view, the Explorer, or an editor tab — and choose **Export to PDF…**.
-
-```mermaid
-flowchart TD
-    note["📄 Your note"] --> html["Styled HTML<br/>(GitHub theme, via Pandoc)"]
-    html --> choice{"Save as…"}
-    choice -->|".pdf"| chrome["🖨️ Chrome prints it<br/>(diagrams included)"]
-    choice -->|".html"| selfc["🌐 Self-contained<br/>HTML file"]
-```
-
-- **PDF**: by default a headless Chrome does the printing, so the result looks exactly like the preview — Mermaid diagrams included. If you don't have Chrome installed, the extension offers a one-time download (~150 MB) of a private copy just for exports.
-- **Prefer no browser?** Set `markdownNotebook.pdfEngine` to `auto` to use a lightweight engine instead (it finds WeasyPrint, wkhtmltopdf, or Prince — install one with e.g. `pip install weasyprint`). With these engines, install [mermaid-cli](https://github.com/mermaid-js/mermaid-cli) (`npm i -g @mermaid-js/mermaid-cli`) if you want diagrams rendered in the PDF.
-- **HTML**: choose a `.html` filename in the save dialog instead and you get a single, styled, share-anywhere HTML file.
-
-Exports use a clean light GitHub theme by default — good for printing. Change it with `markdownNotebook.exportTheme`.
-
-## What you need
-
-| For… | You need | Notes |
-|------|----------|-------|
-| Notes, sections, templates, daily notes, tasks, preview | **Nothing extra** | Works out of the box |
-| Importing / converting documents | [Pandoc](https://pandoc.org/installing.html) | macOS: `brew install pandoc` · Windows: `winget install --id JohnMacFarlane.Pandoc` · Linux: `sudo apt install pandoc` |
-| PowerPoint / Excel import | Pandoc **3.8.3+** | Linux distro packages are often older — grab the [latest release](https://github.com/jgm/pandoc/releases) |
-| PDF export | Pandoc + Chrome | Chrome/Chromium is found automatically, or downloaded once with your permission |
-
-## Settings worth knowing
-
-Open them with the gear icon on the Notebook view. The most useful ones:
-
-| Setting | Default | What it does |
-|---------|---------|--------------|
-| `markdownNotebook.root` | *(first open folder)* | Use a subfolder (e.g. `notes`) as the notebook instead |
-| `markdownNotebook.author` | *(empty)* | Your name, written into new notes' headers |
-| `markdownNotebook.alwaysShowPreview` | `false` | Open notes in the rendered preview instead of the editor |
-| `markdownNotebook.previewTheme` | `github` | Preview styling: `github`, `github-dark`, or `off` |
-| `markdownNotebook.defaultPageWidth` | `standard` | Preview page width: `standard`, `wide`, or `full` |
-| `markdownNotebook.pdfEngine` | `chrome` | PDF export engine: `chrome`, `auto`, or a specific lightweight engine |
-| `markdownNotebook.exportTheme` | `github` | Styling for PDF/HTML exports |
-| `markdownNotebook.dailyNotePattern` | `YYYY-MM-DD` & friends | Which filenames count as daily notes |
-| `markdownNotebook.templatesFolder` | `templates` | Where your page templates live |
-| `pandocToMarkdown.deleteOriginal` | `true` | Remove the original after converting (to Trash by default) |
-| `pandocToMarkdown.useTrash` | `true` | Trash (recoverable) vs. permanent delete |
-
-## Good to know
-
-- **Your files stay yours.** Everything is plain Markdown; the only extras the extension writes are hidden index files (`.toc.md`, `.tasks.md`, `.notebook-order`) that keep the tables of contents, task dashboard, and your manual page ordering. They're regular text files and safe to commit to git.
-- **Originals are only removed after a conversion succeeds**, and go to the OS Trash by default.
-- File names with spaces or special characters are handled safely — files are passed to Pandoc directly, never through a shell.
+Every note is a plain `.md` text file in a folder you chose. The app adds only small housekeeping files (page ordering, trash, version history) inside that folder, all plain text and safe to commit to git. There's no account, no cloud, and no database — which also means any sync tool you already use just works.
 
 ## Building from source
 
 ```bash
 npm install
-npm run compile   # or: npm run watch
+npm start          # compile and run the app
+npm run pack       # build installers/portable for your platform (dist/)
 ```
 
-Open the folder in VS Code and press `F5` to try it in an Extension Development Host, or package and install it:
-
-```bash
-npm install -g @vscode/vsce
-vsce package
-code --install-extension markdown-notebook-*.vsix
-```
+See `docs/RELEASING.md` for the full release and code-signing setup, and `docs/team-reports/` for the development history.
 
 ## License
 
