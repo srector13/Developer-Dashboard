@@ -2283,15 +2283,16 @@ body.sidebar-collapsed #btn-expand-sidebar {
 
 .builder-hint {
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--text-secondary); /* muted token is sub-AA at this size in dark themes */
   margin-top: 6px;
   line-height: 1.5;
 }
 
-/* Small explanatory line under a settings/form field */
+/* Small explanatory line under a settings/form field. Secondary (not muted)
+   text: at 11px the muted token falls below AA contrast in dark themes. */
 .form-hint {
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   margin-top: 6px;
   line-height: 1.5;
 }
@@ -2892,9 +2893,9 @@ body[data-theme="sepia"] {
   --bg-tertiary: rgba(247, 241, 226, 0.6);
   --border-color: rgba(92, 75, 55, 0.2);
   --text-primary: #43382a;
-  --text-secondary: #6f6047;
+  --text-secondary: #5f513c; /* 5.4:1 on the tinted toolbar surface (was 4.26) */
   --text-muted: #98876b;
-  --accent-blue: #9a5b24;
+  --accent-blue: #8a4f1d; /* 5.1:1 as inline-code/link text on --code-bg (was 4.17) */
   --accent-teal: #3e6b4f;
   --accent-green: #4a7c43;
   --accent-red: #b3382c;

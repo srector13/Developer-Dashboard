@@ -945,9 +945,16 @@ async function doRenderMarkdownPreview() {
       if (isNaN(lineIdx)) return;
 
       // Optimistic in-place toggle: no re-read, no full preview re-render
-      // (which would re-run every mermaid diagram just to flip a checkbox)
+      // (which would re-run every mermaid diagram just to flip a checkbox).
+      // The current state comes from the SOURCE line, not the DOM: when the
+      // click lands on the <input> itself the browser has already toggled
+      // it (and reverts it again after preventDefault), so checkbox.checked
+      // is unreliable at this point.
       const checkbox = link.querySelector('.task-checkbox');
-      const wasChecked = checkbox ? checkbox.checked : false;
+      const checkboxRe = /^([ \t]*([-*+]\s+|\d+\.\s+)?)\[([ xX])\]/;
+      const lines = noteContent.split(/\r?\n/);
+      const m = lines[lineIdx] !== undefined ? lines[lineIdx].match(checkboxRe) : null;
+      const wasChecked = m ? m[3] !== ' ' : (checkbox ? checkbox.checked : false);
       if (checkbox) checkbox.checked = !wasChecked;
 
       const success = await window.api.toggleTaskAtLine(activeNote, lineIdx);
@@ -956,14 +963,15 @@ async function doRenderMarkdownPreview() {
         showToast('Could not toggle the task.', 'error');
         return;
       }
+      // Re-assert in a NEW task: the canceled native click reverts the
+      // input when dispatch completes — which runs after this handler's
+      // microtask continuations, so only a macrotask reliably wins.
+      if (checkbox) setTimeout(() => { checkbox.checked = !wasChecked; }, 0);
 
       // Patch local state to EXACTLY what main wrote. toggle-task-at-line
       // splits /\r?\n/ and joins with '\n' (normalizes CRLF) — replicate
       // that so the debounced files-changed refresh sees matching content
       // and skips the preview re-render.
-      const checkboxRe = /^([ \t]*([-*+]\s+|\d+\.\s+)?)\[([ xX])\]/;
-      const lines = noteContent.split(/\r?\n/);
-      const m = lines[lineIdx] !== undefined ? lines[lineIdx].match(checkboxRe) : null;
       if (m) {
         lines[lineIdx] = lines[lineIdx].replace(checkboxRe, `$1[${m[3] === ' ' ? 'x' : ' '}]`);
         noteContent = lines.join('\n');

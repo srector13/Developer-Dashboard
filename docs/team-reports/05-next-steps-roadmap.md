@@ -1,6 +1,8 @@
 # Next Steps: Making Markdown Notebook the Go-To Work Notes App
 
-> **Status update (cycle 3):** items 1 (full-text search), 2 (attachments & images), 5-in-part (local fonts), 7 (trash + note history), 10-in-part (tab strip), 12 (table editor), and 13-in-part (diagram builder: 4 more types + edit-in-place via Custom mode) are **delivered** — see reports 06–09. Still open below: batch/section PDF export (3), PDF theme-true diagrams (4), incremental gutter + in-place checkbox toggling (5), mtime scan cache (6), richer sharing targets (8), quick capture (9), palette recents (10), and the longer-term items.
+> **Status update (cycle 4):** the remaining near/medium-term items are **delivered** — batch/section PDF export with a generated TOC (3), theme-true PDF diagrams (4), incremental gutter + in-place checkbox toggling (5), the mtime scan cache (6), sharing to standalone HTML / DOCX / rich-text clipboard (8), quick capture on a global shortcut (9), and palette recents (10) — plus a reworked grouped search panel with `#` tag autocomplete and a CI workflow (renderer suite on ubuntu, Electron e2e on macOS/Windows). See reports 10–13. Still open: the longer-term items 11, 14, and 15 below.
+>
+> **Status update (cycle 3):** items 1 (full-text search), 2 (attachments & images), 5-in-part (local fonts), 7 (trash + note history), 10-in-part (tab strip), 12 (table editor), and 13-in-part (diagram builder: 4 more types + edit-in-place via Custom mode) are **delivered** — see reports 06–09.
 
 The target: a one-stop shop for taking work notes, importing documents into the notebook, and exporting/sharing them as polished PDFs. Ordered by expected impact per unit of effort.
 
