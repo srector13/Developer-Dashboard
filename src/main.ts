@@ -9,6 +9,30 @@ const execFileAsync = promisify(execFile);
 const fsp = fs.promises;
 
 let mainWindow: BrowserWindow | null = null;
+
+// Portable mode: keep ALL app state (settings, window state, caches) next to
+// the executable instead of %APPDATA%/~Library. Active when either
+//  - running the electron-builder `portable` target (it sets
+//    PORTABLE_EXECUTABLE_DIR to the folder holding the .exe), or
+//  - a `MarkdownNotebookData` folder exists beside the executable (opt-in
+//    for the zip distribution: create the folder once and the app is
+//    self-contained from then on).
+// Must run before anything derives a path from `userData`.
+function resolvePortableUserData(): string | null {
+  const portableDir = process.env.PORTABLE_EXECUTABLE_DIR;
+  if (portableDir) return path.join(portableDir, 'MarkdownNotebookData');
+  try {
+    const sidecar = path.join(path.dirname(process.execPath), 'MarkdownNotebookData');
+    if (fs.existsSync(sidecar)) return sidecar;
+  } catch { /* sandboxed/odd execPath: fall through to the default */ }
+  return null;
+}
+const portableUserData = resolvePortableUserData();
+if (portableUserData) {
+  try { fs.mkdirSync(portableUserData, { recursive: true }); } catch { /* fs errors surface on first write */ }
+  app.setPath('userData', portableUserData);
+}
+
 const SETTINGS_FILE = path.join(app.getPath('userData'), 'settings.json');
 const ORDER_FILE = '.notebook-order';
 

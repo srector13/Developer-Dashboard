@@ -1,0 +1,70 @@
+name: Release
+
+# Pushing a v* tag builds installers + portable/zip artifacts for macOS and
+# Windows and attaches them to a draft GitHub Release. Code signing and
+# notarization activate automatically when the signing secrets are configured
+# (see docs/RELEASING.md); without them the build still succeeds unsigned.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck + compile
+        run: npm run compile
+
+      # electron-builder picks up signing automatically:
+      #  - Windows: CSC_LINK (base64 .pfx) + CSC_KEY_PASSWORD
+      #  - macOS:   CSC_LINK (base64 .p12) + CSC_KEY_PASSWORD
+      # Notarization is enabled only when Apple credentials exist, by
+      # overriding the config's notarize=false on the command line.
+      - name: Build and publish (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          EXTRA=()
+          if [ -n "$APPLE_ID" ] && [ -n "$APPLE_TEAM_ID" ]; then
+            EXTRA+=(-c.mac.notarize.teamId="$APPLE_TEAM_ID")
+          fi
+          npx electron-builder --mac --publish onTagOrDraft "${EXTRA[@]}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Build and publish (Windows)
+        if: runner.os == 'Windows'
+        run: npx electron-builder --win --publish onTagOrDraft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+
+      - name: Upload artifacts (build inspection)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.os }}
+          path: |
+            dist/*.exe
+            dist/*.zip
+            dist/*.dmg
+          retention-days: 7

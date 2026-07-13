@@ -29,6 +29,7 @@ The target: a one-stop shop for taking work notes, importing documents into the 
 13. **Extend the Diagram Builder** with the remaining mermaid families (ER, timeline, mindmap, quadrant) and two-way editing: parse an existing ```mermaid block back into the form when the caret is inside it.
 14. **Plugin/theme API:** the theme registry + token system now makes user-supplied palettes trivial (a JSON of token overrides); publish the token contract.
 15. **Ship it:** signed installers (dmg/msi via electron-builder targets), auto-update feed, and a website download page. The e2e Playwright suite should run in CI on macOS + Windows runners where the Electron binary is available.
+    - *Delivered (packaging half):* tag-triggered release workflow building a per-user NSIS installer, **portable exe** (all state lives beside the executable — see `docs/RELEASING.md`), zip, and dmg; code signing + notarization activate automatically when the repo secrets are configured, and builds stay green unsigned without them. Still open: auto-update feed and the download page. The e2e-in-CI half landed in cycle 4's CI workflow.
 
 ## Engineering hygiene carried forward
 
