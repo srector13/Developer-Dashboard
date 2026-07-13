@@ -1513,7 +1513,7 @@ await page.locator('#tab-strip .note-tab').nth(1).click({ button: 'right' });
 await page.waitForTimeout(200);
 check('right-click opens the tab menu', await page.evaluate(() => {
   const menu = document.getElementById('tab-context-menu');
-  return !!menu && menu.querySelectorAll('.dropdown-item').length === 4;
+  return !!menu && menu.querySelectorAll('.dropdown-item').length === 5;
 }));
 check('menu enables left+right for a middle tab', await page.evaluate(() =>
   Array.from(document.querySelectorAll('#tab-context-menu .dropdown-item'))
@@ -1542,6 +1542,16 @@ await page.locator('#tab-context-menu .dropdown-item', { hasText: 'Close Other T
 await page.waitForTimeout(500);
 check('close-others keeps exactly the clicked tab', await page.evaluate(() =>
   document.querySelectorAll('#tab-strip .note-tab').length === 1));
+// Close All Tabs
+await page.evaluate(async () => { await window.openNote('/nb/xss.md'); await window.openNote('/nb/Projects/alpha.md'); });
+await page.waitForTimeout(400);
+await page.locator('#tab-strip .note-tab').first().click({ button: 'right' });
+await page.waitForTimeout(200);
+await page.locator('#tab-context-menu .dropdown-item', { hasText: 'Close All Tabs' }).click();
+await page.waitForTimeout(500);
+check('close-all clears the tab strip and canvas', await page.evaluate(() =>
+  document.querySelectorAll('#tab-strip .note-tab').length === 0 &&
+  document.getElementById('tab-strip').style.display === 'none'));
 
 // --- 39. Portrait mermaid diagrams are height-capped in the preview ---
 await page.evaluate(async () => { await window.openNote('/nb/smoke.md'); });

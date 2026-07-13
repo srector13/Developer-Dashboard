@@ -4103,6 +4103,7 @@ function showTabContextMenu(e, fsPath) {
     { label: 'Close Other Tabs', enabled: openTabs.length > 1, action: () => closeTabsWhere(p => p !== fsPath, fsPath) },
     { label: 'Close Tabs to the Left', enabled: idx > 0, action: () => closeTabsWhere((p, i) => i < idx, fsPath) },
     { label: 'Close Tabs to the Right', enabled: idx < openTabs.length - 1, action: () => closeTabsWhere((p, i) => i > idx, fsPath) },
+    { label: 'Close All Tabs', enabled: openTabs.length > 0, action: () => closeTabsWhere(() => true, null) },
   ];
 
   const menu = document.createElement('div');

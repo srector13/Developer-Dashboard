@@ -632,41 +632,25 @@ async function scanDirectory(
   // Sort sections alphabetically
   sectionNode.sections.sort((a, b) => a.name.localeCompare(b.name));
 
-  // Sort pages by ordering file or fallback sort
-  const orderList = await readOrderFile(dir);
-  const orderedPages: PageNode[] = [];
-  const unlistedPages: PageNode[] = [];
+  // Daily notes ALWAYS float to the top of their section, newest first, so
+  // today's note is immediately visible. The manual order file only governs
+  // the non-daily pages. (Previously a daily note that had landed in the
+  // order file — created via the calendar or quick capture, both of which
+  // append to it — sank to the bottom and looked "missing".)
+  const dailyPages = sectionNode.pages.filter(p => p.dailyKey);
+  dailyPages.sort((a, b) => (b.dailyKey ?? '').localeCompare(a.dailyKey ?? ''));
 
+  const nonDaily = sectionNode.pages.filter(p => !p.dailyKey);
+  const orderList = await readOrderFile(dir);
   const orderMap = new Map<string, number>();
   orderList.forEach((n, i) => orderMap.set(n.toLowerCase(), i));
 
-  for (const page of sectionNode.pages) {
-    if (orderMap.has(page.name.toLowerCase())) {
-      orderedPages.push(page);
-    } else {
-      unlistedPages.push(page);
-    }
-  }
-
+  const orderedPages = nonDaily.filter(p => orderMap.has(p.name.toLowerCase()));
+  const unlistedRegular = nonDaily.filter(p => !orderMap.has(p.name.toLowerCase()));
   orderedPages.sort((a, b) => (orderMap.get(a.name.toLowerCase()) ?? 0) - (orderMap.get(b.name.toLowerCase()) ?? 0));
+  unlistedRegular.sort((a, b) => a.title.localeCompare(b.title));
 
-  // Default page sorter: Daily notes (newest first), then alphabetical
-  const sortPagesDefault = (pages: PageNode[]) => {
-    const daily = pages.filter(p => p.dailyKey);
-    const regular = pages.filter(p => !p.dailyKey);
-    daily.sort((a, b) => (b.dailyKey ?? '').localeCompare(a.dailyKey ?? ''));
-    regular.sort((a, b) => a.title.localeCompare(b.title));
-    return [...daily, ...regular];
-  };
-
-  const unlistedDaily = unlistedPages.filter(p => p.dailyKey);
-  const unlistedRegular = unlistedPages.filter(p => !p.dailyKey);
-
-  sectionNode.pages = [
-    ...sortPagesDefault(unlistedDaily),
-    ...orderedPages,
-    ...sortPagesDefault(unlistedRegular),
-  ];
+  sectionNode.pages = [...dailyPages, ...orderedPages, ...unlistedRegular];
 
   return sectionNode;
 }
@@ -2310,13 +2294,13 @@ ipcMain.handle('list-capture-targets', async () => {
 });
 
 // Append a capture to today's daily note (default) or to an explicitly
-// chosen note. Multi-line captures (code blocks!) are preserved verbatim.
-//  - daily note: one-liners become "- HH:MM text" bullets under the
-//    "## Quick Capture" section; multi-line text lands in the same section
-//    as a raw block. The note is created (anywhere-by-basename lookup,
-//    else at the root) when missing.
-//  - explicit target: appended verbatim at the end of the file — the
-//    natural shape for "add this snippet to my Code Snippets doc".
+// chosen note. Text is inserted VERBATIM (no timestamp/bullet decoration,
+// which would corrupt things like "- [ ] task" typed straight in).
+//  - daily note: text lands under the "## Quick Capture" section, each
+//    capture separated by a blank line. The note is created
+//    (anywhere-by-basename lookup, else at the root) when missing.
+//  - explicit target: appended at the end of the file — the natural shape
+//    for "add this snippet to my Code Snippets doc".
 ipcMain.handle('append-quick-capture', async (event, text: string, targetFsPath?: string) => {
   const settings = await readSettings();
   const root = settings.notebookRoot;
@@ -2324,7 +2308,6 @@ ipcMain.handle('append-quick-capture', async (event, text: string, targetFsPath?
 
   const raw = String(text || '').replace(/\r\n/g, '\n').replace(/^\n+|\s+$/g, '');
   if (!raw.trim()) return { success: false, reason: 'Nothing to capture.' };
-  const multiLine = raw.includes('\n');
 
   let notePath = '';
 
@@ -2362,10 +2345,8 @@ ipcMain.handle('append-quick-capture', async (event, text: string, targetFsPath?
     await writeOrderFile(root, ord);
   }
 
-  const now = new Date();
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const stamp = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
-  const entryLines = multiLine ? ['', ...raw.split('\n')] : [`- ${stamp} ${raw.trim()}`];
+  // Verbatim: keep the user's own markdown intact (tasks, lists, etc.)
+  const entryLines = raw.split('\n');
 
   const content = await fsp.readFile(notePath, 'utf8');
   const lines = content.split(/\r?\n/);
@@ -2373,6 +2354,7 @@ ipcMain.handle('append-quick-capture', async (event, text: string, targetFsPath?
 
   if (headingIdx === -1) {
     while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
+    // Blank after the heading already separates; no extra leading blank
     lines.push('', '## Quick Capture', '', ...entryLines, '');
   } else {
     // End of the section: the next heading of any level, else EOF.
@@ -2387,7 +2369,9 @@ ipcMain.handle('append-quick-capture', async (event, text: string, targetFsPath?
     }
     let insertAt = end;
     while (insertAt > headingIdx + 1 && lines[insertAt - 1].trim() === '') insertAt--;
-    lines.splice(insertAt, 0, ...entryLines);
+    // Separate this capture from the previous one so plain-text notes don't
+    // merge into a single paragraph (a blank between list items is harmless)
+    lines.splice(insertAt, 0, '', ...entryLines);
   }
 
   await writeNoteFile(notePath, lines.join('\n'), { snapshot: true });
