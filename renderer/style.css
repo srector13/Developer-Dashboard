@@ -2288,6 +2288,21 @@ body.sidebar-collapsed #btn-expand-sidebar {
   line-height: 1.5;
 }
 
+/* Right-click menu on note tabs: a dropdown-menu placed at the cursor */
+.tab-context-menu {
+  display: block;
+  position: fixed;
+  top: auto;
+  left: auto;
+  margin-top: 0;
+  width: 200px;
+}
+
+.tab-context-menu .dropdown-item.disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
 /* Small explanatory line under a settings/form field. Secondary (not muted)
    text: at 11px the muted token falls below AA contrast in dark themes. */
 .form-hint {
@@ -2444,12 +2459,49 @@ body.sidebar-collapsed #btn-expand-sidebar {
 }
 
 /* Full-text search results in the sidebar */
+/* Search results live in the right drawer (the drawer itself scrolls) */
 #content-search-results {
-  border-top: 1px solid var(--border-color);
-  overflow-y: auto;
-  max-height: 45%;
-  flex-shrink: 0;
-  padding: 4px 8px 8px 8px;
+  padding: 0 0 8px 0;
+}
+
+/* Segmented Outline / Search switch in the drawer header */
+.drawer-tabs {
+  display: flex;
+  gap: 2px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 2px;
+}
+
+.drawer-tab {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-display);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.drawer-tab:hover {
+  color: var(--text-primary);
+}
+
+.drawer-tab.active {
+  background: var(--surface-active);
+  color: var(--text-primary);
+}
+
+.drawer-empty-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  padding: 8px 4px;
 }
 
 .content-search-header {

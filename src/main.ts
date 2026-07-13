@@ -1760,9 +1760,18 @@ const PDF_BASE_CSS = `
     background-color: var(--pdf-code-bg);
     border-radius: 3px;
   }
-  pre { padding: 16px; overflow: auto; font-size: 85%; line-height: 1.45; }
-  code { padding: .2em .4em; margin: 0; font-size: 85%; }
-  pre code { padding: 0; background-color: transparent; }
+  /* Paper can't scroll: long code lines must WRAP, never clip behind an
+     overflow container (which also paints a useless scrollbar into the PDF) */
+  pre {
+    padding: 16px;
+    overflow: visible;
+    font-size: 85%;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  code { padding: .2em .4em; margin: 0; font-size: 85%; word-break: break-word; }
+  pre code { padding: 0; background-color: transparent; white-space: inherit; }
   blockquote {
     padding: 0 1em;
     color: var(--pdf-muted);

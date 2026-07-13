@@ -1401,6 +1401,77 @@ check('re-entering split aligns preview to editor position', await page.evaluate
   return pv.scrollTop > (pv.scrollHeight - pv.clientHeight) * 0.9;
 }));
 
+// --- 37. Search results live in the right drawer with Outline/Search toggle ---
+await page.evaluate(() => {
+  const drawer = document.getElementById('right-drawer');
+  if (!drawer.classList.contains('collapsed')) window.toggleRightDrawer(); // start closed
+  window.setDrawerTab('outline');
+});
+await page.locator('#search-input').fill('very long');
+await page.waitForTimeout(400);
+check('typing a query opens the drawer on the Search view', await page.evaluate(() =>
+  !document.getElementById('right-drawer').classList.contains('collapsed') &&
+  document.getElementById('drawer-tab-search').classList.contains('active') &&
+  document.getElementById('drawer-search-view').style.display !== 'none' &&
+  document.getElementById('drawer-outline-view').style.display === 'none'));
+check('search groups render inside the drawer', await page.evaluate(() =>
+  !!document.querySelector('#drawer-search-view #content-search-results .search-group')));
+check('drawer view choice persisted', await page.evaluate(() =>
+  localStorage.getItem('mdnb-drawer-tab') === 'search'));
+await page.evaluate(() => window.setDrawerTab('outline'));
+check('toggle switches back to outline', await page.evaluate(() =>
+  document.getElementById('drawer-outline-view').style.display !== 'none' &&
+  document.getElementById('drawer-search-view').style.display === 'none' &&
+  document.getElementById('drawer-tab-outline').classList.contains('active')));
+await page.evaluate(() => window.setDrawerTab('search'));
+await page.locator('#search-input').fill('');
+await page.waitForTimeout(300);
+check('cleared query shows the drawer hint again', await page.evaluate(() =>
+  document.getElementById('content-search-results').style.display === 'none' &&
+  document.getElementById('drawer-search-empty').style.display !== 'none'));
+
+// --- 38. Tab context menu: close / others / left / right ---
+await page.evaluate(async () => {
+  await window.closeTabsWhere(() => true, null); // earlier sections leave tabs behind
+  await window.openNote('/nb/smoke.md');
+  await window.openNote('/nb/xss.md');
+  await window.openNote('/nb/Projects/alpha.md'); // 3 tabs, alpha active (rightmost)
+});
+await page.waitForTimeout(500);
+await page.locator('#tab-strip .note-tab').nth(1).click({ button: 'right' });
+await page.waitForTimeout(200);
+check('right-click opens the tab menu', await page.evaluate(() => {
+  const menu = document.getElementById('tab-context-menu');
+  return !!menu && menu.querySelectorAll('.dropdown-item').length === 4;
+}));
+check('menu enables left+right for a middle tab', await page.evaluate(() =>
+  Array.from(document.querySelectorAll('#tab-context-menu .dropdown-item'))
+    .every(el => !el.classList.contains('disabled'))));
+await page.keyboard.press('Escape');
+await page.evaluate(() => window.hideTabContextMenu());
+// Close Tabs to the Right from the FIRST tab: only smoke.md survives
+await page.locator('#tab-strip .note-tab').first().click({ button: 'right' });
+await page.waitForTimeout(200);
+check('first tab: close-left disabled, close-right enabled', await page.evaluate(() => {
+  const items = Array.from(document.querySelectorAll('#tab-context-menu .dropdown-item'));
+  return items[2].classList.contains('disabled') && !items[3].classList.contains('disabled');
+}));
+await page.locator('#tab-context-menu .dropdown-item', { hasText: 'Close Tabs to the Right' }).click();
+await page.waitForTimeout(500);
+check('close-right leaves only the clicked tab', await page.evaluate(() =>
+  document.querySelectorAll('#tab-strip .note-tab').length === 1));
+check('closing the active tab activates the kept one', (await page.locator('#note-title').innerText()).includes('Smoke Note'));
+check('menu removed after action', await page.evaluate(() => !document.getElementById('tab-context-menu')));
+// Close Other Tabs
+await page.evaluate(async () => { await window.openNote('/nb/xss.md'); await window.openNote('/nb/Projects/alpha.md'); });
+await page.waitForTimeout(400);
+await page.locator('#tab-strip .note-tab').nth(1).click({ button: 'right' });
+await page.waitForTimeout(200);
+await page.locator('#tab-context-menu .dropdown-item', { hasText: 'Close Other Tabs' }).click();
+await page.waitForTimeout(500);
+check('close-others keeps exactly the clicked tab', await page.evaluate(() =>
+  document.querySelectorAll('#tab-strip .note-tab').length === 1));
+
 } finally {
   if (browser) await browser.close();
 }

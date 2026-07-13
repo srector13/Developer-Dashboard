@@ -105,6 +105,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   // through the textarea's inline onscroll)
   document.getElementById('preview-pane').addEventListener('scroll', () => syncSplitScroll('preview'));
 
+  // Tab context menu dismissal: any click or right-click elsewhere closes it
+  // (opening it stops propagation, so these never fire for the menu itself)
+  document.addEventListener('click', hideTabContextMenu);
+  document.addEventListener('contextmenu', hideTabContextMenu);
+  window.addEventListener('resize', hideTabContextMenu);
+
+  // Restore the drawer's last-used view (outline vs search)
+  setDrawerTab(drawerTab);
+
   // Set default page width label
   const labelMap = { 'standard': 'Standard', 'wide': 'Wide', 'full': 'Full' };
   document.getElementById('label-stretch-width').innerText = labelMap[appSettings.defaultPageWidth] || 'Standard';
@@ -566,6 +575,11 @@ function handleSearch(val) {
   searchDebounceTimer = setTimeout(() => {
     searchDebounceTimer = null;
     renderSidebarTree();
+    // Results live in the right drawer: typing a query brings them up
+    if (val.trim().length > 0) {
+      setDrawerTab('search');
+      openRightDrawer();
+    }
     renderSearchGroups(val);
   }, 120);
 }
@@ -634,12 +648,15 @@ function renderSearchGroups(rawQuery) {
   // Any new render invalidates in-flight content responses
   const token = ++contentSearchToken;
 
+  const emptyHint = document.getElementById('drawer-search-empty');
   if (!tagMode && raw.trim().length === 0) {
     container.style.display = 'none';
     container.innerHTML = '';
+    if (emptyHint) emptyHint.style.display = 'block';
     return;
   }
   container.style.display = 'block';
+  if (emptyHint) emptyHint.style.display = 'none';
 
   const allTags = Array.from(tagSet).sort((a, b) => a.localeCompare(b));
 
@@ -2025,9 +2042,28 @@ function toggleRightDrawer() {
   const isOpen = !drawer.classList.contains('collapsed');
   const resizer = document.getElementById('drawer-resizer');
   if (resizer) resizer.style.display = isOpen ? 'block' : 'none';
-  if (isOpen) {
+  if (isOpen && drawerTab === 'outline') {
     updateOutlineAndBacklinks();
   }
+}
+
+// The drawer hosts two views — the note outline and the search results —
+// switched by the segmented control in its header.
+let drawerTab = localStorage.getItem('mdnb-drawer-tab') === 'search' ? 'search' : 'outline';
+
+function setDrawerTab(name) {
+  drawerTab = name === 'search' ? 'search' : 'outline';
+  try { localStorage.setItem('mdnb-drawer-tab', drawerTab); } catch {}
+  document.getElementById('drawer-tab-outline').classList.toggle('active', drawerTab === 'outline');
+  document.getElementById('drawer-tab-search').classList.toggle('active', drawerTab === 'search');
+  document.getElementById('drawer-outline-view').style.display = drawerTab === 'outline' ? 'block' : 'none';
+  document.getElementById('drawer-search-view').style.display = drawerTab === 'search' ? 'block' : 'none';
+  if (drawerTab === 'outline') updateOutlineAndBacklinks();
+}
+
+function openRightDrawer() {
+  const drawer = document.getElementById('right-drawer');
+  if (drawer.classList.contains('collapsed')) toggleRightDrawer();
 }
 
 function updateOutlineAndBacklinks() {
@@ -3787,6 +3823,7 @@ function renderTabStrip() {
       <div class="note-tab ${isActive ? 'active' : ''}"
            onclick="openNote(${jsArg(fsPath)})"
            onauxclick="if (event.button === 1) { event.preventDefault(); closeTab(${jsArg(fsPath)}); }"
+           oncontextmenu="showTabContextMenu(event, ${jsArg(fsPath)})"
            title="${escapeHtml(fsPath)}">
         <span class="note-tab-dirty" aria-hidden="true"></span>
         <span class="note-tab-label">${escapeHtml(title)}</span>
@@ -3797,6 +3834,71 @@ function renderTabStrip() {
 
   const active = strip.querySelector('.note-tab.active');
   if (active) active.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+}
+
+// Close every tab matching the predicate (called with the tab's ORIGINAL
+// index) in one pass. `keep` survives and becomes active when the active
+// tab was among the closed.
+async function closeTabsWhere(predicate, keep) {
+  const closing = new Set(openTabs.filter((p, i) => p !== keep && predicate(p, i)));
+  if (closing.size === 0) return;
+  openTabs = openTabs.filter(p => !closing.has(p));
+
+  if (closing.has(activeNote)) {
+    if (openTabs.includes(keep)) {
+      await openNote(keep);
+    } else if (openTabs.length) {
+      await openNote(openTabs[0]);
+    } else {
+      closeNoteCanvas();
+    }
+  } else {
+    renderTabStrip();
+  }
+  persistTabs();
+}
+
+// Right-click menu on a tab: close / close others / close left / close right
+function hideTabContextMenu() {
+  const menu = document.getElementById('tab-context-menu');
+  if (menu) menu.remove();
+}
+
+function showTabContextMenu(e, fsPath) {
+  e.preventDefault();
+  e.stopPropagation();
+  hideTabContextMenu();
+  const idx = openTabs.indexOf(fsPath);
+  if (idx === -1) return;
+
+  const items = [
+    { label: 'Close Tab', enabled: true, action: () => closeTab(fsPath) },
+    { label: 'Close Other Tabs', enabled: openTabs.length > 1, action: () => closeTabsWhere(p => p !== fsPath, fsPath) },
+    { label: 'Close Tabs to the Left', enabled: idx > 0, action: () => closeTabsWhere((p, i) => i < idx, fsPath) },
+    { label: 'Close Tabs to the Right', enabled: idx < openTabs.length - 1, action: () => closeTabsWhere((p, i) => i > idx, fsPath) },
+  ];
+
+  const menu = document.createElement('div');
+  menu.id = 'tab-context-menu';
+  menu.className = 'dropdown-menu glass-card tab-context-menu';
+  for (const item of items) {
+    const el = document.createElement('div');
+    el.className = 'dropdown-item' + (item.enabled ? '' : ' disabled');
+    el.textContent = item.label;
+    if (item.enabled) {
+      el.addEventListener('click', () => {
+        hideTabContextMenu();
+        item.action();
+      });
+    }
+    menu.appendChild(el);
+  }
+  document.body.appendChild(menu);
+
+  // Clamp to the viewport so the menu never opens half off-screen
+  const rect = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(4, Math.min(e.clientX, window.innerWidth - rect.width - 8))}px`;
+  menu.style.top = `${Math.max(4, Math.min(e.clientY, window.innerHeight - rect.height - 8))}px`;
 }
 
 async function closeTab(fsPath) {

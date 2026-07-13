@@ -84,9 +84,6 @@
         <div id="notebook-tree" class="file-tree">
           <!-- Tree nodes dynamically injected here -->
         </div>
-        <div id="content-search-results" style="display: none;">
-          <!-- Full-text matches injected here -->
-        </div>
       </div>
 
       <!-- Sidebar Footer: Templates Manager -->
@@ -452,18 +449,29 @@
     <!-- Right drawer drag resizer -->
     <div id="drawer-resizer" class="panel-resizer" style="display: none;" title="Drag to resize outline"></div>
 
-    <!-- RIGHT DRAWER: Headings Outline & Backlinks -->
+    <!-- RIGHT DRAWER: Outline / Search results, toggled at the top -->
     <aside id="right-drawer" class="collapsed">
       <div class="drawer-section">
         <div class="drawer-header" style="display: flex; justify-content: space-between; align-items: center;">
-          <h4>Outline</h4>
-          <button class="icon-btn" onclick="toggleRightDrawer()" title="Close Outline">
+          <div class="drawer-tabs" role="tablist">
+            <button id="drawer-tab-outline" class="drawer-tab active" onclick="setDrawerTab('outline')" title="Headings outline of the open note">Outline</button>
+            <button id="drawer-tab-search" class="drawer-tab" onclick="setDrawerTab('search')" title="Search results (titles, content, tags)">Search</button>
+          </div>
+          <button class="icon-btn" onclick="toggleRightDrawer()" title="Close panel">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
-        <ul id="outline-list" class="outline-tree">
-          <!-- Headings outline list -->
-        </ul>
+        <div id="drawer-outline-view">
+          <ul id="outline-list" class="outline-tree">
+            <!-- Headings outline list -->
+          </ul>
+        </div>
+        <div id="drawer-search-view" style="display: none;">
+          <div id="content-search-results" style="display: none;">
+            <!-- Full-text matches injected here -->
+          </div>
+          <div id="drawer-search-empty" class="drawer-empty-hint">Type in the sidebar search box — results show up here.</div>
+        </div>
       </div>
     </aside>
 
