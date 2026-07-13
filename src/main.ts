@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, globalShortcut } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, globalShortcut, Menu, MenuItemConstructorOptions } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
@@ -117,6 +117,53 @@ async function writeSettings(settings: Partial<AppSettings>): Promise<AppSetting
   return updated;
 }
 
+// Right-click menu with spelling corrections. Chromium's spell checker
+// draws the red squiggles on its own, but its suggestions are only exposed
+// through the context-menu event — without this handler there is no way to
+// actually fix a flagged word.
+function wireSpellcheckMenu(win: BrowserWindow) {
+  win.webContents.on('context-menu', (event, params) => {
+    const items: MenuItemConstructorOptions[] = [];
+
+    if (params.misspelledWord) {
+      const suggestions = (params.dictionarySuggestions || []).slice(0, 6);
+      if (suggestions.length) {
+        for (const suggestion of suggestions) {
+          items.push({
+            label: suggestion,
+            click: () => win.webContents.replaceMisspelling(suggestion),
+          });
+        }
+      } else {
+        items.push({ label: 'No spelling suggestions', enabled: false });
+      }
+      items.push({ type: 'separator' });
+      items.push({
+        label: `Add "${params.misspelledWord}" to Dictionary`,
+        click: () => win.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord),
+      });
+      items.push({ type: 'separator' });
+    }
+
+    // Standard edit actions so the menu is useful on any right-click
+    if (params.isEditable) {
+      items.push(
+        { role: 'cut', enabled: params.selectionText.length > 0 },
+        { role: 'copy', enabled: params.selectionText.length > 0 },
+        { role: 'paste' },
+        { type: 'separator' },
+        { role: 'selectAll' },
+      );
+    } else if (params.selectionText) {
+      items.push({ role: 'copy' });
+    }
+
+    if (items.length) {
+      Menu.buildFromTemplate(items).popup({ window: win });
+    }
+  });
+}
+
 // Window manager
 function createWindow() {
   const iconPath = path.join(__dirname, '../build/icon.png');
@@ -137,6 +184,7 @@ function createWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+  wireSpellcheckMenu(mainWindow);
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -2055,6 +2103,7 @@ function createCaptureWindow(): BrowserWindow {
     },
   });
   win.loadFile(path.join(__dirname, '../renderer/capture.html'));
+  wireSpellcheckMenu(win); // corrections work in the quick-capture box too
   // A capture scratchpad shouldn't linger over other apps once you click away
   win.on('blur', () => win.hide());
   win.on('closed', () => {

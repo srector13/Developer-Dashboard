@@ -45,6 +45,7 @@ flowchart LR
 
 ## Little comforts
 
+- **Spell check.** Misspelled words get the familiar red underline; right-click one for suggested corrections or to add it to your dictionary.
 - **Quick capture.** A system-wide shortcut (⌘⇧N / Ctrl+Shift+N) pops up a small note-jotting window from anywhere — even when the app is in the background — and files what you type into today's daily note.
 - **Six looks.** Light, Dark, Midnight, Forest, Sepia, or follow your system.
 - **A safety net.** Deleted notes go to a built-in trash you can restore from, and the app quietly keeps earlier versions of each note so you can bring back last Tuesday's wording.
