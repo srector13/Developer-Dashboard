@@ -1170,12 +1170,21 @@ await page.locator('#search-input').fill('#te');
 await page.waitForTimeout(300);
 await page.locator('#content-search-results .search-tag-row').click();
 await page.waitForTimeout(400);
-check('tag click activates the tag filter', await page.evaluate(() =>
-  document.getElementById('active-tag-indicator').style.display === 'flex' &&
-  document.getElementById('active-tag-label').innerText === '#test'));
-check('tag click clears the search box', (await page.locator('#search-input').inputValue()) === '');
-await page.evaluate(() => window.clearTagFilter());
+check('tag click sets the box to the exact tag', (await page.locator('#search-input').inputValue()) === '#test');
+check('tag click shows tagged pages in the pane (not a tree filter)', await page.evaluate(() => {
+  const g = document.querySelector('#content-search-results .search-group[data-group="tags"]');
+  return g && g.querySelector('.search-group-label').textContent === 'Pages tagged #test' &&
+    g.querySelectorAll('.content-search-item').length === 1 &&
+    g.textContent.includes('Smoke Note');
+}));
+check('tag results leave the tree unfiltered', await page.locator('#notebook-tree .tree-node-label', { hasText: 'Very Long' }).count() === 1);
+// Typing an exact tag directly does the same
+await page.locator('#search-input').fill('#test');
 await page.waitForTimeout(300);
+check('typing an exact tag shows its pages', await page.evaluate(() =>
+  document.querySelector('#content-search-results .search-group-label').textContent === 'Pages tagged #test'));
+await page.locator('#search-input').fill('');
+await page.waitForTimeout(200);
 
 // --- 29. Cycle 4: palette Recent group on empty query ---
 await page.evaluate(async () => {
@@ -1457,6 +1466,40 @@ await page.waitForTimeout(300);
 check('cleared query shows the drawer hint again', await page.evaluate(() =>
   document.getElementById('content-search-results').style.display === 'none' &&
   document.getElementById('drawer-search-empty').style.display !== 'none'));
+
+// pane-toggle icons light up to show which panes are open
+check('notebook toggle icon exists in the toolbar', await page.evaluate(() =>
+  !!document.getElementById('btn-toggle-notebook')));
+check('notebook icon is active while the sidebar is open', await page.evaluate(() => {
+  if (document.getElementById('sidebar').classList.contains('collapsed')) window.toggleSidebarCollapsed();
+  return document.getElementById('btn-toggle-notebook').classList.contains('active');
+}));
+check('notebook icon toggles the sidebar and its active state', await page.evaluate(() => {
+  window.toggleSidebarCollapsed(); // now collapsed
+  const collapsed = document.getElementById('sidebar').classList.contains('collapsed');
+  const inactive = !document.getElementById('btn-toggle-notebook').classList.contains('active');
+  window.toggleSidebarCollapsed(); // restore open
+  return collapsed && inactive;
+}));
+check('search icon active only when the Search pane is open', await page.evaluate(() => {
+  const drawer = document.getElementById('right-drawer');
+  if (drawer.classList.contains('collapsed')) window.toggleRightDrawer();
+  window.setDrawerTab('search');
+  const s = document.getElementById('btn-open-search').classList.contains('active');
+  const o = document.getElementById('btn-toggle-outline').classList.contains('active');
+  return s && !o;
+}));
+check('outline icon active only when the Outline pane is open', await page.evaluate(() => {
+  window.setDrawerTab('outline');
+  const s = document.getElementById('btn-open-search').classList.contains('active');
+  const o = document.getElementById('btn-toggle-outline').classList.contains('active');
+  return o && !s;
+}));
+check('no drawer icon active when the drawer is closed', await page.evaluate(() => {
+  if (!document.getElementById('right-drawer').classList.contains('collapsed')) window.toggleRightDrawer();
+  return !document.getElementById('btn-open-search').classList.contains('active') &&
+    !document.getElementById('btn-toggle-outline').classList.contains('active');
+}));
 
 // --- 38. Tab context menu: close / others / left / right ---
 await page.evaluate(async () => {

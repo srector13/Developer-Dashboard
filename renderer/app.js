@@ -627,13 +627,27 @@ function tagRowsHtml(tags) {
   `).join('');
 }
 
-// Apply a tag from the search panel: the active-tag indicator carries the
-// state from here on, so the query box is cleared.
+// Picking a tag shows the pages carrying it, right here in the search pane
+// (it no longer filters the sidebar tree). Setting the box to '#tag' routes
+// back through handleSearch, which renders the tagged-pages view.
 function selectSearchTag(tag) {
-  toggleTagFilter(tag);
   const input = document.getElementById('search-input');
-  if (input) input.value = '';
-  handleSearch('');
+  if (input) input.value = `#${tag}`;
+  handleSearch(`#${tag}`);
+}
+
+// Pages carrying an exact tag, as clickable result rows
+function taggedPagesHtml(tag) {
+  const pages = (treeData ? gatherPagesRecursively(treeData) : [])
+    .filter(p => (p.tags || []).some(t => t.toLowerCase() === tag.toLowerCase()))
+    .sort((a, b) => a.title.localeCompare(b.title));
+  if (!pages.length) return '<div class="content-search-empty">No pages with this tag</div>';
+  return pages.map(p => `
+    <div class="content-search-item" onclick="openNote(${jsArg(p.fsPath)})">
+      <div class="content-search-title"><span>${escapeHtml(p.title)}</span></div>
+      <div class="content-search-snippet">${escapeHtml(pathDirname(p.relPath) || 'Notebook root')}</div>
+    </div>
+  `).join('');
 }
 
 // Render the three-group results panel (or the tag-autocomplete panel)
@@ -661,9 +675,18 @@ function renderSearchGroups(rawQuery) {
   const allTags = Array.from(tagSet).sort((a, b) => a.localeCompare(b));
 
   if (tagMode) {
-    // '#' alone lists every registered tag; typing filters the list live
-    const matches = q ? allTags.filter(t => t.toLowerCase().includes(q)) : allTags;
-    container.innerHTML = searchGroupHtml('tags', 'Tags — autocomplete', matches.length, tagRowsHtml(matches));
+    // Exact tag match -> show its pages in the pane; otherwise the query is
+    // still being typed (or clicked from), so list matching tags to pick.
+    const exact = q ? allTags.find(t => t.toLowerCase() === q) : null;
+    if (exact) {
+      const count = (treeData ? gatherPagesRecursively(treeData) : [])
+        .filter(p => (p.tags || []).some(t => t.toLowerCase() === exact.toLowerCase())).length;
+      container.innerHTML = searchGroupHtml('tags', `Pages tagged #${exact}`, count, taggedPagesHtml(exact));
+    } else {
+      // '#' alone lists every registered tag; typing filters the list live
+      const matches = q ? allTags.filter(t => t.toLowerCase().includes(q)) : allTags;
+      container.innerHTML = searchGroupHtml('tags', 'Tags — pick one', matches.length, tagRowsHtml(matches));
+    }
     return;
   }
 
@@ -1793,6 +1816,21 @@ function setSidebarCollapsed(collapsed) {
   sidebar.classList.toggle('collapsed', collapsed);
   document.body.classList.toggle('sidebar-collapsed', collapsed);
   localStorage.setItem('sidebarCollapsed', collapsed ? '1' : '0');
+  syncPaneToggleIcons();
+}
+
+// Keep the three pane-toggle icons (notebook / search / outline) lit to match
+// which panels are currently open, so the toolbar reads as a pane switcher.
+function syncPaneToggleIcons() {
+  const sidebarOpen = !document.getElementById('sidebar').classList.contains('collapsed');
+  const drawerOpen = !document.getElementById('right-drawer').classList.contains('collapsed');
+  const set = (id, on) => {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('active', on);
+  };
+  set('btn-toggle-notebook', sidebarOpen);
+  set('btn-open-search', drawerOpen && drawerTab === 'search');
+  set('btn-toggle-outline', drawerOpen && drawerTab === 'outline');
 }
 
 function toggleSidebarCollapsed() {
@@ -2060,6 +2098,7 @@ function toggleRightDrawer() {
   if (isOpen && drawerTab === 'outline') {
     updateOutlineAndBacklinks();
   }
+  syncPaneToggleIcons();
 }
 
 // The drawer hosts two views — the note outline and the search results —
@@ -2074,6 +2113,7 @@ function setDrawerTab(name) {
   document.getElementById('drawer-outline-view').style.display = drawerTab === 'outline' ? 'block' : 'none';
   document.getElementById('drawer-search-view').style.display = drawerTab === 'search' ? 'block' : 'none';
   if (drawerTab === 'outline') updateOutlineAndBacklinks();
+  syncPaneToggleIcons();
 }
 
 function openRightDrawer() {
