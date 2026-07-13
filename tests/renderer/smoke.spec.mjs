@@ -75,6 +75,7 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
     }],
     sections: [{
       kind: 'section', name: 'Projects', fsPath: '/nb/Projects', relPath: 'Projects',
+      description: 'Everything about active projects',
       pages: [{
         kind: 'page', name: 'alpha.md', fsPath: '/nb/Projects/alpha.md', relPath: 'Projects/alpha.md',
         title: 'A Very Long Page Title That Should Truncate Nicely In The Sidebar', created: '2026-07-02',
@@ -172,6 +173,7 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
     writeNote: async (p, c) => { files[p] = c; window.__writes.push(p); return true; },
     createPage: async () => '/nb/new.md',
     createSection: async () => '/nb/sec',
+    setSectionMeta: async (dir, desc) => { window.__sectionMeta = { dir, desc }; return true; },
     deleteNode: async () => true,
     renameNode: async () => true,
     relocateNode: async () => true,
@@ -441,9 +443,16 @@ const inlineState = await page.evaluate(() => {
 check('inline zoom-in grows the diagram', inlineState.zoom === '115' && /px$/.test(inlineState.styleWidth) && inlineState.width > inlineWidthBefore,
   `before=${inlineWidthBefore} after=${JSON.stringify(inlineState)}`);
 await page.locator('.mermaid-actions-bar button').nth(0).click(); // back to 100
-check('inline zoom back to 100% restores stretch', await page.evaluate(() => {
+check('inline zoom back to 100% restores the base size', await page.evaluate(() => {
+  // Landscape diagrams restore to the pane-filling '100%'; portrait ones
+  // (like this two-node TD chart) restore to their height-capped px base
   const pre = document.querySelector('#preview-pane .notebook-mermaid');
-  return pre.dataset.zoomLevel === '100' && pre.querySelector('svg').style.width === '100%';
+  const svg = pre.querySelector('svg');
+  if (pre.dataset.zoomLevel !== '100') return false;
+  if (svg.style.width === '100%') return true;
+  const vb = svg.viewBox.baseVal;
+  return vb.height > vb.width && /px$/.test(svg.style.width) &&
+    parseInt(svg.style.width, 10) <= pre.clientWidth;
 }));
 
 // --- 8. Preview zoom label ---
@@ -813,6 +822,8 @@ await page.evaluate(() => {
       matchCount: 1, snippets: [{ line: 0, text: '<img src=x onerror=window.__xss2=1> match', ranges: [[36, 5]] }] },
   ];
 });
+await page.evaluate(() => window.openDrawerView('search')); // the box lives in the drawer now
+await page.waitForTimeout(150);
 await page.locator('#search-input').fill('search target');
 await page.waitForTimeout(400);
 check('sidebar content results render', await page.locator('#content-search-results .content-search-item').count() === 2);
@@ -1401,19 +1412,36 @@ check('re-entering split aligns preview to editor position', await page.evaluate
   return pv.scrollTop > (pv.scrollHeight - pv.clientHeight) * 0.9;
 }));
 
-// --- 37. Search results live in the right drawer with Outline/Search toggle ---
+// --- 37. Search box + results live in the right drawer; toolbar icons pop views ---
 await page.evaluate(() => {
   const drawer = document.getElementById('right-drawer');
   if (!drawer.classList.contains('collapsed')) window.toggleRightDrawer(); // start closed
   window.setDrawerTab('outline');
 });
-await page.locator('#search-input').fill('very long');
-await page.waitForTimeout(400);
-check('typing a query opens the drawer on the Search view', await page.evaluate(() =>
+check('search box is NOT in the sidebar anymore', await page.evaluate(() =>
+  !document.querySelector('#sidebar #search-input') &&
+  !!document.querySelector('#drawer-search-view #search-input')));
+await page.locator('#btn-open-search').click();
+await page.waitForTimeout(200);
+check('toolbar search icon opens drawer on Search and focuses the box', await page.evaluate(() =>
   !document.getElementById('right-drawer').classList.contains('collapsed') &&
   document.getElementById('drawer-tab-search').classList.contains('active') &&
   document.getElementById('drawer-search-view').style.display !== 'none' &&
-  document.getElementById('drawer-outline-view').style.display === 'none'));
+  document.getElementById('drawer-outline-view').style.display === 'none' &&
+  document.activeElement === document.getElementById('search-input')));
+await page.locator('#btn-toggle-outline').click();
+await page.waitForTimeout(150);
+check('toolbar outline icon switches the open drawer to Outline', await page.evaluate(() =>
+  !document.getElementById('right-drawer').classList.contains('collapsed') &&
+  document.getElementById('drawer-outline-view').style.display !== 'none'));
+await page.locator('#btn-toggle-outline').click();
+await page.waitForTimeout(150);
+check('clicking the active view icon closes the drawer', await page.evaluate(() =>
+  document.getElementById('right-drawer').classList.contains('collapsed')));
+await page.locator('#btn-open-search').click();
+await page.waitForTimeout(200);
+await page.locator('#search-input').fill('very long');
+await page.waitForTimeout(400);
 check('search groups render inside the drawer', await page.evaluate(() =>
   !!document.querySelector('#drawer-search-view #content-search-results .search-group')));
 check('drawer view choice persisted', await page.evaluate(() =>
@@ -1471,6 +1499,91 @@ await page.locator('#tab-context-menu .dropdown-item', { hasText: 'Close Other T
 await page.waitForTimeout(500);
 check('close-others keeps exactly the clicked tab', await page.evaluate(() =>
   document.querySelectorAll('#tab-strip .note-tab').length === 1));
+
+// --- 39. Portrait mermaid diagrams are height-capped in the preview ---
+await page.evaluate(async () => { await window.openNote('/nb/smoke.md'); });
+await page.locator('#btn-mode-edit').click();
+await editor.evaluate((ta) => {
+  const chain = Array.from({ length: 12 }, (_, i) => `  N${i}[Step ${i}] --> N${i + 1}[Step ${i + 1}]`).join('\n');
+  ta.value = '# Tall\n\n```mermaid\nflowchart TD\n' + chain + '\n```\n';
+  window.handleEditorInput();
+});
+await page.locator('#btn-mode-preview').click();
+await page.waitForTimeout(1200);
+const portrait = await page.evaluate(() => {
+  const svg = document.querySelector('#preview-pane .notebook-mermaid svg');
+  const rect = svg.getBoundingClientRect();
+  const vb = svg.viewBox.baseVal;
+  return { width: svg.style.width, h: rect.h || rect.height, cap: window.innerHeight * 0.6, portrait: vb.height > vb.width };
+});
+check('tall diagram detected as portrait', portrait.portrait, JSON.stringify(portrait));
+check('portrait diagram width is height-capped (px, not 100%)', /px$/.test(portrait.width), JSON.stringify(portrait));
+check('portrait diagram height stays near the cap', portrait.h <= portrait.cap + 60, JSON.stringify(portrait));
+// landscape control keeps the pane-filling default
+await page.locator('#btn-mode-edit').click();
+await editor.evaluate((ta) => {
+  ta.value = '# Wide\n\n```mermaid\nflowchart LR\n  A[One] --> B[Two] --> C[Three] --> D[Four]\n```\n';
+  window.handleEditorInput();
+});
+await page.locator('#btn-mode-preview').click();
+await page.waitForTimeout(1000);
+check('landscape diagram still fills the pane', await page.evaluate(() => {
+  const svg = document.querySelector('#preview-pane .notebook-mermaid svg');
+  return svg && svg.style.width === '100%';
+}));
+
+// --- 40. Related-page links in New Page + Page Info ---
+await page.evaluate(() => { window.__writes = []; window.promptCreatePage('/nb'); });
+await page.waitForTimeout(200);
+check('create modal populates the link picker', await page.evaluate(() =>
+  document.getElementById('create-modal-links-select').options.length >= 3));
+await page.evaluate(() => {
+  document.getElementById('create-modal-links-select').value = 'alpha';
+  window.addModalLink('create');
+  document.getElementById('create-modal-name').value = 'Linked Note';
+});
+check('added link renders as a chip', await page.evaluate(() =>
+  document.querySelectorAll('#create-modal-links-list .link-chip').length === 1));
+await page.evaluate(() => window.submitCreateModal());
+await page.waitForTimeout(600);
+check('new page got the managed Related line', await page.evaluate(async () => {
+  const c = await window.api.readNote('/nb/new.md');
+  return c.includes('**Related:** [[alpha]]');
+}));
+// Page info: prefill, remove, save
+await page.evaluate(async () => {
+  await window.api.writeNote('/nb/smoke.md', '---\ntitle: Smoke Note\ncreated: 2026-07-10\ntags: [test]\n---\n\n# Smoke Note\n\n**Related:** [[alpha]] · [[xss]]\n\nBody.\n');
+  await window.showPageInfoModal('/nb/smoke.md');
+});
+await page.waitForTimeout(300);
+check('page info prefills existing Related links', await page.evaluate(() =>
+  document.querySelectorAll('#page-info-links-list .link-chip').length === 2));
+await page.evaluate(() => window.removeModalLink('page-info', 'xss'));
+await page.evaluate(() => window.savePageInfo());
+await page.waitForTimeout(500);
+check('saving rewrites the Related line', await page.evaluate(async () => {
+  const c = await window.api.readNote('/nb/smoke.md');
+  return c.includes('**Related:** [[alpha]]') && !c.includes('[[xss]]') && c.includes('Body.');
+}));
+
+// --- 41. Section descriptions ---
+await page.evaluate(() => window.promptCreateSection('/nb'));
+check('new section modal shows a description field', await page.evaluate(() =>
+  document.getElementById('create-modal-section-options').style.display !== 'none'));
+await page.evaluate(() => window.hideCreateModal());
+await page.evaluate(() => window.promptRenameNode('/nb/Projects', 'Projects'));
+check('edit section prefills its description', await page.evaluate(() =>
+  document.getElementById('create-modal-section-desc').value === 'Everything about active projects'));
+await page.evaluate(() => {
+  document.getElementById('create-modal-section-desc').value = 'Updated words';
+  window.submitCreateModal();
+});
+await page.waitForTimeout(400);
+check('saving section edit persists the description', await page.evaluate(() =>
+  window.__sectionMeta && window.__sectionMeta.dir === '/nb/Projects' && window.__sectionMeta.desc === 'Updated words'));
+await page.evaluate(() => window.openSection('Projects', '/nb/Projects'));
+await page.waitForTimeout(400);
+check('section landing shows the description', (await page.locator('#landing-subtitle').innerText()).includes('Everything about active projects'));
 
 } finally {
   if (browser) await browser.close();

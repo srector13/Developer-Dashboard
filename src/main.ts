@@ -490,6 +490,20 @@ interface SectionNode {
   relPath: string;
   pages: PageNode[];
   sections: SectionNode[];
+  /** Optional folder description from .section.json (dot-file: never a page) */
+  description?: string;
+}
+
+const SECTION_META_FILE = '.section.json';
+
+async function readSectionDescription(dirPath: string): Promise<string> {
+  try {
+    const raw = await fsp.readFile(path.join(dirPath, SECTION_META_FILE), 'utf8');
+    const meta = JSON.parse(raw);
+    return typeof meta?.description === 'string' ? meta.description : '';
+  } catch {
+    return '';
+  }
 }
 
 function parseDailyKey(filename: string): string | undefined {
@@ -542,6 +556,9 @@ async function scanDirectory(
     pages: [],
     sections: [],
   };
+
+  const description = await readSectionDescription(dir);
+  if (description) sectionNode.description = description;
 
   const entries = await fsp.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
@@ -927,13 +944,37 @@ ipcMain.handle('create-page', async (event, dirPath, title, templateName, meta?:
   return fullPath;
 });
 
-ipcMain.handle('create-section', async (event, dirPath, name) => {
+ipcMain.handle('create-section', async (event, dirPath, name, description?: string) => {
   const fullPath = path.join(dirPath, name.trim());
   if (!fs.existsSync(fullPath)) {
     await fsp.mkdir(fullPath, { recursive: true });
+    if (description && description.trim()) {
+      await fsp.writeFile(path.join(fullPath, SECTION_META_FILE),
+        JSON.stringify({ description: description.trim() }, null, 2), 'utf8');
+    }
     notifyFilesChanged();
   }
   return fullPath;
+});
+
+// Folder description lives in a dot-file inside the folder itself, so it
+// travels with renames/moves and never shows up as a page.
+ipcMain.handle('set-section-meta', async (event, dirPath: string, description: string) => {
+  const settings = await readSettings();
+  const root = settings.notebookRoot;
+  if (!root) return false;
+  const rel = path.relative(root, dirPath);
+  if (rel.startsWith('..') || path.isAbsolute(rel) || !fs.existsSync(dirPath)) return false;
+
+  const metaPath = path.join(dirPath, SECTION_META_FILE);
+  const trimmed = String(description || '').trim();
+  if (trimmed) {
+    await fsp.writeFile(metaPath, JSON.stringify({ description: trimmed }, null, 2), 'utf8');
+  } else {
+    await fsp.unlink(metaPath).catch(() => {});
+  }
+  notifyFilesChanged();
+  return true;
 });
 
 // ==========================================

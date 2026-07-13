@@ -1114,14 +1114,29 @@ function clampMermaidZoom(zoom) {
   return Math.max(40, Math.min(300, Math.round(zoom)));
 }
 
+// Portrait diagrams (taller than wide, e.g. long flowchart TD chains) must
+// NOT fill the pane width — that balloons their height to several screens.
+// Their 100%-zoom base width is instead derived from a height cap, so they
+// read at a sensible size; landscape diagrams keep the pane-filling look.
+function mermaidBaseWidth(pre, svg) {
+  const paneWidth = pre.clientWidth || 600;
+  const vb = svg.viewBox && svg.viewBox.baseVal;
+  if (vb && vb.width && vb.height && vb.height > vb.width) {
+    const heightCap = Math.max(300, Math.round(window.innerHeight * 0.6));
+    return Math.min(Math.round(heightCap * vb.width / vb.height), paneWidth);
+  }
+  return paneWidth;
+}
+
 function applyInlineMermaidZoom(pre, svg, zoom) {
-  if (zoom === 100) {
+  const base = mermaidBaseWidth(pre, svg);
+  const paneWidth = pre.clientWidth || 600;
+  if (zoom === 100 && base === paneWidth) {
     svg.style.width = '100%';
     svg.style.maxWidth = '100%';
   } else {
-    const base = pre.clientWidth || 600;
     svg.style.width = `${Math.round(base * zoom / 100)}px`;
-    svg.style.maxWidth = 'none';
+    svg.style.maxWidth = zoom === 100 ? '100%' : 'none';
   }
   svg.style.height = 'auto';
 }
@@ -2066,6 +2081,25 @@ function openRightDrawer() {
   if (drawer.classList.contains('collapsed')) toggleRightDrawer();
 }
 
+// Toolbar icons: open the drawer straight onto a view. Clicking the icon of
+// the view that's already showing closes the drawer (toggle behavior).
+function openDrawerView(name) {
+  const drawer = document.getElementById('right-drawer');
+  const isOpen = !drawer.classList.contains('collapsed');
+  if (isOpen && drawerTab === name) {
+    toggleRightDrawer();
+    return;
+  }
+  setDrawerTab(name);
+  openRightDrawer();
+  if (name === 'search') {
+    setTimeout(() => {
+      const input = document.getElementById('search-input');
+      if (input) input.focus();
+    }, 50);
+  }
+}
+
 function updateOutlineAndBacklinks() {
   if (!activeNote) return;
 
@@ -2373,9 +2407,14 @@ async function promptCreatePage(destDir) {
   populateDestinationDropdown(destDir);
   document.getElementById('create-modal-type').value = 'page';
   document.getElementById('create-modal-page-options').style.display = 'block';
+  document.getElementById('create-modal-section-options').style.display = 'none';
+  document.getElementById('create-modal-links-group').style.display = 'block';
   document.getElementById('create-modal-template-group').style.display = 'block';
   document.getElementById('create-modal-date').value = localToday();
   document.getElementById('create-modal-tags').value = '';
+  modalLinkState.create = [];
+  renderLinkChips('create');
+  populateLinkSelect('create', null);
 
   // Load Templates Select. The templates folder is excluded from the sidebar
   // tree (it's in ignoreFolders), so ask the main process for the real list.
@@ -2401,11 +2440,13 @@ function promptCreateSection(destDir) {
   document.getElementById('create-modal-title').innerText = 'New Section';
   document.getElementById('create-modal-name-label').innerText = 'Section Name';
   document.getElementById('create-modal-name').value = '';
-  
+
   document.getElementById('create-modal-dest-group').style.display = 'block';
   populateDestinationDropdown(destDir);
   document.getElementById('create-modal-type').value = 'section';
   document.getElementById('create-modal-page-options').style.display = 'none';
+  document.getElementById('create-modal-section-options').style.display = 'block';
+  document.getElementById('create-modal-section-desc').value = '';
 
   document.getElementById('create-modal').classList.add('active');
   setTimeout(() => document.getElementById('create-modal-name').focus(), 100);
@@ -2434,6 +2475,10 @@ async function submitCreateModal() {
   if (type === 'page') {
     const template = document.getElementById('create-modal-template').value;
     const newPath = await window.api.createPage(dest, name, template, collectModalMeta());
+    if (modalLinkState.create.length && newPath) {
+      const content = await window.api.readNote(newPath);
+      await window.api.writeNote(newPath, upsertRelatedLine(content, modalLinkState.create));
+    }
     hideCreateModal();
     await refreshNotebook();
     await openNote(newPath);
@@ -2455,7 +2500,12 @@ async function submitCreateModal() {
       alert(result.reason || 'Clipboard import failed.');
     }
   } else if (type === 'rename') {
-    // dest holds the fsPath of the node being renamed
+    // dest holds the fsPath of the node being renamed. For section folders,
+    // save the description FIRST — .section.json lives inside the folder,
+    // so it travels along with the rename.
+    if (!dest.endsWith('.md')) {
+      await window.api.setSectionMeta(dest, document.getElementById('create-modal-section-desc').value.trim());
+    }
     const success = await window.api.renameNode(dest, name);
     hideCreateModal();
     if (success) {
@@ -2472,7 +2522,7 @@ async function submitCreateModal() {
       alert(reason);
       return;
     }
-    await window.api.createSection(dest, name);
+    await window.api.createSection(dest, name, document.getElementById('create-modal-section-desc').value.trim());
     hideCreateModal();
     await refreshNotebook();
   }
@@ -2480,16 +2530,33 @@ async function submitCreateModal() {
 
 // Rename nodes dialog (window.prompt is not supported in Electron,
 // so this reuses the create modal in "rename" mode)
+function findSectionByFsPath(node, fsPath) {
+  if (!node) return null;
+  if (node.kind === 'section' && node.fsPath === fsPath) return node;
+  for (const s of (node.sections || [])) {
+    const hit = findSectionByFsPath(s, fsPath);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 function promptRenameNode(fsPath, currentName) {
-  document.getElementById('create-modal-title').innerText = 'Rename';
+  const isSection = !fsPath.endsWith('.md');
+  document.getElementById('create-modal-title').innerText = isSection ? 'Edit Section' : 'Rename';
   document.getElementById('create-modal-name-label').innerText = 'New Name';
   document.getElementById('create-modal-name').value = currentName || '';
-  
+
   document.getElementById('create-modal-dest-group').style.display = 'none';
   document.getElementById('create-modal-rename-path').value = fsPath;
-  
+
   document.getElementById('create-modal-type').value = 'rename';
   document.getElementById('create-modal-page-options').style.display = 'none';
+  // Section folders also get their description edited here
+  document.getElementById('create-modal-section-options').style.display = isSection ? 'block' : 'none';
+  if (isSection) {
+    const sectionNode = findSectionByFsPath(treeData, fsPath);
+    document.getElementById('create-modal-section-desc').value = (sectionNode && sectionNode.description) || '';
+  }
 
   document.getElementById('create-modal').classList.add('active');
   setTimeout(() => {
@@ -2502,6 +2569,102 @@ function promptRenameNode(fsPath, currentName) {
 async function promptRenameCurrent() {
   if (!activeNote) return;
   await showPageInfoModal(activeNote);
+}
+
+// ==========================================
+// RELATED-PAGE LINKS (a managed "**Related:**" wiki-link line under the H1;
+// linking page A -> B is what makes A appear in B's header backlinks)
+// ==========================================
+
+const modalLinkState = { create: [], 'page-info': [] };
+
+function linkIdsFor(which) {
+  const prefix = which === 'create' ? 'create-modal' : 'page-info';
+  return { select: `${prefix}-links-select`, list: `${prefix}-links-list` };
+}
+
+// Wiki-links resolve by FILENAME (minus .md), so that's the stored value;
+// the dropdown shows the human title with the path for disambiguation.
+function populateLinkSelect(which, excludeFsPath) {
+  const select = document.getElementById(linkIdsFor(which).select);
+  if (!select || !treeData) return;
+  const pages = gatherPagesRecursively(treeData)
+    .filter(p => p.fsPath !== excludeFsPath)
+    .sort((a, b) => a.title.localeCompare(b.title));
+  select.innerHTML = pages.map(p => {
+    const target = p.name.replace(/\.md$/i, '');
+    const label = p.title === target ? p.title : `${p.title} (${target})`;
+    return `<option value="${escapeHtml(target)}">${escapeHtml(label)}</option>`;
+  }).join('');
+}
+
+function renderLinkChips(which) {
+  const list = document.getElementById(linkIdsFor(which).list);
+  if (!list) return;
+  list.innerHTML = modalLinkState[which].map(name => `
+    <span class="link-chip">[[${escapeHtml(name)}]]
+      <button type="button" onclick="removeModalLink(${jsArg(which)}, ${jsArg(name)})" title="Remove link">&times;</button>
+    </span>
+  `).join('');
+}
+
+function addModalLink(which) {
+  const select = document.getElementById(linkIdsFor(which).select);
+  const name = select && select.value;
+  if (!name) return;
+  if (!modalLinkState[which].includes(name)) {
+    modalLinkState[which].push(name);
+    renderLinkChips(which);
+  }
+}
+
+function removeModalLink(which, name) {
+  modalLinkState[which] = modalLinkState[which].filter(n => n !== name);
+  renderLinkChips(which);
+}
+
+// Read the targets out of an existing **Related:** line (aliases allowed)
+function parseRelatedLinks(content) {
+  const m = content.match(/^\*\*Related:\*\*(.*)$/m);
+  if (!m) return [];
+  const names = [];
+  const re = /\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/g;
+  let link;
+  while ((link = re.exec(m[1])) !== null) {
+    names.push(link[1].trim().replace(/\.md$/i, ''));
+  }
+  return names;
+}
+
+// Rewrite (or insert after the H1 / frontmatter) the managed Related line.
+// Only this one line is ever touched — wiki-links the user wrote elsewhere
+// in the note are never modified.
+function upsertRelatedLine(content, names) {
+  const line = names.length ? `**Related:** ${names.map(n => `[[${n}]]`).join(' · ')}` : null;
+  const lines = content.split('\n');
+  const idx = lines.findIndex(l => /^\*\*Related:\*\*/.test(l));
+  if (idx !== -1) {
+    if (line) {
+      lines[idx] = line;
+    } else {
+      lines.splice(idx, 1);
+      if (lines[idx] !== undefined && lines[idx].trim() === '' && (lines[idx - 1] || '').trim() === '') {
+        lines.splice(idx, 1); // collapse the doubled blank the removal left
+      }
+    }
+    return lines.join('\n');
+  }
+  if (!line) return content;
+  let insertAt = 0;
+  if (lines[0] === '---') {
+    const end = lines.indexOf('---', 1);
+    if (end !== -1) insertAt = end + 1;
+  }
+  for (let i = insertAt; i < lines.length; i++) {
+    if (/^#\s/.test(lines[i])) { insertAt = i + 1; break; }
+  }
+  lines.splice(insertAt, 0, '', line);
+  return lines.join('\n');
 }
 
 // ==========================================
@@ -2529,6 +2692,12 @@ async function showPageInfoModal(fsPath) {
     node && /^\d{4}-\d{2}-\d{2}$/.test(node.created) ? node.created : '';
   document.getElementById('page-info-tags').value = node ? node.tags.join(', ') : '';
   document.getElementById('page-info-pinned').checked = !!(node && node.pinned);
+
+  // Related links: prefill from the note's managed **Related:** line
+  const content = await window.api.readNote(fsPath);
+  modalLinkState['page-info'] = parseRelatedLinks(content);
+  populateLinkSelect('page-info', fsPath);
+  renderLinkChips('page-info');
 
   document.getElementById('page-info-modal').classList.add('active');
   setTimeout(() => document.getElementById('page-info-title').focus(), 100);
@@ -2558,6 +2727,14 @@ async function savePageInfo() {
   hidePageInfoModal();
 
   await window.api.updateNoteMeta(fsPath, { created, tags, pinned });
+
+  // Related links: rewrite the managed line BEFORE any rename (renaming can
+  // change the file's path on disk)
+  const currentContent = await window.api.readNote(fsPath);
+  const withLinks = upsertRelatedLine(currentContent, modalLinkState['page-info']);
+  if (withLinks !== currentContent) {
+    await window.api.writeNote(fsPath, withLinks);
+  }
 
   if (title !== oldTitle) {
     // renameNode also updates the H1, wiki-links, and possibly the filename
@@ -2629,6 +2806,8 @@ function importFromClipboard() {
   
   document.getElementById('create-modal-type').value = 'import-clip';
   document.getElementById('create-modal-page-options').style.display = 'block';
+  document.getElementById('create-modal-section-options').style.display = 'none';
+  document.getElementById('create-modal-links-group').style.display = 'none'; // links don't apply to imports
   document.getElementById('create-modal-template-group').style.display = 'none'; // templates don't apply to imports
   document.getElementById('create-modal-date').value = localToday();
   document.getElementById('create-modal-tags').value = 'imported';
@@ -3192,7 +3371,8 @@ async function renderSectionLanding() {
   if (!sectionNode) return;
 
   document.getElementById('landing-title').innerText = sectionNode.name;
-  document.getElementById('landing-subtitle').innerText = `Directory: ${sectionNode.relPath || 'Notebook Root'}`;
+  document.getElementById('landing-subtitle').innerText =
+    sectionNode.description || `Directory: ${sectionNode.relPath || 'Notebook Root'}`;
   document.getElementById('landing-header-icon').innerHTML = `
     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
   `;
@@ -3459,10 +3639,17 @@ async function popoutMermaid(btn) {
   const viewBox = svgEl.viewBox && svgEl.viewBox.baseVal;
   popoutBaseWidth = (viewBox && viewBox.width) ? viewBox.width : (svgEl.getBoundingClientRect().width || 800);
 
-  // Start fitted to the visible area; don't blow small diagrams up past 150%
-  const available = popoutBody.clientWidth - 80;
-  const fit = Math.round((available / popoutBaseWidth) * 100);
-  popoutZoomLevel = Math.max(40, Math.min(150, fit || 100));
+  // Start fitted to the visible area — BOTH axes: fitting a portrait
+  // diagram to the width alone makes it several screens tall.
+  const availableW = popoutBody.clientWidth - 80;
+  const fitW = (availableW / popoutBaseWidth) * 100;
+  let fit = fitW;
+  if (viewBox && viewBox.width && viewBox.height) {
+    const naturalHeight = popoutBaseWidth * viewBox.height / viewBox.width;
+    const availableH = popoutBody.clientHeight - 80;
+    fit = Math.min(fitW, (availableH / naturalHeight) * 100);
+  }
+  popoutZoomLevel = Math.max(40, Math.min(150, Math.round(fit) || 100));
   applyPopoutZoom();
 }
 
@@ -4103,6 +4290,7 @@ function promptCreateTemplate() {
   document.getElementById('create-modal-dest-group').style.display = 'none';
   document.getElementById('create-modal-type').value = 'template';
   document.getElementById('create-modal-page-options').style.display = 'none';
+  document.getElementById('create-modal-section-options').style.display = 'none';
 
   document.getElementById('create-modal').classList.add('active');
   setTimeout(() => document.getElementById('create-modal-name').focus(), 100);

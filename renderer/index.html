@@ -54,11 +54,6 @@
         </div>
       </div>
 
-      <div class="search-container">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="search-icon"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input type="text" id="search-input" placeholder="Search notes..." oninput="handleSearch(this.value)">
-      </div>
-
       <!-- Tag Filters display -->
       <div id="active-tag-indicator" style="display: none;">
         <span>Filter: <strong id="active-tag-label">#tag</strong></span>
@@ -272,7 +267,10 @@
               <div class="dropdown-item" onclick="showTrashModal()" title="Restore or permanently delete trashed notes">Trash</div>
             </div>
           </div>
-          <button class="icon-btn" id="btn-toggle-outline" onclick="toggleRightDrawer()" title="Toggle Outline & Backlinks">
+          <button class="icon-btn" id="btn-open-search" onclick="openDrawerView('search')" title="Search Notes">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          </button>
+          <button class="icon-btn" id="btn-toggle-outline" onclick="openDrawerView('outline')" title="Outline & Backlinks">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="21" y1="10" x2="7" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="21" y1="18" x2="7" y2="18"/></svg>
           </button>
         </div>
@@ -467,10 +465,14 @@
           </ul>
         </div>
         <div id="drawer-search-view" style="display: none;">
+          <div class="search-container">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="search-icon"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" id="search-input" placeholder="Search notes... (# for tags)" oninput="handleSearch(this.value)">
+          </div>
           <div id="content-search-results" style="display: none;">
             <!-- Full-text matches injected here -->
           </div>
-          <div id="drawer-search-empty" class="drawer-empty-hint">Type in the sidebar search box — results show up here.</div>
+          <div id="drawer-search-empty" class="drawer-empty-hint">Search titles, content, and tags — type # to browse tags.</div>
         </div>
       </div>
     </aside>
@@ -582,6 +584,13 @@
           <input type="text" id="create-modal-name" placeholder="e.g. Q3 Migration Plan" onkeydown="handleCreateModalEnter(event)">
         </div>
 
+        <div id="create-modal-section-options" style="display: none;">
+          <div class="form-group">
+            <label>Description <span class="item-desc">(shown on the section overview)</span></label>
+            <textarea id="create-modal-section-desc" rows="2" placeholder="What lives in this folder?"></textarea>
+          </div>
+        </div>
+
         <div id="create-modal-page-options">
           <div class="form-group">
             <label>Created Date</label>
@@ -590,6 +599,14 @@
           <div class="form-group">
             <label>Tags (comma-separated, optional)</label>
             <input type="text" id="create-modal-tags" placeholder="e.g. project, planning" onkeydown="handleCreateModalEnter(event)">
+          </div>
+          <div class="form-group" id="create-modal-links-group">
+            <label>Link to Pages <span class="item-desc">(this page will appear in their backlinks)</span></label>
+            <div class="link-picker">
+              <select id="create-modal-links-select"></select>
+              <button type="button" class="btn btn-sm btn-outline" onclick="addModalLink('create')">Add</button>
+            </div>
+            <div id="create-modal-links-list" class="link-chip-list"></div>
           </div>
           <div class="form-group" id="create-modal-template-group">
             <label>Template (Optional)</label>
@@ -679,6 +696,14 @@
         <div class="form-group">
           <label>Tags (comma-separated)</label>
           <input type="text" id="page-info-tags" placeholder="e.g. project, planning" onkeydown="if (event.key === 'Enter') savePageInfo()">
+        </div>
+        <div class="form-group">
+          <label>Link to Pages <span class="item-desc">(this page will appear in their backlinks)</span></label>
+          <div class="link-picker">
+            <select id="page-info-links-select"></select>
+            <button type="button" class="btn btn-sm btn-outline" onclick="addModalLink('page-info')">Add</button>
+          </div>
+          <div id="page-info-links-list" class="link-chip-list"></div>
         </div>
         <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
           <input type="checkbox" id="page-info-pinned" style="width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent-blue);">
