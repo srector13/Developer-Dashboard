@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, globalShortcut, Menu, MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, globalShortcut, Menu, MenuItemConstructorOptions, nativeTheme } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
@@ -208,17 +208,28 @@ function wireSpellcheckMenu(win: BrowserWindow) {
 // of the main window.
 let splashWindow: BrowserWindow | null = null;
 
+// Matching the OS theme avoids both the white flash (dark mode) and a
+// black flash (light mode) before the page's own styles arrive
+function windowBackground(): string {
+  return nativeTheme.shouldUseDarkColors ? '#14181e' : '#ffffff';
+}
+
 function createSplashWindow() {
   splashWindow = new BrowserWindow({
     width: 340,
     height: 400,
+    show: false, // revealed on ready-to-show: an unpainted splash (empty outline) helps no one
     frame: false,
     resizable: false,
     alwaysOnTop: true,
     skipTaskbar: true,
+    backgroundColor: windowBackground(),
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
   splashWindow.loadFile(path.join(__dirname, '../renderer/splash.html'));
+  splashWindow.once('ready-to-show', () => {
+    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.show();
+  });
   splashWindow.on('closed', () => { splashWindow = null; });
 }
 
@@ -236,6 +247,7 @@ function createWindow() {
     minWidth: 800,
     minHeight: 600,
     show: false, // shown on ready-to-show; the splash covers the gap
+    backgroundColor: windowBackground(),
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     trafficLightPosition: { x: 12, y: 20 },
     ...(fs.existsSync(iconPath) ? { icon: iconPath } : {}),

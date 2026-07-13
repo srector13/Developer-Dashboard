@@ -79,7 +79,9 @@
       "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "portable": {
-      "artifactName": "${productName}-${version}-portable.${ext}"
+      "artifactName": "${productName}-${version}-portable.${ext}",
+      "splashImage": "build/splash.bmp",
+      "unpackDirName": "MarkdownNotebook"
     },
     "linux": {
       "target": [
