@@ -2173,11 +2173,13 @@ let registeredCaptureShortcut = '';
 
 function createCaptureWindow(): BrowserWindow {
   const win = new BrowserWindow({
-    width: 520,
-    height: 150,
+    width: 560,
+    height: 340,
+    minWidth: 420,
+    minHeight: 260,
     show: false,
     frame: false,
-    resizable: false,
+    resizable: true,
     alwaysOnTop: true,
     skipTaskbar: true,
     webPreferences: {
@@ -2242,16 +2244,50 @@ ipcMain.on('hide-capture-window', () => {
   if (captureWindow && !captureWindow.isDestroyed()) captureWindow.hide();
 });
 
-// Append one captured line to today's daily note, creating it (and the
-// "## Quick Capture" section) as needed. The daily note may live anywhere in
-// the notebook; it's found by basename so movers keep their note.
-ipcMain.handle('append-quick-capture', async (event, text: string) => {
+// Notes the capture window can append to, sorted by path
+ipcMain.handle('list-capture-targets', async () => {
+  const settings = await readSettings();
+  const root = settings.notebookRoot;
+  if (!root || !fs.existsSync(root)) return [];
+  const ignore = new Set(settings.ignoreFolders.map(s => s.toLowerCase()));
+  const files = await listMarkdownFiles(root, ignore, root);
+  return files
+    .map(f => ({ fsPath: f, relPath: path.relative(root, f).replace(/\\/g, '/') }))
+    .sort((a, b) => a.relPath.localeCompare(b.relPath));
+});
+
+// Append a capture to today's daily note (default) or to an explicitly
+// chosen note. Multi-line captures (code blocks!) are preserved verbatim.
+//  - daily note: one-liners become "- HH:MM text" bullets under the
+//    "## Quick Capture" section; multi-line text lands in the same section
+//    as a raw block. The note is created (anywhere-by-basename lookup,
+//    else at the root) when missing.
+//  - explicit target: appended verbatim at the end of the file — the
+//    natural shape for "add this snippet to my Code Snippets doc".
+ipcMain.handle('append-quick-capture', async (event, text: string, targetFsPath?: string) => {
   const settings = await readSettings();
   const root = settings.notebookRoot;
   if (!root || !fs.existsSync(root)) return { success: false, reason: 'No notebook folder is set.' };
 
-  const trimmed = String(text || '').replace(/\s*\n\s*/g, ' ').trim();
-  if (!trimmed) return { success: false, reason: 'Nothing to capture.' };
+  const raw = String(text || '').replace(/\r\n/g, '\n').replace(/^\n+|\s+$/g, '');
+  if (!raw.trim()) return { success: false, reason: 'Nothing to capture.' };
+  const multiLine = raw.includes('\n');
+
+  let notePath = '';
+
+  if (targetFsPath) {
+    // Only accept targets inside the notebook that still exist
+    const rel = path.relative(root, targetFsPath);
+    if (rel.startsWith('..') || path.isAbsolute(rel) || !fs.existsSync(targetFsPath)) {
+      return { success: false, reason: 'That note no longer exists.' };
+    }
+    notePath = targetFsPath;
+    const content = await fsp.readFile(notePath, 'utf8');
+    const body = content.replace(/\s+$/, '');
+    await writeNoteFile(notePath, `${body}\n\n${raw}\n`, { snapshot: true });
+    notifyFilesChanged();
+    return { success: true, notePath };
+  }
 
   const today = localDateString();
   const dailyName = `${today}.md`;
@@ -2259,7 +2295,7 @@ ipcMain.handle('append-quick-capture', async (event, text: string) => {
   // Find today's note anywhere in the tree
   const ignore = new Set(settings.ignoreFolders.map(s => s.toLowerCase()));
   const allFiles = await listMarkdownFiles(root, ignore, root);
-  let notePath = allFiles.find(f => path.basename(f).toLowerCase() === dailyName) || '';
+  notePath = allFiles.find(f => path.basename(f).toLowerCase() === dailyName) || '';
 
   if (!notePath) {
     // Same skeleton as create-page, title = the date
@@ -2275,7 +2311,8 @@ ipcMain.handle('append-quick-capture', async (event, text: string) => {
 
   const now = new Date();
   const pad = (n: number) => String(n).padStart(2, '0');
-  const entry = `- ${pad(now.getHours())}:${pad(now.getMinutes())} ${trimmed}`;
+  const stamp = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  const entryLines = multiLine ? ['', ...raw.split('\n')] : [`- ${stamp} ${raw.trim()}`];
 
   const content = await fsp.readFile(notePath, 'utf8');
   const lines = content.split(/\r?\n/);
@@ -2283,16 +2320,21 @@ ipcMain.handle('append-quick-capture', async (event, text: string) => {
 
   if (headingIdx === -1) {
     while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
-    lines.push('', '## Quick Capture', '', entry, '');
+    lines.push('', '## Quick Capture', '', ...entryLines, '');
   } else {
-    // End of the section: the next heading of any level, else EOF
+    // End of the section: the next heading of any level, else EOF.
+    // Fenced code inside the section must not have its ``` lines mistaken
+    // for content when scanning — but headings can't legally appear inside
+    // a fence, so track fence state while scanning.
     let end = lines.length;
+    let inFence = false;
     for (let i = headingIdx + 1; i < lines.length; i++) {
-      if (/^#{1,6}\s/.test(lines[i])) { end = i; break; }
+      if (/^\s*```/.test(lines[i])) inFence = !inFence;
+      else if (!inFence && /^#{1,6}\s/.test(lines[i])) { end = i; break; }
     }
     let insertAt = end;
     while (insertAt > headingIdx + 1 && lines[insertAt - 1].trim() === '') insertAt--;
-    lines.splice(insertAt, 0, entry);
+    lines.splice(insertAt, 0, ...entryLines);
   }
 
   await writeNoteFile(notePath, lines.join('\n'), { snapshot: true });

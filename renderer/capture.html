@@ -11,6 +11,7 @@
       --muted: #6a737d;
       --accent: #4f8cff;
       --ok: #2da44e;
+      --surface: #f6f8fa;
     }
     @media (prefers-color-scheme: dark) {
       :root {
@@ -20,6 +21,7 @@
         --muted: #8b949e;
         --accent: #6ea8ff;
         --ok: #3fb950;
+        --surface: #262c34;
       }
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -33,20 +35,40 @@
       overflow: hidden;
       display: flex;
       flex-direction: column;
+      gap: 8px;
       padding: 12px 14px;
-      -webkit-app-region: drag; /* frameless window: the padding is the drag handle */
+      -webkit-app-region: drag; /* frameless window: the chrome is the drag handle */
     }
     .capture-head {
       display: flex;
       justify-content: space-between;
       align-items: baseline;
-      margin-bottom: 8px;
+      gap: 10px;
     }
-    .capture-title { font-size: 12px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; color: var(--muted); }
-    .capture-hint { font-size: 11px; color: var(--muted); }
-    .capture-status { font-size: 11px; color: var(--ok); font-weight: 600; opacity: 0; transition: opacity 0.15s ease; }
+    .capture-title { font-size: 12px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+    .capture-status { font-size: 11px; color: var(--ok); font-weight: 600; opacity: 0; transition: opacity 0.15s ease; white-space: nowrap; }
     .capture-status.visible { opacity: 1; }
     .capture-status.error { color: #d1242f; }
+    .capture-toolbar {
+      -webkit-app-region: no-drag;
+      display: flex;
+      gap: 3px;
+      flex-wrap: wrap;
+    }
+    .fmt-btn {
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1;
+      min-width: 26px;
+      padding: 5px 7px;
+      border-radius: 5px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .fmt-btn:hover { border-color: var(--accent); }
+    .fmt-btn.mono { font-family: SFMono-Regular, Consolas, Menlo, monospace; font-size: 11px; }
     textarea {
       -webkit-app-region: no-drag;
       flex: 1;
@@ -62,18 +84,72 @@
       outline: none;
     }
     textarea:focus { border-color: var(--accent); }
+    .capture-foot {
+      -webkit-app-region: no-drag;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .capture-foot label { font-size: 11px; color: var(--muted); white-space: nowrap; }
+    select {
+      flex: 1;
+      min-width: 0;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--text);
+      font: inherit;
+      font-size: 12px;
+      padding: 5px 6px;
+      outline: none;
+    }
+    .save-btn {
+      border: none;
+      background: var(--accent);
+      color: #fff;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 6px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .save-btn:hover { filter: brightness(1.1); }
+    .hint { font-size: 10px; color: var(--muted); }
   </style>
 </head>
 <body>
   <div class="capture-head">
     <span class="capture-title">Quick Capture</span>
     <span class="capture-status" id="capture-status"></span>
-    <span class="capture-hint">Enter saves to today's note &nbsp;·&nbsp; Esc closes</span>
+    <span class="hint">Enter saves · Shift+Enter / inside code: new line · Esc closes</span>
   </div>
-  <textarea id="capture-input" placeholder="Jot something down…" autofocus></textarea>
+  <div class="capture-toolbar">
+    <button class="fmt-btn" data-fmt="h1" title="Heading 1">H1</button>
+    <button class="fmt-btn" data-fmt="h2" title="Heading 2">H2</button>
+    <button class="fmt-btn" data-fmt="h3" title="Heading 3">H3</button>
+    <button class="fmt-btn" data-fmt="bold" title="Bold (wraps selection)"><b>B</b></button>
+    <button class="fmt-btn" data-fmt="italic" title="Italic (wraps selection)"><i>I</i></button>
+    <button class="fmt-btn" data-fmt="strike" title="Strikethrough (wraps selection)"><s>S</s></button>
+    <button class="fmt-btn" data-fmt="bullet" title="Bulleted list">&bull; List</button>
+    <button class="fmt-btn" data-fmt="numbered" title="Numbered list">1. List</button>
+    <button class="fmt-btn" data-fmt="task" title="Task checkbox">&#9745; Task</button>
+    <button class="fmt-btn mono" data-fmt="inlinecode" title="Inline code (wraps selection)">`code`</button>
+    <button class="fmt-btn mono" data-fmt="codeblock" title="Fenced code block">```block```</button>
+  </div>
+  <textarea id="capture-input" placeholder="Jot something down, or paste a code snippet…" autofocus></textarea>
+  <div class="capture-foot">
+    <label for="capture-target">Append to</label>
+    <select id="capture-target">
+      <option value="">Today's daily note</option>
+    </select>
+    <button class="save-btn" id="capture-save">Save</button>
+  </div>
   <script>
     const input = document.getElementById('capture-input');
     const status = document.getElementById('capture-status');
+    const targetSelect = document.getElementById('capture-target');
     let statusTimer = null;
     let sending = false;
 
@@ -85,12 +161,98 @@
       statusTimer = setTimeout(() => status.classList.remove('visible'), 1600);
     }
 
+    // --- Destination picker ------------------------------------------------
+    // Refreshed every time the window gains focus so new notes show up.
+    // The last-used target is remembered (falls back to daily note when the
+    // note no longer exists).
+    async function loadTargets() {
+      let targets = [];
+      try { targets = await window.captureApi.listCaptureTargets(); } catch {}
+      const remembered = localStorage.getItem('mdnb-capture-target') || '';
+      const current = targetSelect.value || remembered;
+      targetSelect.innerHTML = '<option value="">Today’s daily note</option>';
+      for (const t of targets) {
+        const opt = document.createElement('option');
+        opt.value = t.fsPath;
+        opt.textContent = t.relPath.replace(/\.md$/i, '');
+        targetSelect.appendChild(opt);
+      }
+      targetSelect.value = current;
+      if (targetSelect.selectedIndex === -1) targetSelect.value = '';
+    }
+    targetSelect.addEventListener('change', () => {
+      try { localStorage.setItem('mdnb-capture-target', targetSelect.value); } catch {}
+    });
+
+    // --- Formatting toolbar ------------------------------------------------
+    function setValue(next, selStart, selEnd) {
+      input.value = next;
+      input.selectionStart = selStart;
+      input.selectionEnd = selEnd;
+      input.focus();
+    }
+
+    // Wrap the selection (or insert placeholder) with before/after markers
+    function wrapSelection(before, after, placeholder) {
+      const s = input.selectionStart, e = input.selectionEnd;
+      const sel = input.value.slice(s, e) || placeholder;
+      const next = input.value.slice(0, s) + before + sel + after + input.value.slice(e);
+      setValue(next, s + before.length, s + before.length + sel.length);
+    }
+
+    // Prefix every line the selection touches (numbered lists count up)
+    function prefixLines(prefix, numbered) {
+      const s = input.selectionStart, e = input.selectionEnd;
+      const lineStart = input.value.lastIndexOf('\n', s - 1) + 1;
+      const lineEndIdx = input.value.indexOf('\n', Math.max(e, s));
+      const lineEnd = lineEndIdx === -1 ? input.value.length : lineEndIdx;
+      const block = input.value.slice(lineStart, lineEnd);
+      const replaced = block.split('\n')
+        .map((ln, i) => (numbered ? `${i + 1}. ` : prefix) + ln)
+        .join('\n');
+      const next = input.value.slice(0, lineStart) + replaced + input.value.slice(lineEnd);
+      setValue(next, lineStart, lineStart + replaced.length);
+    }
+
+    function insertCodeBlock() {
+      const s = input.selectionStart, e = input.selectionEnd;
+      const sel = input.value.slice(s, e);
+      const needsLeadingNL = s > 0 && input.value[s - 1] !== '\n';
+      const block = (needsLeadingNL ? '\n' : '') + '```\n' + (sel || '') + '\n```\n';
+      const caret = s + (needsLeadingNL ? 1 : 0) + 4 + (sel ? 0 : 0);
+      const next = input.value.slice(0, s) + block + input.value.slice(e);
+      // Caret lands on the (possibly empty) code line
+      setValue(next, caret, caret + sel.length);
+    }
+
+    const FORMATS = {
+      h1: () => prefixLines('# '),
+      h2: () => prefixLines('## '),
+      h3: () => prefixLines('### '),
+      bold: () => wrapSelection('**', '**', 'bold text'),
+      italic: () => wrapSelection('*', '*', 'italic text'),
+      strike: () => wrapSelection('~~', '~~', 'crossed out'),
+      bullet: () => prefixLines('- '),
+      numbered: () => prefixLines('', true),
+      task: () => prefixLines('- [ ] '),
+      inlinecode: () => wrapSelection('`', '`', 'code'),
+      codeblock: () => insertCodeBlock(),
+    };
+    document.querySelectorAll('.fmt-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const fn = FORMATS[btn.dataset.fmt];
+        if (fn) fn();
+      });
+    });
+
+    // --- Saving --------------------------------------------------------------
     async function submit() {
-      const text = input.value.trim();
+      const text = input.value.replace(/^\n+|\s+$/g, '');
       if (!text || sending) return;
       sending = true;
       try {
-        const result = await window.captureApi.appendQuickCapture(text);
+        const target = targetSelect.value || undefined;
+        const result = await window.captureApi.appendQuickCapture(text, target);
         if (result && result.success) {
           input.value = '';
           flashStatus('Captured ✓', false);
@@ -104,9 +266,19 @@
         sending = false;
       }
     }
+    document.getElementById('capture-save').addEventListener('click', submit);
+
+    // Is the caret inside an unclosed ``` fence? Then Enter should type a
+    // newline (you're writing code), not save the capture.
+    function caretInCodeFence() {
+      const before = input.value.slice(0, input.selectionStart);
+      const fences = (before.match(/^\s*```/gm) || []).length;
+      return fences % 2 === 1;
+    }
 
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
+        if (caretInCodeFence()) return; // let the newline through
         e.preventDefault();
         submit();
       } else if (e.key === 'Escape') {
@@ -115,8 +287,12 @@
       }
     });
 
-    // Whenever the window is (re)shown and focused, put the caret back
-    window.addEventListener('focus', () => input.focus());
+    // Whenever the window is (re)shown and focused: caret back + fresh targets
+    window.addEventListener('focus', () => {
+      input.focus();
+      loadTargets();
+    });
+    loadTargets();
   </script>
 </body>
 </html>
