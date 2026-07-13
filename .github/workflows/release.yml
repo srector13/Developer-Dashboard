@@ -4,9 +4,14 @@ name: Release
 # Windows and attaches them to a draft GitHub Release. Code signing and
 # notarization activate automatically when the signing secrets are configured
 # (see docs/RELEASING.md); without them the build still succeeds unsigned.
+#
+# Manual runs (workflow_dispatch) work too: electron-builder creates/updates a
+# DRAFT release named v<package.json version> — publishing that draft is what
+# creates the tag. Handy when tags can't be pushed from the working machine.
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write
