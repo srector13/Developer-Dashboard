@@ -1347,6 +1347,60 @@ check('registration failure surfaces as toast', await page.evaluate(() =>
   document.getElementById('app-toast').classList.contains('visible') &&
   document.getElementById('app-toast').textContent.includes('Bad+Combo')));
 
+// --- 36. Split view: scroll sync (proportional, both directions) ---
+// 300 task lines: tall in the textarea AND tall in the preview (the stub
+// renders one div per task line)
+await page.evaluate(() => {
+  const ta = document.getElementById('note-editor');
+  ta.value = Array.from({ length: 300 }, (_, i) => `- [ ] task ${i}`).join('\n');
+  ta.scrollTop = 0;
+  window.handleEditorInput();
+  window.setViewMode('split');
+});
+await page.waitForTimeout(500);
+check('split panes both overflow', await page.evaluate(() => {
+  const ta = document.getElementById('note-editor');
+  const pv = document.getElementById('preview-pane');
+  return ta.scrollHeight > ta.clientHeight && pv.scrollHeight > pv.clientHeight;
+}));
+// editor -> preview
+await page.evaluate(() => {
+  const ta = document.getElementById('note-editor');
+  ta.scrollTop = (ta.scrollHeight - ta.clientHeight) / 2;
+});
+await page.waitForTimeout(250);
+const midFractions = await page.evaluate(() => {
+  const f = el => el.scrollTop / (el.scrollHeight - el.clientHeight);
+  return { editor: f(document.getElementById('note-editor')), preview: f(document.getElementById('preview-pane')) };
+});
+check('editor scroll drives preview to same fraction',
+  Math.abs(midFractions.editor - midFractions.preview) < 0.02, JSON.stringify(midFractions));
+// preview -> editor
+await page.evaluate(() => {
+  const pv = document.getElementById('preview-pane');
+  pv.scrollTop = pv.scrollHeight - pv.clientHeight;
+});
+await page.waitForTimeout(250);
+const endFractions = await page.evaluate(() => {
+  const f = el => el.scrollTop / (el.scrollHeight - el.clientHeight);
+  return { editor: f(document.getElementById('note-editor')), preview: f(document.getElementById('preview-pane')) };
+});
+check('preview scroll drives editor to same fraction',
+  endFractions.preview > 0.98 && Math.abs(endFractions.editor - endFractions.preview) < 0.02, JSON.stringify(endFractions));
+check('echo guard cleared after sync round', await page.evaluate(() => window.scrollSyncEcho === null || window.scrollSyncEcho === undefined));
+// re-entering split aligns the (freshly re-rendered) preview to the editor
+await page.evaluate(() => {
+  window.setViewMode('edit');
+  const ta = document.getElementById('note-editor');
+  ta.scrollTop = ta.scrollHeight; // clamped to max
+});
+await page.evaluate(() => window.setViewMode('split'));
+await page.waitForTimeout(400);
+check('re-entering split aligns preview to editor position', await page.evaluate(() => {
+  const pv = document.getElementById('preview-pane');
+  return pv.scrollTop > (pv.scrollHeight - pv.clientHeight) * 0.9;
+}));
+
 } finally {
   if (browser) await browser.close();
 }

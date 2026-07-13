@@ -101,6 +101,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  // Split view: preview scrolls drive the editor (the editor side is wired
+  // through the textarea's inline onscroll)
+  document.getElementById('preview-pane').addEventListener('scroll', () => syncSplitScroll('preview'));
+
   // Set default page width label
   const labelMap = { 'standard': 'Standard', 'wide': 'Wide', 'full': 'Full' };
   document.getElementById('label-stretch-width').innerText = labelMap[appSettings.defaultPageWidth] || 'Standard';
@@ -1164,6 +1168,12 @@ function setViewMode(mode, options = {}) {
       saveActiveNote();
     }
   }
+
+  // Entering split: bring the preview to where the editor already is
+  // (best effort — diagrams may still be rendering and shift heights)
+  if (mode === 'split') {
+    requestAnimationFrame(() => syncSplitScroll('editor'));
+  }
 }
 
 // Editor interaction handling
@@ -1251,6 +1261,45 @@ function syncEditorScroll() {
   if (textarea && lineNumbers) {
     lineNumbers.scrollTop = textarea.scrollTop;
   }
+}
+
+// ==========================================
+// SPLIT VIEW SCROLL SYNC (proportional, bidirectional)
+// ==========================================
+// Scrolling either pane in split mode scrolls the other to the same
+// relative position. The panes hold different content heights (rendered
+// diagrams/images vs. source lines), so the sync maps scroll FRACTIONS,
+// not pixel offsets.
+//
+// Echo guard: setting the partner's scrollTop fires that pane's own scroll
+// event. `scrollSyncEcho` names the pane whose next scroll event is such an
+// echo, so it's ignored instead of bouncing the sync back and forth.
+let scrollSyncEcho = null;
+
+function scrollFraction(el) {
+  const range = el.scrollHeight - el.clientHeight;
+  return range > 0 ? el.scrollTop / range : 0;
+}
+
+function syncSplitScroll(sourceName) {
+  if (viewMode !== 'split') return;
+  if (scrollSyncEcho === sourceName) {
+    scrollSyncEcho = null;
+    return;
+  }
+  const editor = document.getElementById('note-editor');
+  const preview = document.getElementById('preview-pane');
+  if (!editor || !preview) return;
+  const [source, target, targetName] = sourceName === 'editor'
+    ? [editor, preview, 'preview']
+    : [preview, editor, 'editor'];
+  const desired = Math.round(scrollFraction(source) * Math.max(0, target.scrollHeight - target.clientHeight));
+  // Skip no-op writes: they fire no scroll event, which would leave the
+  // echo guard armed and swallow the user's next real scroll
+  if (Math.abs(target.scrollTop - desired) < 2) return;
+  scrollSyncEcho = targetName;
+  target.scrollTop = desired;
+  if (targetName === 'editor') syncEditorScroll();
 }
 
 // Auto save active note
