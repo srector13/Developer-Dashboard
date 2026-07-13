@@ -89,7 +89,8 @@
       "category": "Office"
     },
     "publish": {
-      "provider": "github"
+      "provider": "github",
+      "releaseType": "draft"
     }
   }
 }

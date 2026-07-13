@@ -20,6 +20,9 @@ jobs:
   build:
     strategy:
       fail-fast: false
+      # Sequential so the two platforms don't race to create the same
+      # draft release (the first run creates it, the second appends)
+      max-parallel: 1
       matrix:
         os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -75,13 +78,15 @@ jobs:
           if [ -n "$APPLE_ID" ] && [ -n "$APPLE_TEAM_ID" ]; then
             EXTRA+=(-c.mac.notarize.teamId="$APPLE_TEAM_ID")
           fi
-          npx electron-builder --mac --publish onTagOrDraft "${EXTRA[@]}"
+          # 'always' creates the draft release when it doesn't exist yet
+          # (onTagOrDraft only appends to an existing one on non-tag builds)
+          npx electron-builder --mac --publish always "${EXTRA[@]}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and publish (Windows)
         if: runner.os == 'Windows'
-        run: npx electron-builder --win --publish onTagOrDraft
+        run: npx electron-builder --win --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
