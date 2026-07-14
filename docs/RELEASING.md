@@ -18,6 +18,8 @@ Local equivalents: `npm run pack:win` / `npm run pack:mac` (or `npm run pack` fo
 
 The portable target keeps **all app state next to the executable** instead of `%APPDATA%`: at startup, `src/main.ts` redirects Electron's `userData` into a `MarkdownNotebookData` folder beside the `.exe` (electron-builder's portable launcher sets `PORTABLE_EXECUTABLE_DIR`). Settings, window state, and caches all travel with the file — USB-stick friendly.
 
+> Note: the portable target intentionally does **not** set `unpackDirName`. A fixed unpack directory makes the launcher reuse a previous version's extracted files, so an updated exe would silently run stale code. The default (version-hashed temp dir) re-unpacks per version, guaranteeing an updated exe runs the new code.
+
 The zip distribution can opt in to the same behavior: create a folder named `MarkdownNotebookData` next to the executable once, and the app becomes self-contained from then on. Without that folder, zip builds use the normal per-user location.
 
 Independent of portable state, the app maintains a per-user pointer file (`~/.markdown-notebook/last-notebook.json`) recording the active notebook path. A fresh portable copy — or one whose data folder was deleted — falls back to that pointer, so the notebook reopens without re-selection; the folder chooser appears only when neither settings nor the pointer resolve to an existing directory.

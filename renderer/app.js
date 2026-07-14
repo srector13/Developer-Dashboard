@@ -57,6 +57,14 @@ let autoSaveTimeout = null;
 let previewZoomLevel = 100;
 let popoutZoomLevel = 100;
  
+// Fade out and remove the startup loading overlay
+function hideAppLoading() {
+  const el = document.getElementById('app-loading');
+  if (!el) return;
+  el.classList.add('hiding');
+  setTimeout(() => el.classList.add('gone'), 300);
+}
+
 // Initialize App
 document.addEventListener('DOMContentLoaded', async () => {
   // Load settings
@@ -92,10 +100,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('onboarding').classList.add('active');
   }
 
-  // The initial notebook render is done — tell main to reveal the window and
-  // close the splash now (an atomic swap, so there's no blank gap where the
-  // splash is gone but the app hasn't painted its content yet).
-  if (window.api.signalRendererReady) window.api.signalRendererReady();
+  // The initial notebook render is done — fade out the loading overlay. The
+  // window itself was already shown (with this overlay) as soon as the shell
+  // painted, so there's a taskbar entry and a branded screen throughout.
+  hideAppLoading();
 
   // File watcher setup (auto refresh)
   window.api.onFilesChanged(async () => {
@@ -2065,13 +2073,13 @@ function setSidebarCollapsed(collapsed) {
 // Keep the three pane-toggle icons (notebook / search / outline) lit to match
 // which panels are currently open, so the toolbar reads as a pane switcher.
 function syncPaneToggleIcons() {
-  const sidebarOpen = !document.getElementById('sidebar').classList.contains('collapsed');
   const drawerOpen = !document.getElementById('right-drawer').classList.contains('collapsed');
   const set = (id, on) => {
     const el = document.getElementById(id);
     if (el) el.classList.toggle('active', on);
   };
-  set('btn-toggle-notebook', sidebarOpen);
+  // The notebook (left sidebar) toggle lives on the left edge, not here; the
+  // two drawer icons on the right light up for their open pane.
   set('btn-open-search', drawerOpen && drawerTab === 'search');
   set('btn-toggle-outline', drawerOpen && drawerTab === 'outline');
 }

@@ -81,8 +81,7 @@
     },
     "portable": {
       "artifactName": "${productName}-${version}-portable.${ext}",
-      "splashImage": "build/splash.bmp",
-      "unpackDirName": "MarkdownNotebook"
+      "splashImage": "build/splash.bmp"
     },
     "linux": {
       "target": [

@@ -232,6 +232,10 @@ await page.waitForTimeout(600);
 
 // --- 1. Boot: onboarding hidden, tree rendered, theme applied from settings ---
 check('boots past onboarding', !(await page.locator('#onboarding').evaluate(el => el.classList.contains('active'))));
+check('startup loading overlay is hidden after boot', await page.evaluate(() => {
+  const el = document.getElementById('app-loading');
+  return el && (el.classList.contains('hiding') || el.classList.contains('gone'));
+}));
 check('tree renders pages', await page.locator('#notebook-tree .tree-node-label', { hasText: 'Smoke Note' }).count() === 1);
 check('boot applies settings.theme=dark', await page.evaluate(() =>
   document.body.classList.contains('dark-theme') && document.body.dataset.theme === 'dark'));
@@ -1472,19 +1476,16 @@ check('cleared query shows the drawer hint again', await page.evaluate(() =>
   document.getElementById('content-search-results').style.display === 'none' &&
   document.getElementById('drawer-search-empty').style.display !== 'none'));
 
-// pane-toggle icons light up to show which panes are open
-check('notebook toggle icon exists in the toolbar', await page.evaluate(() =>
-  !!document.getElementById('btn-toggle-notebook')));
-check('notebook icon is active while the sidebar is open', await page.evaluate(() => {
+// The notebook (sidebar) toggle lives on the LEFT, not in the right icon group
+check('notebook toggle is not bundled with the right drawer icons', await page.evaluate(() =>
+  !document.getElementById('btn-toggle-notebook') &&
+  !!document.getElementById('btn-expand-sidebar')));
+check('left-edge notebook button toggles the sidebar', await page.evaluate(() => {
   if (document.getElementById('sidebar').classList.contains('collapsed')) window.toggleSidebarCollapsed();
-  return document.getElementById('btn-toggle-notebook').classList.contains('active');
-}));
-check('notebook icon toggles the sidebar and its active state', await page.evaluate(() => {
-  window.toggleSidebarCollapsed(); // now collapsed
+  window.toggleSidebarCollapsed(); // collapse
   const collapsed = document.getElementById('sidebar').classList.contains('collapsed');
-  const inactive = !document.getElementById('btn-toggle-notebook').classList.contains('active');
-  window.toggleSidebarCollapsed(); // restore open
-  return collapsed && inactive;
+  window.toggleSidebarCollapsed(); // restore
+  return collapsed;
 }));
 check('search icon active only when the Search pane is open', await page.evaluate(() => {
   const drawer = document.getElementById('right-drawer');

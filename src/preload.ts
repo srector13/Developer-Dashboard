@@ -277,9 +277,6 @@ contextBridge.exposeInMainWorld('api', {
   onCaptureShortcutFailed: (callback: (shortcut: string) => void) => {
     ipcRenderer.on('capture-shortcut-failed', (_event, shortcut: string) => callback(shortcut));
   },
-  // Renderer tells main its initial notebook render is done, so the window
-  // reveals (and the splash closes) only when there's real content to show
-  signalRendererReady: () => ipcRenderer.send('renderer-ready'),
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   getAppVersion: () => ipcRenderer.invoke('app-version'),
   

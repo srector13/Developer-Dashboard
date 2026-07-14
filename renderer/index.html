@@ -8,8 +8,40 @@
   <link rel="stylesheet" href="vendor/github-dark.css" id="hljs-dark">
   <link rel="stylesheet" href="vendor/github-light.css" id="hljs-light" disabled>
   <link rel="stylesheet" href="style.css?v=5">
+  <style>
+    /* Inlined so it paints on the very first frame, before style.css loads */
+    #app-loading {
+      position: fixed; inset: 0; z-index: 100000;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 16px; background: #14181e; color: #d6dde5;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      transition: opacity 0.25s ease;
+    }
+    @media (prefers-color-scheme: light) { #app-loading { background: #ffffff; color: #1f2328; } }
+    #app-loading.hiding { opacity: 0; pointer-events: none; }
+    #app-loading.gone { display: none; }
+    .app-loading-logo { width: 88px; height: 88px; border-radius: 20px; }
+    .app-loading-title { font-size: 18px; font-weight: 700; }
+    .app-loading-sub { font-size: 13px; opacity: 0.7; }
+    .app-loading-spinner {
+      width: 22px; height: 22px; margin-top: 4px;
+      border: 3px solid rgba(128,128,128,0.35); border-top-color: #4f8cff;
+      border-radius: 50%; animation: app-loading-spin 0.9s linear infinite;
+    }
+    @keyframes app-loading-spin { to { transform: rotate(360deg); } }
+  </style>
 </head>
 <body class="dark-theme">
+  <!-- Startup loading overlay: shown immediately (before the notebook scan)
+       so the window has a real taskbar entry and a branded screen the whole
+       time it's loading. Hidden by the renderer once the first render lands. -->
+  <div id="app-loading">
+    <img class="app-loading-logo" src="../build/icon.png" alt="">
+    <div class="app-loading-title">Markdown Notebook</div>
+    <div class="app-loading-sub">Opening your notebook…</div>
+    <div class="app-loading-spinner" aria-hidden="true"></div>
+  </div>
+
   <!-- Frameless titlebar padding for macOS -->
   <div id="titlebar"></div>
 
@@ -267,9 +299,6 @@
               <div class="dropdown-item" onclick="showTrashModal()" title="Restore or permanently delete trashed notes">Trash</div>
             </div>
           </div>
-          <button class="icon-btn" id="btn-toggle-notebook" onclick="toggleSidebarCollapsed()" title="Notebook (Notes Directory)">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
-          </button>
           <button class="icon-btn" id="btn-open-search" onclick="openDrawerView('search')" title="Search Notes">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           </button>

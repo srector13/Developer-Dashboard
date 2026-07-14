@@ -281,7 +281,9 @@
       setValue(next, s + before.length, s + before.length + sel.length);
     }
 
-    // Prefix every line the selection touches (numbered lists count up)
+    // Prefix every line the selection touches (numbered lists count up).
+    // Caret lands at the END (collapsed) so you can type the item right away
+    // instead of typing over the marker we just inserted.
     function prefixLines(prefix, numbered) {
       const s = input.selectionStart, e = input.selectionEnd;
       const lineStart = input.value.lastIndexOf('\n', s - 1) + 1;
@@ -292,7 +294,8 @@
         .map((ln, i) => (numbered ? `${i + 1}. ` : prefix) + ln)
         .join('\n');
       const next = input.value.slice(0, lineStart) + replaced + input.value.slice(lineEnd);
-      setValue(next, lineStart, lineStart + replaced.length);
+      const end = lineStart + replaced.length;
+      setValue(next, end, end);
     }
 
     // Same insertion shape as the main editor's insertCodeBlock(language)
@@ -385,11 +388,41 @@
       return fences % 2 === 1;
     }
 
+    // Shift+Enter continues the current list (bullet / numbered / task), same
+    // as the main editor. Returns true when it handled the newline.
+    function continueList() {
+      const pos = input.selectionStart;
+      const val = input.value;
+      const lineStart = val.lastIndexOf('\n', pos - 1) + 1;
+      const line = val.slice(lineStart, pos);
+      const task = line.match(/^(\s*)([-*+])\s+\[[ xX]\]\s+/);
+      const num = line.match(/^(\s*)(\d+)\.\s+/);
+      const bullet = line.match(/^(\s*)([-*+])\s+/);
+      let marker = null, full = null;
+      if (task) { marker = `${task[1]}${task[2]} [ ] `; full = task[0]; }
+      else if (num) { marker = `${num[1]}${parseInt(num[2], 10) + 1}. `; full = num[0]; }
+      else if (bullet) { marker = `${bullet[1]}${bullet[2]} `; full = bullet[0]; }
+      if (marker === null) return false;
+      // Empty item (just the marker) ends the list — clear the marker instead
+      if (line.length === full.length) {
+        input.value = val.slice(0, lineStart) + val.slice(pos);
+        input.selectionStart = input.selectionEnd = lineStart;
+        return true;
+      }
+      const insert = '\n' + marker;
+      input.value = val.slice(0, pos) + insert + val.slice(pos);
+      input.selectionStart = input.selectionEnd = pos + insert.length;
+      return true;
+    }
+
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         if (caretInCodeFence()) return; // let the newline through
         e.preventDefault();
         submit();
+      } else if (e.key === 'Enter' && e.shiftKey) {
+        // Newline: continue a list if we're in one, else a plain newline
+        if (continueList()) e.preventDefault();
       } else if (e.key === 'Escape') {
         e.preventDefault();
         window.captureApi.hideCaptureWindow();

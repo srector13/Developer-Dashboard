@@ -209,39 +209,10 @@ function wireSpellcheckMenu(win: BrowserWindow) {
   });
 }
 
-// Splash: a tiny frameless window that paints instantly while the real
-// window loads the renderer and scans the notebook. Closed on first paint
-// of the main window.
-let splashWindow: BrowserWindow | null = null;
-
 // Matching the OS theme avoids both the white flash (dark mode) and a
 // black flash (light mode) before the page's own styles arrive
 function windowBackground(): string {
   return nativeTheme.shouldUseDarkColors ? '#14181e' : '#ffffff';
-}
-
-function createSplashWindow() {
-  splashWindow = new BrowserWindow({
-    width: 340,
-    height: 400,
-    show: false, // revealed on ready-to-show: an unpainted splash (empty outline) helps no one
-    frame: false,
-    resizable: false,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    backgroundColor: windowBackground(),
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
-  });
-  splashWindow.loadFile(path.join(__dirname, '../renderer/splash.html'));
-  splashWindow.once('ready-to-show', () => {
-    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.show();
-  });
-  splashWindow.on('closed', () => { splashWindow = null; });
-}
-
-function closeSplash() {
-  if (splashWindow && !splashWindow.isDestroyed()) splashWindow.destroy();
-  splashWindow = null;
 }
 
 // Window manager
@@ -252,7 +223,12 @@ function createWindow() {
     height: 800,
     minWidth: 800,
     minHeight: 600,
-    show: false, // shown on ready-to-show; the splash covers the gap
+    // Hidden only until the shell's first paint (ready-to-show, fast). We do
+    // NOT wait for the notebook scan — the window shows immediately with its
+    // in-page loading overlay, so there's a real taskbar entry and a branded
+    // "opening…" screen the whole time the notebook loads (no separate
+    // splash window, which had no taskbar presence and caused the flicker).
+    show: false,
     backgroundColor: windowBackground(),
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     trafficLightPosition: { x: 12, y: 20 },
@@ -273,15 +249,10 @@ function createWindow() {
     if (revealed) return;
     revealed = true;
     if (mainWindow && !mainWindow.isVisible()) mainWindow.show();
-    closeSplash();
   };
-  // Reveal only when the renderer signals its initial notebook render is
-  // done — NOT on ready-to-show, which fires as soon as the empty shell
-  // paints and would leave a blank window while the tree is still scanning.
-  ipcMain.once('renderer-ready', reveal);
-  // Belt and braces: never strand the user on the splash if the signal
-  // never arrives (e.g. a renderer error before it fires)
-  setTimeout(reveal, 30000);
+  mainWindow.once('ready-to-show', reveal);
+  // Fallback in case ready-to-show is slow or doesn't fire
+  setTimeout(reveal, 8000);
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -349,7 +320,6 @@ ipcMain.handle('select-folder', async () => {
 
 
 app.whenReady().then(async () => {
-  createSplashWindow();
   createWindow();
 
   // Register after the renderer loads so a registration failure (shortcut
