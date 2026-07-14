@@ -549,9 +549,20 @@
         <div class="form-group">
           <label>Quick Capture Shortcut (system-wide)</label>
           <input type="text" id="settings-capture-shortcut" placeholder="e.g. CommandOrControl+Shift+N (leave empty to disable)">
-          <div class="form-hint">Works even when the app is in the background — pick a combination no other app uses.</div>
+          <div class="form-hint">Opens the capture window. Works even when the app is in the background — pick a combination no other app uses.</div>
         </div>
-        
+        <div class="form-group">
+          <label>Clipboard Capture Shortcut (system-wide)</label>
+          <input type="text" id="settings-clipboard-shortcut" placeholder="e.g. CommandOrControl+Shift+G (leave empty to disable)">
+          <div class="form-hint">Files whatever text is on the clipboard straight into a note — no window. Copy, press the shortcut, done.</div>
+        </div>
+        <div class="form-group">
+          <label>Clipboard Capture Goes To</label>
+          <select id="settings-clipboard-target">
+            <option value="">Today's daily note</option>
+          </select>
+        </div>
+
         <!-- Auto Save Checkbox in Settings Modal -->
         <div class="form-group" style="display: flex; align-items: center; gap: 10px; margin-top: 20px;">
           <input type="checkbox" id="settings-autosave" style="width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent-blue);">
@@ -623,6 +634,23 @@
       <div class="modal-footer">
         <button class="btn btn-outline" onclick="hideCreateModal()">Cancel</button>
         <button class="btn btn-primary" onclick="submitCreateModal()">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Template Fields Modal: prompts for a template's custom {{variables}} -->
+  <div id="template-vars-modal" class="modal-overlay">
+    <div class="glass-card modal-card">
+      <div class="modal-header">
+        <h3>Fill In Template Fields</h3>
+        <button class="close-btn" onclick="cancelTemplateVars()">&times;</button>
+      </div>
+      <div class="modal-body" id="template-vars-body">
+        <!-- One labeled input per custom variable, injected dynamically -->
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="cancelTemplateVars()">Cancel</button>
+        <button class="btn btn-primary" onclick="submitTemplateVars()">Create Page</button>
       </div>
     </div>
   </div>

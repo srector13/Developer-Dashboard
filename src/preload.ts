@@ -218,7 +218,8 @@ contextBridge.exposeInMainWorld('api', {
   getNotebookTree: (rootPath: string, filterTag?: string) => ipcRenderer.invoke('get-notebook-tree', rootPath, filterTag),
   readNote: (filePath: string) => ipcRenderer.invoke('read-note', filePath),
   writeNote: (filePath: string, content: string) => ipcRenderer.invoke('write-note', filePath, content),
-  createPage: (dirPath: string, title: string, templateName?: string, meta?: { created?: string; tags?: string[] }) => ipcRenderer.invoke('create-page', dirPath, title, templateName, meta),
+  createPage: (dirPath: string, title: string, templateName?: string, meta?: { created?: string; tags?: string[] }, customVars?: Record<string, string>) => ipcRenderer.invoke('create-page', dirPath, title, templateName, meta, customVars),
+  getTemplateVariables: (templateName: string) => ipcRenderer.invoke('get-template-variables', templateName),
   createSection: (dirPath: string, name: string, description?: string) => ipcRenderer.invoke('create-section', dirPath, name, description),
   setSectionMeta: (dirPath: string, description: string) => ipcRenderer.invoke('set-section-meta', dirPath, description),
   deleteNode: (filePath: string) => ipcRenderer.invoke('delete-node', filePath),
@@ -276,6 +277,11 @@ contextBridge.exposeInMainWorld('api', {
   onCaptureShortcutFailed: (callback: (shortcut: string) => void) => {
     ipcRenderer.on('capture-shortcut-failed', (_event, shortcut: string) => callback(shortcut));
   },
+  // Renderer tells main its initial notebook render is done, so the window
+  // reveals (and the splash closes) only when there's real content to show
+  signalRendererReady: () => ipcRenderer.send('renderer-ready'),
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  getAppVersion: () => ipcRenderer.invoke('app-version'),
   
   // Inline actions in renderer
   toggleTaskAtLine: (filePath: string, line: number) => ipcRenderer.invoke('toggle-task-at-line', filePath, line),

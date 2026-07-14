@@ -62,6 +62,10 @@ interface AppSettings {
   pdfExport: PdfExportOptions;
   /** Global (system-wide) quick-capture shortcut; empty string disables it. */
   quickCaptureShortcut: string;
+  /** Global shortcut that files the clipboard text with no window; empty disables. */
+  clipboardCaptureShortcut: string;
+  /** Where windowless clipboard captures go: a note's relPath, or '' for today's daily note. */
+  clipboardCaptureTarget: string;
 }
 
 const defaultSettings: AppSettings = {
@@ -77,6 +81,8 @@ const defaultSettings: AppSettings = {
   autoSaveEnabled: false,
   pdfExport: { theme: 'light', pageSize: 'A4', openAfter: true, reveal: false },
   quickCaptureShortcut: 'CommandOrControl+Shift+N',
+  clipboardCaptureShortcut: 'CommandOrControl+Shift+G',
+  clipboardCaptureTarget: '',
 };
 
 // Migrate settings written by older versions to the current shape
@@ -262,14 +268,20 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   wireSpellcheckMenu(mainWindow);
 
+  let revealed = false;
   const reveal = () => {
+    if (revealed) return;
+    revealed = true;
     if (mainWindow && !mainWindow.isVisible()) mainWindow.show();
     closeSplash();
   };
-  mainWindow.once('ready-to-show', reveal);
-  // Belt and braces: never leave the user stuck on the splash if the
-  // renderer paints slowly or ready-to-show fails to fire
-  setTimeout(reveal, 15000);
+  // Reveal only when the renderer signals its initial notebook render is
+  // done — NOT on ready-to-show, which fires as soon as the empty shell
+  // paints and would leave a blank window while the tree is still scanning.
+  ipcMain.once('renderer-ready', reveal);
+  // Belt and braces: never strand the user on the splash if the signal
+  // never arrives (e.g. a renderer error before it fires)
+  setTimeout(reveal, 30000);
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -348,6 +360,7 @@ app.whenReady().then(async () => {
   if (mainWindow) {
     mainWindow.webContents.once('did-finish-load', () => {
       registerQuickCaptureShortcut(settings.quickCaptureShortcut);
+      registerClipboardCaptureShortcut(settings.clipboardCaptureShortcut);
     });
   }
 
@@ -356,7 +369,62 @@ app.whenReady().then(async () => {
       createWindow();
     }
   });
+
+  setupAutoUpdater();
 });
+
+// Auto-update against the GitHub release feed (latest.yml / latest-mac.yml
+// that electron-builder already publishes). Only runs in a packaged app;
+// the portable exe can't self-update, so it's skipped there.
+let autoUpdaterRef: any = null;
+function setupAutoUpdater() {
+  if (!app.isPackaged) return;
+  if (process.env.PORTABLE_EXECUTABLE_DIR) return; // portable build: no in-place update
+  try {
+    const { autoUpdater } = require('electron-updater');
+    const { dialog } = require('electron');
+    autoUpdaterRef = autoUpdater;
+    autoUpdater.autoDownload = true;
+    autoUpdater.on('update-downloaded', async (info: any) => {
+      if (!mainWindow) return;
+      const res = await dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        buttons: ['Restart Now', 'Later'],
+        defaultId: 0,
+        cancelId: 1,
+        title: 'Update Ready',
+        message: `Markdown Notebook ${info?.version || ''} is ready to install.`,
+        detail: 'Restart the app to finish updating.',
+      });
+      if (res.response === 0) autoUpdater.quitAndInstall();
+    });
+    autoUpdater.on('error', (err: any) => console.error('Auto-update error:', err));
+    autoUpdater.checkForUpdatesAndNotify().catch((err: any) => console.error('Update check failed:', err));
+    // Re-check every 6 hours for long-running sessions
+    setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 6 * 60 * 60 * 1000);
+  } catch (err) {
+    console.error('Auto-updater unavailable:', err);
+  }
+}
+
+// Manual "Check for Updates" from the command palette
+ipcMain.handle('check-for-updates', async () => {
+  if (!app.isPackaged) return { status: 'dev' };
+  if (process.env.PORTABLE_EXECUTABLE_DIR) return { status: 'portable' };
+  if (!autoUpdaterRef) return { status: 'unavailable' };
+  try {
+    const result = await autoUpdaterRef.checkForUpdates();
+    const latest = result?.updateInfo?.version;
+    if (latest && latest !== app.getVersion()) {
+      return { status: 'available', version: latest };
+    }
+    return { status: 'current', version: app.getVersion() };
+  } catch (err: any) {
+    return { status: 'error', reason: err?.message || String(err) };
+  }
+});
+
+ipcMain.handle('app-version', () => app.getVersion());
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -669,6 +737,9 @@ ipcMain.handle('save-settings', async (event, settings) => {
   if (updated.quickCaptureShortcut !== before.quickCaptureShortcut) {
     registerQuickCaptureShortcut(updated.quickCaptureShortcut);
   }
+  if (updated.clipboardCaptureShortcut !== before.clipboardCaptureShortcut) {
+    registerClipboardCaptureShortcut(updated.clipboardCaptureShortcut);
+  }
   return updated;
 });
 
@@ -884,7 +955,56 @@ function tagsYamlLine(tags: string[]): string {
   return tags.length ? `tags: [${tags.map(yamlValue).join(', ')}]` : 'tags: []';
 }
 
-ipcMain.handle('create-page', async (event, dirPath, title, templateName, meta?: NoteMeta) => {
+// Built-in template variables filled automatically; anything else in a
+// template is a custom field the user is prompted for.
+function builtinTemplateVars(title: string, createdDate: string): Record<string, string> {
+  const today = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return {
+    title,
+    date: createdDate,
+    time: today.toLocaleTimeString(),
+    datetime: today.toLocaleString(),
+    weekday: today.toLocaleDateString(undefined, { weekday: 'long' }),
+    year: String(today.getFullYear()),
+    month: pad(today.getMonth() + 1),
+    day: pad(today.getDate()),
+    slug: slug(title),
+    cursor: '',
+  };
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function applyTemplateVars(raw: string, vars: Record<string, string>): string {
+  let out = raw;
+  for (const [key, val] of Object.entries(vars)) {
+    out = out.replace(new RegExp(`\\{\\{\\s*${escapeRegExp(key)}\\s*\\}\\}`, 'g'), val);
+  }
+  return out;
+}
+
+// The custom (non-built-in) {{variables}} a template asks for, in order of
+// first appearance, de-duplicated.
+ipcMain.handle('get-template-variables', async (event, templateName: string) => {
+  const settings = await readSettings();
+  const templatePath = path.join(resolveTemplatesDir(settings), templateName);
+  if (!fs.existsSync(templatePath)) return [];
+  const raw = await fsp.readFile(templatePath, 'utf8');
+  const builtin = new Set(Object.keys(builtinTemplateVars('', '')));
+  const found: string[] = [];
+  const re = /\{\{\s*([\w-]+)\s*\}\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw)) !== null) {
+    const name = m[1];
+    if (!builtin.has(name) && !found.includes(name)) found.push(name);
+  }
+  return found;
+});
+
+ipcMain.handle('create-page', async (event, dirPath, title, templateName, meta?: NoteMeta, customVars?: Record<string, string>) => {
   const settings = await readSettings();
   const { created: createdDate, tags } = sanitizeMeta(meta);
   let body = '';
@@ -894,15 +1014,10 @@ ipcMain.handle('create-page', async (event, dirPath, title, templateName, meta?:
     const templatePath = path.join(templatesDir, templateName);
     if (fs.existsSync(templatePath)) {
       let raw = await fsp.readFile(templatePath, 'utf8');
-      // Replace variables
-      const today = new Date();
-      raw = raw.replace(/\{\{title\}\}/g, title);
-      raw = raw.replace(/\{\{date\}\}/g, createdDate);
-      raw = raw.replace(/\{\{time\}\}/g, today.toLocaleTimeString());
-      raw = raw.replace(/\{\{datetime\}\}/g, today.toLocaleString());
-      raw = raw.replace(/\{\{weekday\}\}/g, today.toLocaleDateString(undefined, { weekday: 'long' }));
-      raw = raw.replace(/\{\{slug\}\}/g, slug(title));
-      body = raw.replace(/\{\{cursor\}\}/g, '');
+      raw = applyTemplateVars(raw, builtinTemplateVars(title, createdDate));
+      // User-provided custom fields ({{project}}, {{attendees}}, …)
+      if (customVars) raw = applyTemplateVars(raw, customVars);
+      body = raw;
     }
   }
 
@@ -2301,7 +2416,7 @@ ipcMain.handle('list-capture-targets', async () => {
 //    (anywhere-by-basename lookup, else at the root) when missing.
 //  - explicit target: appended at the end of the file — the natural shape
 //    for "add this snippet to my Code Snippets doc".
-ipcMain.handle('append-quick-capture', async (event, text: string, targetFsPath?: string) => {
+async function appendCapture(text: string, targetFsPath?: string): Promise<{ success: boolean; notePath?: string; reason?: string }> {
   const settings = await readSettings();
   const root = settings.notebookRoot;
   if (!root || !fs.existsSync(root)) return { success: false, reason: 'No notebook folder is set.' };
@@ -2377,7 +2492,62 @@ ipcMain.handle('append-quick-capture', async (event, text: string, targetFsPath?
   await writeNoteFile(notePath, lines.join('\n'), { snapshot: true });
   notifyFilesChanged();
   return { success: true, notePath };
-});
+}
+
+ipcMain.handle('append-quick-capture', (event, text: string, targetFsPath?: string) => appendCapture(text, targetFsPath));
+
+// Resolve the configured clipboard-capture target (relPath) to an fsPath,
+// or undefined for the daily-note default.
+async function resolveClipboardTarget(): Promise<string | undefined> {
+  const settings = await readSettings();
+  const rel = (settings.clipboardCaptureTarget || '').trim();
+  if (!rel || !settings.notebookRoot) return undefined;
+  const fsPath = path.join(settings.notebookRoot, rel);
+  return fs.existsSync(fsPath) ? fsPath : undefined;
+}
+
+// Windowless capture: grab whatever text is on the clipboard and file it,
+// with a native notification for feedback (there's no window in this flow).
+async function captureClipboardToNote() {
+  try {
+    const { clipboard, Notification } = require('electron');
+    const text = clipboard.readText();
+    const notify = (title: string, body: string) => {
+      if (Notification.isSupported()) new Notification({ title, body, silent: true }).show();
+    };
+    if (!text || !text.trim()) {
+      notify('Nothing captured', 'The clipboard has no text to file.');
+      return;
+    }
+    const target = await resolveClipboardTarget();
+    const result = await appendCapture(text, target);
+    if (result.success) {
+      notify('Captured to notebook', `Filed to ${path.basename(result.notePath || 'your note')}`);
+    } else {
+      notify('Capture failed', result.reason || 'Could not file the clipboard text.');
+    }
+  } catch (err) {
+    console.error('Clipboard capture failed:', err);
+  }
+}
+
+let registeredClipboardShortcut = '';
+function registerClipboardCaptureShortcut(accelerator: string): boolean {
+  if (registeredClipboardShortcut) {
+    try { globalShortcut.unregister(registeredClipboardShortcut); } catch { /* already gone */ }
+    registeredClipboardShortcut = '';
+  }
+  const shortcut = (accelerator || '').trim();
+  if (!shortcut) return true;
+  try {
+    if (globalShortcut.register(shortcut, captureClipboardToNote)) {
+      registeredClipboardShortcut = shortcut;
+      return true;
+    }
+  } catch { /* invalid accelerator */ }
+  if (mainWindow) mainWindow.webContents.send('capture-shortcut-failed', shortcut);
+  return false;
+}
 
 // Inline helper: toggle checkboxes inside markdown file text
 ipcMain.handle('toggle-task-at-line', async (event, filePath, lineIndex) => {

@@ -77,16 +77,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     notebookRoot = appSettings.notebookRoot;
     document.getElementById('onboarding').classList.remove('active');
     document.getElementById('settings-root-path').value = notebookRoot;
-    await refreshNotebook();
+    try {
+      await refreshNotebook();
 
-    // Restore the previous session's open tabs and active note
-    const restoredActive = restoreTabs();
-    if (restoredActive && !activeNote) {
-      await openNote(restoredActive);
+      // Restore the previous session's open tabs and active note
+      const restoredActive = restoreTabs();
+      if (restoredActive && !activeNote) {
+        await openNote(restoredActive);
+      }
+    } catch (err) {
+      console.error('Initial notebook load failed:', err);
     }
   } else {
     document.getElementById('onboarding').classList.add('active');
   }
+
+  // The initial notebook render is done — tell main to reveal the window and
+  // close the splash now (an atomic swap, so there's no blank gap where the
+  // splash is gone but the app hasn't painted its content yet).
+  if (window.api.signalRendererReady) window.api.signalRendererReady();
 
   // File watcher setup (auto refresh)
   window.api.onFilesChanged(async () => {
@@ -104,6 +113,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Split view: preview scrolls drive the editor (the editor side is wired
   // through the textarea's inline onscroll)
   document.getElementById('preview-pane').addEventListener('scroll', () => syncSplitScroll('preview'));
+
+  // [[ note-link popup: dismiss on blur, re-evaluate on click (caret moved)
+  const noteEditorEl = document.getElementById('note-editor');
+  if (noteEditorEl) {
+    noteEditorEl.addEventListener('blur', () => setTimeout(hideWikiAutocomplete, 120));
+    noteEditorEl.addEventListener('click', updateWikiAutocomplete);
+  }
 
   // Tab context menu dismissal: any click or right-click elsewhere closes it
   // (opening it stops propagation, so these never fire for the menu itself)
@@ -1232,12 +1248,156 @@ function setViewMode(mode, options = {}) {
 }
 
 // Editor interaction handling
+// ==========================================
+// [[ NOTE-LINK AUTOCOMPLETE
+// Typing "[[" opens a fuzzy title picker; choosing inserts a wiki-link
+// (resolved by filename, displayed by title).
+// ==========================================
+let wikiAC = { open: false, items: [], index: 0, start: -1 };
+
+// Subsequence fuzzy match: every query char appears in order in the text
+function wikiFuzzy(query, text) {
+  query = query.toLowerCase(); text = text.toLowerCase();
+  if (!query) return true;
+  let ti = 0;
+  for (const ch of query) {
+    ti = text.indexOf(ch, ti);
+    if (ti === -1) return false;
+    ti++;
+  }
+  return true;
+}
+
+// Is the caret sitting just after an unclosed "[[" on the same line?
+function detectWikiContext(textarea) {
+  if (textarea.selectionStart !== textarea.selectionEnd) return null;
+  const pos = textarea.selectionStart;
+  const before = textarea.value.slice(0, pos);
+  const open = before.lastIndexOf('[[');
+  if (open === -1) return null;
+  const between = before.slice(open + 2);
+  if (/[\]\n\[]/.test(between)) return null; // closed, newline, or nested
+  return { start: open, query: between };
+}
+
+function updateWikiAutocomplete() {
+  const textarea = document.getElementById('note-editor');
+  if (!textarea) return;
+  const ctx = detectWikiContext(textarea);
+  if (!ctx) { hideWikiAutocomplete(); return; }
+  const q = ctx.query.trim();
+  const pages = treeData ? gatherPagesRecursively(treeData) : [];
+  let items = pages.filter(p => wikiFuzzy(q, p.title) || wikiFuzzy(q, p.name));
+  const ql = q.toLowerCase();
+  items.sort((a, b) => {
+    const as = a.title.toLowerCase().startsWith(ql) ? 0 : 1;
+    const bs = b.title.toLowerCase().startsWith(ql) ? 0 : 1;
+    return as - bs || a.title.localeCompare(b.title);
+  });
+  items = items.slice(0, 8);
+  if (!items.length) { hideWikiAutocomplete(); return; }
+  wikiAC = { open: true, items, index: 0, start: ctx.start };
+  renderWikiAutocomplete(textarea);
+}
+
+function moveWikiSelection(dir) {
+  if (!wikiAC.open) return;
+  wikiAC.index = (wikiAC.index + dir + wikiAC.items.length) % wikiAC.items.length;
+  const list = document.getElementById('wikilink-autocomplete');
+  if (!list) return;
+  Array.from(list.children).forEach((el, i) => {
+    el.classList.toggle('active', i === wikiAC.index);
+    if (i === wikiAC.index) el.scrollIntoView({ block: 'nearest' });
+  });
+}
+
+function insertWikiLink(page) {
+  if (!page) return;
+  const textarea = document.getElementById('note-editor');
+  const pos = textarea.selectionStart;
+  const target = page.name.replace(/\.md$/i, '');
+  const link = page.title && page.title !== target ? `[[${target}|${page.title}]]` : `[[${target}]]`;
+  // Consume a matching "]]" immediately after the caret, if the user typed one
+  let end = pos;
+  if (textarea.value.slice(pos, pos + 2) === ']]') end = pos + 2;
+  hideWikiAutocomplete();
+  replaceEditorRange(textarea, wikiAC.start, end, link);
+}
+
+// Caret pixel position via a mirror div that reproduces the textarea's
+// wrapping, then reading where the caret span lands.
+function editorCaretRect(textarea, position) {
+  const style = getComputedStyle(textarea);
+  const mirror = document.createElement('div');
+  const props = ['boxSizing', 'width', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+    'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth', 'fontFamily',
+    'fontSize', 'fontWeight', 'fontStyle', 'letterSpacing', 'lineHeight', 'textTransform', 'wordSpacing'];
+  props.forEach(p => { mirror.style[p] = style[p]; });
+  mirror.style.position = 'fixed';
+  mirror.style.visibility = 'hidden';
+  mirror.style.whiteSpace = 'pre-wrap';
+  mirror.style.wordWrap = 'break-word';
+  mirror.style.overflow = 'hidden';
+  const rect = textarea.getBoundingClientRect();
+  mirror.style.left = `${rect.left}px`;
+  mirror.style.top = `${rect.top}px`;
+  mirror.style.height = `${rect.height}px`;
+  mirror.textContent = textarea.value.slice(0, position);
+  const marker = document.createElement('span');
+  marker.textContent = '​';
+  mirror.appendChild(marker);
+  document.body.appendChild(mirror);
+  const mRect = marker.getBoundingClientRect();
+  const lineHeight = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.4;
+  const x = mRect.left;
+  const y = mRect.top - textarea.scrollTop;
+  document.body.removeChild(mirror);
+  return { x, y, lineHeight };
+}
+
+function renderWikiAutocomplete(textarea) {
+  let list = document.getElementById('wikilink-autocomplete');
+  if (!list) {
+    list = document.createElement('div');
+    list.id = 'wikilink-autocomplete';
+    document.body.appendChild(list);
+  }
+  list.innerHTML = wikiAC.items.map((p, i) => {
+    const dir = pathDirname(p.relPath);
+    return `<div class="wikilink-option ${i === wikiAC.index ? 'active' : ''}" data-idx="${i}">
+      <span class="wikilink-title">${escapeHtml(p.title)}</span>
+      ${dir ? `<span class="wikilink-path">${escapeHtml(dir)}</span>` : ''}
+    </div>`;
+  }).join('');
+  list.querySelectorAll('.wikilink-option').forEach(el => {
+    el.addEventListener('mousedown', (e) => {
+      e.preventDefault(); // keep editor focus
+      insertWikiLink(wikiAC.items[parseInt(el.dataset.idx, 10)]);
+    });
+  });
+  list.style.display = 'block';
+  const caret = editorCaretRect(textarea, textarea.selectionStart);
+  const maxLeft = window.innerWidth - 280;
+  const belowTop = caret.y + caret.lineHeight + 2;
+  // Flip above the caret if the popup would run off the bottom
+  const flipUp = belowTop + list.offsetHeight > window.innerHeight - 8;
+  list.style.left = `${Math.max(8, Math.min(caret.x, maxLeft))}px`;
+  list.style.top = `${flipUp ? Math.max(8, caret.y - list.offsetHeight - 2) : belowTop}px`;
+}
+
+function hideWikiAutocomplete() {
+  wikiAC.open = false;
+  const list = document.getElementById('wikilink-autocomplete');
+  if (list) list.style.display = 'none';
+}
+
 function handleEditorInput() {
   const textarea = document.getElementById('note-editor');
   noteContent = textarea.value;
   updateLineNumbers();
   updateWordCount();
   updateSaveStatus(true);
+  updateWikiAutocomplete();
 
   if (viewMode === 'split') {
     renderMarkdownPreview();
@@ -1371,7 +1531,32 @@ async function saveActiveNote() {
 function handleEditorKeys(e) {
   const isCmdOrCtrl = IS_MAC ? e.metaKey : e.ctrlKey;
 
+  // The [[ note-link popup owns Up/Down/Enter/Tab/Escape while it's open
+  if (wikiAC.open) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); moveWikiSelection(1); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); moveWikiSelection(-1); return; }
+    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); insertWikiLink(wikiAC.items[wikiAC.index]); return; }
+    if (e.key === 'Escape') { e.preventDefault(); hideWikiAutocomplete(); return; }
+    // Moving the caret sideways or away dismisses the popup (default action runs)
+    if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) hideWikiAutocomplete();
+  }
+
+  // Line power keys (VS Code conventions). Alt+↑/↓ moves lines,
+  // Shift+Alt+↑/↓ duplicates them — no Cmd/Ctrl involved.
+  if (e.altKey && !isCmdOrCtrl && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+    e.preventDefault();
+    if (e.shiftKey) duplicateEditorLines(e.target);
+    else moveEditorLines(e.target, e.key === 'ArrowUp' ? -1 : 1);
+    return;
+  }
+
   if (isCmdOrCtrl) {
+    // Delete the current line(s): Cmd/Ctrl+Shift+K
+    if (e.shiftKey && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      deleteEditorLines(e.target);
+      return;
+    }
     // Alt/Option combos advertised in the toolbar tooltips
     if (e.altKey) {
       const code = e.code; // e.key is unreliable with Option on macOS
@@ -1439,6 +1624,64 @@ function replaceEditorRange(textarea, start, end, text) {
   // execCommand fires the textarea's input event, so handleEditorInput has
   // already run in the handled case. Chromium doesn't reliably reveal the
   // caret after programmatic edits, so always scroll it into view ourselves.
+  scrollEditorCaretIntoView(textarea);
+}
+
+// ==========================================
+// EDITOR POWER KEYS: move / duplicate / delete whole lines
+// (textarea can't do true multi-cursor, but these cover the common ones)
+// ==========================================
+
+// The line block the current selection touches: [startOfFirstLine, endOfLastLine)
+// where end is the index of the newline after the block, or the value length.
+function editorLineBounds(textarea) {
+  const val = textarea.value;
+  const s = textarea.selectionStart, e = textarea.selectionEnd;
+  const startLine = val.lastIndexOf('\n', s - 1) + 1;
+  let endLine = val.indexOf('\n', e);
+  if (endLine === -1) endLine = val.length;
+  return { startLine, endLine };
+}
+
+function moveEditorLines(textarea, dir) {
+  const val = textarea.value;
+  const { startLine, endLine } = editorLineBounds(textarea);
+  const block = val.slice(startLine, endLine);
+  if (dir < 0) {
+    if (startLine === 0) return; // already at the top
+    const prevStart = val.lastIndexOf('\n', startLine - 2) + 1;
+    const prevLine = val.slice(prevStart, startLine - 1);
+    replaceEditorRange(textarea, prevStart, endLine, `${block}\n${prevLine}`);
+    textarea.setSelectionRange(prevStart, prevStart + block.length);
+  } else {
+    if (endLine === val.length) return; // already at the bottom
+    let nextEnd = val.indexOf('\n', endLine + 1);
+    if (nextEnd === -1) nextEnd = val.length;
+    const nextLine = val.slice(endLine + 1, nextEnd);
+    replaceEditorRange(textarea, startLine, nextEnd, `${nextLine}\n${block}`);
+    const newStart = startLine + nextLine.length + 1;
+    textarea.setSelectionRange(newStart, newStart + block.length);
+  }
+  scrollEditorCaretIntoView(textarea);
+}
+
+function duplicateEditorLines(textarea) {
+  const val = textarea.value;
+  const { startLine, endLine } = editorLineBounds(textarea);
+  const block = val.slice(startLine, endLine);
+  replaceEditorRange(textarea, endLine, endLine, `\n${block}`);
+  const dupStart = endLine + 1;
+  textarea.setSelectionRange(dupStart, dupStart + block.length);
+  scrollEditorCaretIntoView(textarea);
+}
+
+function deleteEditorLines(textarea) {
+  const val = textarea.value;
+  let { startLine, endLine } = editorLineBounds(textarea);
+  if (endLine < val.length) endLine += 1;        // consume the trailing newline
+  else if (startLine > 0) startLine -= 1;         // last line: consume the leading one
+  replaceEditorRange(textarea, startLine, endLine, '');
+  textarea.setSelectionRange(startLine, startLine);
   scrollEditorCaretIntoView(textarea);
 }
 
@@ -2352,8 +2595,19 @@ function showSettingsModal() {
   document.getElementById('settings-author').value = appSettings.author;
   document.getElementById('settings-pandoc-path').value = appSettings.pandocPath || '';
   document.getElementById('settings-capture-shortcut').value = appSettings.quickCaptureShortcut || '';
+  document.getElementById('settings-clipboard-shortcut').value = appSettings.clipboardCaptureShortcut || '';
   document.getElementById('settings-ignore-folders').value = appSettings.ignoreFolders.join(', ');
   document.getElementById('settings-autosave').checked = autoSaveEnabled;
+
+  // Populate the clipboard-capture target dropdown with every note (relPath)
+  const targetSelect = document.getElementById('settings-clipboard-target');
+  const pages = treeData ? gatherPagesRecursively(treeData) : [];
+  targetSelect.innerHTML = '<option value="">Today\'s daily note</option>' +
+    pages.slice().sort((a, b) => a.relPath.localeCompare(b.relPath))
+      .map(p => `<option value="${escapeHtml(p.relPath)}">${escapeHtml(p.relPath.replace(/\.md$/i, ''))}</option>`).join('');
+  targetSelect.value = appSettings.clipboardCaptureTarget || '';
+  if (targetSelect.selectedIndex === -1) targetSelect.value = '';
+
   modal.classList.add('active');
 }
 
@@ -2369,6 +2623,8 @@ async function saveSettingsForm() {
   const author = document.getElementById('settings-author').value.trim();
   const pandocPath = document.getElementById('settings-pandoc-path').value.trim();
   const captureShortcut = document.getElementById('settings-capture-shortcut').value.trim();
+  const clipboardShortcut = document.getElementById('settings-clipboard-shortcut').value.trim();
+  const clipboardTarget = document.getElementById('settings-clipboard-target').value;
   const ignore = document.getElementById('settings-ignore-folders').value.split(',').map(s => s.trim()).filter(s => s);
   const autosave = document.getElementById('settings-autosave').checked;
 
@@ -2380,6 +2636,8 @@ async function saveSettingsForm() {
     author: author,
     pandocPath: pandocPath,
     quickCaptureShortcut: captureShortcut,
+    clipboardCaptureShortcut: clipboardShortcut,
+    clipboardCaptureTarget: clipboardTarget,
     scratchpadFile: appSettings.scratchpadFile,
     ignoreFolders: ignore,
     autoSaveEnabled: autosave,
@@ -2502,6 +2760,67 @@ function handleCreateModalEnter(e) {
   }
 }
 
+// Manual update check from the palette; auto-checks also run on launch.
+async function checkForUpdates() {
+  if (!window.api.checkForUpdates) return;
+  showToast('Checking for updates…');
+  let result;
+  try { result = await window.api.checkForUpdates(); } catch { result = { status: 'error' }; }
+  const messages = {
+    dev: 'Update checks only run in the installed app.',
+    portable: 'The portable version doesn\'t self-update — download the latest from the Releases page.',
+    unavailable: 'Update service is unavailable right now.',
+    current: 'You\'re on the latest version.',
+    available: `Update to ${result && result.version} is downloading — you'll be prompted to restart when it's ready.`,
+    error: (result && result.reason) || 'Could not check for updates.',
+  };
+  showToast(messages[result ? result.status : 'error'] || 'Update check finished.',
+    result && result.status === 'error' ? 'error' : 'success');
+}
+
+// Prompt the user to fill a template's custom {{variables}}. Resolves to a
+// { name: value } map, or null if cancelled. Prettifies field labels
+// (project_lead -> "Project Lead").
+let templateVarsResolver = null;
+function promptTemplateVariables(varNames) {
+  return new Promise((resolve) => {
+    templateVarsResolver = resolve;
+    const body = document.getElementById('template-vars-body');
+    body.innerHTML = varNames.map((v, i) => {
+      const label = v.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      return `<div class="form-group">
+        <label>${escapeHtml(label)}</label>
+        <input type="text" class="template-var-input" data-var="${escapeHtml(v)}"
+          ${i === 0 ? '' : ''} placeholder="${escapeHtml('{{' + v + '}}')}"
+          onkeydown="if (event.key === 'Enter') submitTemplateVars()">
+      </div>`;
+    }).join('');
+    document.getElementById('template-vars-modal').classList.add('active');
+    setTimeout(() => {
+      const first = body.querySelector('.template-var-input');
+      if (first) first.focus();
+    }, 100);
+  });
+}
+
+function submitTemplateVars() {
+  const vars = {};
+  document.querySelectorAll('#template-vars-body .template-var-input').forEach(inp => {
+    vars[inp.dataset.var] = inp.value;
+  });
+  document.getElementById('template-vars-modal').classList.remove('active');
+  const resolve = templateVarsResolver;
+  templateVarsResolver = null;
+  if (resolve) resolve(vars);
+}
+
+function cancelTemplateVars() {
+  document.getElementById('template-vars-modal').classList.remove('active');
+  const resolve = templateVarsResolver;
+  templateVarsResolver = null;
+  if (resolve) resolve(null);
+}
+
 async function submitCreateModal() {
   const type = document.getElementById('create-modal-type').value;
   const name = document.getElementById('create-modal-name').value.trim();
@@ -2514,7 +2833,17 @@ async function submitCreateModal() {
 
   if (type === 'page') {
     const template = document.getElementById('create-modal-template').value;
-    const newPath = await window.api.createPage(dest, name, template, collectModalMeta());
+    // If the template has custom {{fields}}, prompt for them first
+    let customVars;
+    if (template) {
+      let vars = [];
+      try { vars = await window.api.getTemplateVariables(template); } catch {}
+      if (vars.length) {
+        customVars = await promptTemplateVariables(vars);
+        if (customVars === null) return; // user cancelled — keep the create modal open
+      }
+    }
+    const newPath = await window.api.createPage(dest, name, template, collectModalMeta(), customVars);
     if (modalLinkState.create.length && newPath) {
       const content = await window.api.readNote(newPath);
       await window.api.writeNote(newPath, upsertRelatedLine(content, modalLinkState.create));
@@ -3833,6 +4162,7 @@ function handlePaletteSearch() {
     { label: 'Open Trash', subtitle: 'Action: /trash', action: () => showTrashModal() },
     { label: 'Note History (Current Note)', subtitle: 'Action: /history', action: () => showHistoryModal() },
     { label: 'Open Table Editor', subtitle: 'Action: /table', action: () => openTableEditor('insert') },
+    { label: 'Check for Updates', subtitle: 'Action: /update', action: () => checkForUpdates() },
   ];
 
   const matchingCommands = commands.filter(cmd => 

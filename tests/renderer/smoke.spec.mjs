@@ -166,14 +166,19 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
       pandocPath: '',
       pdfExport: { theme: 'light', pageSize: 'A4', openAfter: true, reveal: false },
       quickCaptureShortcut: 'CommandOrControl+Shift+N',
+      clipboardCaptureShortcut: 'CommandOrControl+Shift+G',
+      clipboardCaptureTarget: '',
     }),
-    saveSettings: async (s) => s,
+    saveSettings: async (s) => { window.__savedSettings = s; return s; },
     getNotebookTree: async () => { window.__treeCalls++; return JSON.parse(JSON.stringify(tree)); },
     readNote: async (p) => files[p] || '',
     writeNote: async (p, c) => { files[p] = c; window.__writes.push(p); return true; },
-    createPage: async () => '/nb/new.md',
+    createPage: async (dir, title, template, meta, customVars) => { window.__createPageCall = { dir, title, template, meta, customVars }; return '/nb/new.md'; },
+    getTemplateVariables: async (name) => (window.__templateVars || []),
     createSection: async () => '/nb/sec',
     setSectionMeta: async (dir, desc) => { window.__sectionMeta = { dir, desc }; return true; },
+    checkForUpdates: async () => (window.__updateResult || { status: 'current', version: '1.0.0' }),
+    getAppVersion: async () => '1.0.0',
     deleteNode: async () => true,
     renameNode: async () => true,
     relocateNode: async () => true,
@@ -1637,6 +1642,96 @@ check('saving section edit persists the description', await page.evaluate(() =>
 await page.evaluate(() => window.openSection('Projects', '/nb/Projects'));
 await page.waitForTimeout(400);
 check('section landing shows the description', (await page.locator('#landing-subtitle').innerText()).includes('Everything about active projects'));
+
+// --- 42. [[ note-link autocomplete ---
+await page.evaluate(async () => { await window.openNote('/nb/smoke.md'); });
+await page.locator('#btn-mode-edit').click();
+await editor.evaluate((ta) => { ta.value = ''; ta.selectionStart = ta.selectionEnd = 0; window.handleEditorInput(); });
+await editor.focus();
+await editor.type('See [[very');
+await page.waitForTimeout(200);
+check('[[ opens the autocomplete popup', await page.evaluate(() =>
+  document.getElementById('wikilink-autocomplete').style.display === 'block' &&
+  document.querySelectorAll('#wikilink-autocomplete .wikilink-option').length >= 1));
+check('[[ popup fuzzy-matches the page title', await page.evaluate(() =>
+  document.querySelector('#wikilink-autocomplete .wikilink-option .wikilink-title').textContent.includes('Very Long')));
+await editor.press('Enter');
+await page.waitForTimeout(200);
+check('selecting inserts a wiki-link resolved by filename', await page.evaluate(() => {
+  const v = document.getElementById('note-editor').value;
+  return /\[\[alpha(\|[^\]]*)?\]\]/.test(v) && document.getElementById('wikilink-autocomplete').style.display === 'none';
+}));
+// Escape dismisses without inserting
+await editor.evaluate((ta) => { ta.value = 'x [[very'; ta.selectionStart = ta.selectionEnd = ta.value.length; window.handleEditorInput(); });
+await page.waitForTimeout(150);
+await editor.press('Escape');
+check('Escape closes the popup', await page.evaluate(() =>
+  document.getElementById('wikilink-autocomplete').style.display === 'none'));
+
+// --- 43. Editor power keys: move / duplicate / delete lines ---
+await editor.evaluate((ta) => {
+  ta.value = 'one\ntwo\nthree';
+  ta.selectionStart = ta.selectionEnd = ta.value.indexOf('two'); // caret on line 2
+  window.handleEditorInput();
+});
+await editor.press('Alt+ArrowUp');
+await page.waitForTimeout(100);
+check('Alt+Up moves the line up', await page.evaluate(() =>
+  document.getElementById('note-editor').value === 'two\none\nthree'));
+await editor.press('Alt+ArrowDown');
+await page.waitForTimeout(100);
+check('Alt+Down moves the line back down', await page.evaluate(() =>
+  document.getElementById('note-editor').value === 'one\ntwo\nthree'));
+await editor.press('Shift+Alt+ArrowDown');
+await page.waitForTimeout(100);
+check('Shift+Alt+Down duplicates the line', await page.evaluate(() =>
+  document.getElementById('note-editor').value === 'one\ntwo\ntwo\nthree'));
+await editor.press(`${MOD}+Shift+k`);
+await page.waitForTimeout(100);
+check('Cmd/Ctrl+Shift+K deletes the line', await page.evaluate(() =>
+  document.getElementById('note-editor').value === 'one\ntwo\nthree'));
+
+// --- 44. Template variable prompt ---
+await page.evaluate(() => { window.__templateVars = ['project', 'attendees']; window.__createPageCall = null; });
+await page.evaluate(() => window.promptCreatePage('/nb'));
+await page.waitForTimeout(150);
+await page.evaluate(() => {
+  document.getElementById('create-modal-name').value = 'Kickoff';
+  document.getElementById('create-modal-template').value = 'meeting.md';
+});
+// createPage template select only has the blank option in the stub; set value directly is fine
+await page.evaluate(() => {
+  const sel = document.getElementById('create-modal-template');
+  if (![...sel.options].some(o => o.value === 'meeting.md')) { const o = document.createElement('option'); o.value = 'meeting.md'; sel.appendChild(o); }
+  sel.value = 'meeting.md';
+});
+// Don't await submitCreateModal's promise here — with custom vars it stays
+// pending until the fill-in modal is submitted (which happens below)
+await page.evaluate(() => { window.submitCreateModal(); });
+await page.waitForTimeout(200);
+check('template with custom vars opens the fill-in modal', await page.evaluate(() =>
+  document.getElementById('template-vars-modal').classList.contains('active') &&
+  document.querySelectorAll('#template-vars-body .template-var-input').length === 2));
+check('custom var labels are prettified', await page.evaluate(() =>
+  Array.from(document.querySelectorAll('#template-vars-body label')).map(l => l.textContent).join(',') === 'Project,Attendees'));
+await page.evaluate(() => {
+  const inputs = document.querySelectorAll('#template-vars-body .template-var-input');
+  inputs[0].value = 'Apollo'; inputs[1].value = 'Sam, Kim';
+  window.submitTemplateVars();
+});
+await page.waitForTimeout(300);
+check('filled values are passed to createPage', await page.evaluate(() =>
+  window.__createPageCall && window.__createPageCall.customVars &&
+  window.__createPageCall.customVars.project === 'Apollo' &&
+  window.__createPageCall.customVars.attendees === 'Sam, Kim'));
+await page.evaluate(() => { window.__templateVars = []; });
+
+// --- 45. Manual update check ---
+await page.evaluate(() => { window.__updateResult = { status: 'current', version: '1.0.0' }; });
+await page.evaluate(() => window.checkForUpdates());
+await page.waitForTimeout(200);
+check('update check reports latest version via toast', await page.evaluate(() =>
+  document.getElementById('app-toast').textContent.includes('latest version')));
 
 } finally {
   if (browser) await browser.close();

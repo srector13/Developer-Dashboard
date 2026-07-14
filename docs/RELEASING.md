@@ -49,6 +49,10 @@ Any OV/EV code-signing certificate works. (If you move to Azure Trusted Signing 
 
 Hardened runtime + entitlements (`build/entitlements.mac.plist`) are always applied so a signed build is notarization-ready. Notarization itself runs only when the Apple credentials are present (the workflow flips the config's `notarize` off-switch on the command line).
 
+## Auto-update
+
+The installed builds (NSIS installer, dmg) self-update via `electron-updater`, reading the `latest.yml` / `latest-mac.yml` feed electron-builder publishes to each GitHub release. Updates are picked up from **published** (non-draft) releases only, so the flow is: build → review the draft → **publish** → installed apps update on their next launch. The **portable exe** and **zip** cannot update in place and are skipped (they show a "download the latest from Releases" message on a manual check). macOS auto-update requires the build to be signed + notarized; unsigned macOS builds won't self-update.
+
 ## Cutting a release
 
 ```sh

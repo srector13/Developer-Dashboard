@@ -45,7 +45,12 @@ flowchart LR
 
 ## Little comforts
 
+- **Link as you type.** Type `[[` in a note and a fuzzy list of your page titles pops up — pick one to drop in a link (and the target page gains a backlink).
+- **Power-editor keys.** Move lines with Alt+↑/↓, duplicate with Shift+Alt+↓, delete a line with ⌘⇧K / Ctrl+Shift+K.
+- **Template fields.** A template with `{{project}}` or `{{attendees}}` asks you to fill those in when you create the page — alongside the automatic `{{date}}`, `{{title}}`, and friends.
 - **Spell check.** Misspelled words get the familiar red underline; right-click one for suggested corrections or to add it to your dictionary.
+- **Auto-update.** The installed app checks for new versions and offers a one-click restart to update — no more manual downloads. (The portable version doesn't self-update.)
+- **Clipboard capture.** A second global shortcut (⌘⇧G / Ctrl+Shift+G) files whatever's on your clipboard straight into a note with no window at all — copy, press, done.
 - **Quick capture.** A system-wide shortcut (⌘⇧N / Ctrl+Shift+N) pops up a small note-jotting window from anywhere — even when the app is in the background — and files what you type into today's daily note.
 - **Six looks.** Light, Dark, Midnight, Forest, Sepia, or follow your system.
 - **A safety net.** Deleted notes go to a built-in trash you can restore from, and the app quietly keeps earlier versions of each note so you can bring back last Tuesday's wording.
