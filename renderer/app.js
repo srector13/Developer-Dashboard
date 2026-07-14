@@ -1830,6 +1830,10 @@ function insertFormatting(type) {
       insertion = `\n- ${selection}`;
       cursorOffset = insertion.length;
       break;
+    case 'list-number':
+      insertion = `\n1. ${selection}`;
+      cursorOffset = insertion.length;
+      break;
     case 'list-check':
       insertion = `\n- [ ] ${selection}`;
       cursorOffset = insertion.length;

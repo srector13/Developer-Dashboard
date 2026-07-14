@@ -178,6 +178,9 @@
     <button class="fmt-btn" data-fmt="bullet" title="Bullet List item">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
     </button>
+    <button class="fmt-btn" data-fmt="numbered" title="Numbered List item">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></svg>
+    </button>
     <button class="fmt-btn" data-fmt="task" title="Task Checklist item">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
     </button>
@@ -325,6 +328,7 @@
       bold: () => wrapSelection('**', '**', 'bold text'),
       italic: () => wrapSelection('*', '*', 'italic text'),
       bullet: () => prefixLines('- '),
+      numbered: () => prefixLines('', true),
       task: () => prefixLines('- [ ] '),
       separator: () => insertSeparator(),
       blockquote: () => prefixLines('> '),
