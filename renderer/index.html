@@ -181,6 +181,10 @@
           <button class="toolbar-btn" onclick="insertFormatting('blockquote')" title="Blockquote text highlight">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
           </button>
+          <button class="toolbar-btn" onclick="insertFormatting('tldr')" title="Insert a > TL;DR summary callout">TL;DR</button>
+          <button class="toolbar-btn" onclick="openLinkModal()" title="Insert a hyperlink">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+          </button>
 
           <!-- 3. Code Block Dropdown -->
           <div class="editor-dropdown">
@@ -189,31 +193,31 @@
               <svg class="chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
             </button>
             <div id="dropdown-code" class="dropdown-menu glass-card">
-              <div class="dropdown-item" onclick="insertCodeBlock('javascript')" title="JavaScript Code Block">JavaScript</div>
-              <div class="dropdown-item" onclick="insertCodeBlock('typescript')" title="TypeScript Code Block">TypeScript</div>
-              <div class="dropdown-item" onclick="insertCodeBlock('python')" title="Python Code Block">Python</div>
-              <div class="dropdown-item" onclick="insertCodeBlock('html')" title="HTML Markup Block">HTML</div>
-              <div class="dropdown-item" onclick="insertCodeBlock('css')" title="CSS Stylesheet Block">CSS</div>
-              <div class="dropdown-item" onclick="insertCodeBlock('markdown')" title="Markdown Text Block">Markdown</div>
               <div class="dropdown-item" onclick="insertCodeBlock('bash')" title="Bash/Shell Command Script">Bash / Shell</div>
-              <div class="dropdown-item" onclick="insertCodeBlock('json')" title="JSON Data Format Block">JSON</div>
-              <div class="dropdown-item" onclick="insertCodeBlock('sql')" title="SQL Query Block">SQL</div>
-              <div class="dropdown-item" onclick="insertCodeBlock('cpp')" title="C++ Source File Block">C++</div>
               <div class="dropdown-item" onclick="insertCodeBlock('csharp')" title="C# Code Block">C#</div>
-              <div class="dropdown-item" onclick="insertCodeBlock('java')" title="Java Class Code Block">Java</div>
-              <div class="dropdown-item" onclick="insertCodeBlock('kotlin')" title="Kotlin Code Block">Kotlin</div>
-              <div class="dropdown-item" onclick="insertCodeBlock('go')" title="Go Programming Block">Go</div>
-              <div class="dropdown-item" onclick="insertCodeBlock('rust')" title="Rust Safety Code Block">Rust</div>
-              <div class="dropdown-item" onclick="insertCodeBlock('ruby')" title="Ruby Script Block">Ruby</div>
-              <div class="dropdown-item" onclick="insertCodeBlock('php')" title="PHP Server Script Block">PHP</div>
-              <div class="dropdown-item" onclick="insertCodeBlock('swift')" title="Swift iOS App Code Block">Swift</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('cpp')" title="C++ Source File Block">C++</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('css')" title="CSS Stylesheet Block">CSS</div>
               <div class="dropdown-item" onclick="insertCodeBlock('dart')" title="Dart App Code Block">Dart</div>
-              <div class="dropdown-item" onclick="insertCodeBlock('r')" title="R Statistics Block">R</div>
-              <div class="dropdown-item" onclick="insertCodeBlock('scala')" title="Scala Code Block">Scala</div>
-              <div class="dropdown-item" onclick="insertCodeBlock('perl')" title="Perl Script Block">Perl</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('go')" title="Go Programming Block">Go</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('html')" title="HTML Markup Block">HTML</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('java')" title="Java Class Code Block">Java</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('javascript')" title="JavaScript Code Block">JavaScript</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('json')" title="JSON Data Format Block">JSON</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('kotlin')" title="Kotlin Code Block">Kotlin</div>
               <div class="dropdown-item" onclick="insertCodeBlock('lua')" title="Lua Script Block">Lua</div>
-              <div class="dropdown-item" onclick="insertCodeBlock('yaml')" title="YAML Config Format Block">YAML</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('markdown')" title="Markdown Text Block">Markdown</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('perl')" title="Perl Script Block">Perl</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('php')" title="PHP Server Script Block">PHP</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('python')" title="Python Code Block">Python</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('r')" title="R Statistics Block">R</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('ruby')" title="Ruby Script Block">Ruby</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('rust')" title="Rust Safety Code Block">Rust</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('scala')" title="Scala Code Block">Scala</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('sql')" title="SQL Query Block">SQL</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('swift')" title="Swift iOS App Code Block">Swift</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('typescript')" title="TypeScript Code Block">TypeScript</div>
               <div class="dropdown-item" onclick="insertCodeBlock('xml')" title="XML Format Block">XML</div>
+              <div class="dropdown-item" onclick="insertCodeBlock('yaml')" title="YAML Config Format Block">YAML</div>
             </div>
           </div>
  
@@ -666,6 +670,50 @@
       <div class="modal-footer">
         <button class="btn btn-outline" onclick="hideCreateModal()">Cancel</button>
         <button class="btn btn-primary" onclick="submitCreateModal()">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Insert Hyperlink Modal -->
+  <div id="link-modal" class="modal-overlay">
+    <div class="glass-card modal-card">
+      <div class="modal-header">
+        <h3>Insert Link</h3>
+        <button class="close-btn" onclick="hideLinkModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Link Type</label>
+          <div class="link-type-toggle" style="display:flex; gap:8px;">
+            <label style="display:flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+              <input type="radio" name="link-kind" value="web" checked onchange="updateLinkModalHint()"> Web hyperlink
+            </label>
+            <label style="display:flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+              <input type="radio" name="link-kind" value="file" onchange="updateLinkModalHint()"> File link
+            </label>
+          </div>
+        </div>
+        <div class="form-group">
+          <label id="link-modal-target-label">URL</label>
+          <input type="text" id="link-modal-target" placeholder="https://example.com" onkeydown="handleLinkModalEnter(event)">
+        </div>
+        <div class="form-group">
+          <label>Display Text <span class="item-desc">(optional — defaults to the link)</span></label>
+          <input type="text" id="link-modal-title" placeholder="e.g. Project spec" onkeydown="handleLinkModalEnter(event)">
+        </div>
+        <div class="form-group">
+          <label style="display:flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+            <input type="checkbox" id="link-modal-hover" onchange="toggleLinkHoverField()"> Add hover tooltip
+          </label>
+        </div>
+        <div class="form-group" id="link-modal-hover-group" style="display:none;">
+          <label>Tooltip Text <span class="item-desc">(shown when hovering the link)</span></label>
+          <input type="text" id="link-modal-hovertext" placeholder="e.g. Opens the shared spec" onkeydown="handleLinkModalEnter(event)">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="hideLinkModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="submitLinkModal()">Insert</button>
       </div>
     </div>
   </div>

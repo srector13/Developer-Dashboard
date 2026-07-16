@@ -1734,6 +1734,100 @@ await page.waitForTimeout(200);
 check('update check reports latest version via toast', await page.evaluate(() =>
   document.getElementById('app-toast').textContent.includes('latest version')));
 
+// --- 46. Section description box accepts real keystrokes (regression: greyed box) ---
+await page.evaluate(() => window.promptCreateSection('/nb'));
+await page.waitForTimeout(150);
+check('section description field is editable (not disabled/readonly)', await page.evaluate(() => {
+  const t = document.getElementById('create-modal-section-desc');
+  return t && !t.disabled && !t.readOnly && t.offsetParent !== null;
+}));
+await page.locator('#create-modal-section-desc').click();
+await page.locator('#create-modal-section-desc').fill('');
+await page.keyboard.type('Design docs and specs');
+check('section description captures typed text', await page.evaluate(() =>
+  document.getElementById('create-modal-section-desc').value === 'Design docs and specs'));
+await page.evaluate(() => window.hideCreateModal());
+await page.waitForTimeout(100);
+
+// Edit-existing-section path (promptRenameNode) uses the same box — user's report
+await page.evaluate(() => window.promptRenameNode('/nb/SomeSection', 'SomeSection'));
+await page.waitForTimeout(150);
+check('edit-section shows an editable description box', await page.evaluate(() => {
+  const t = document.getElementById('create-modal-section-desc');
+  return document.getElementById('create-modal-title').innerText === 'Edit Section' &&
+    document.getElementById('create-modal-section-options').style.display === 'block' &&
+    t && !t.disabled && !t.readOnly;
+}));
+await page.locator('#create-modal-section-desc').click();
+await page.locator('#create-modal-section-desc').fill('');
+await page.keyboard.type('Updated summary');
+check('edit-section description captures typed text', await page.evaluate(() =>
+  document.getElementById('create-modal-section-desc').value === 'Updated summary'));
+await page.evaluate(() => window.hideCreateModal());
+await page.waitForTimeout(100);
+
+// --- 47. Drawer search box accepts real keystrokes (regression: can't type) ---
+await page.evaluate(() => window.openDrawerView('search'));
+await page.waitForTimeout(150);
+await page.locator('#search-input').fill('');
+await page.locator('#search-input').click();
+await page.keyboard.type('hello world');
+check('drawer search box captures typed keystrokes', await page.evaluate(() =>
+  document.getElementById('search-input').value === 'hello world'));
+await page.locator('#search-input').fill('');
+await page.waitForTimeout(100);
+
+// --- 48. TL;DR toolbar button ---
+await page.evaluate(() => {
+  const ed = document.getElementById('note-editor');
+  ed.value = '';
+  ed.selectionStart = ed.selectionEnd = 0;
+  window.insertFormatting('tldr');
+});
+check('TL;DR inserts a blockquote callout', await page.evaluate(() =>
+  document.getElementById('note-editor').value.includes('> **TL;DR:**')));
+
+// --- 49. Insert hyperlink modal ---
+await page.evaluate(() => {
+  const ed = document.getElementById('note-editor');
+  ed.value = '';
+  ed.selectionStart = ed.selectionEnd = 0;
+  window.openLinkModal();
+});
+await page.waitForTimeout(120);
+check('link modal opens', await page.evaluate(() =>
+  document.getElementById('link-modal').classList.contains('active')));
+// Web link with a hover tooltip
+await page.evaluate(() => {
+  document.querySelector('input[name="link-kind"][value="web"]').checked = true;
+  window.updateLinkModalHint();
+});
+await page.locator('#link-modal-target').fill('example.com/spec');
+await page.locator('#link-modal-title').fill('Spec');
+await page.evaluate(() => { document.getElementById('link-modal-hover').checked = true; window.toggleLinkHoverField(); });
+await page.locator('#link-modal-hovertext').fill('The shared spec');
+await page.evaluate(() => window.submitLinkModal());
+await page.waitForTimeout(100);
+check('web link inserts markdown with https scheme + tooltip', await page.evaluate(() =>
+  document.getElementById('note-editor').value.trim() === '[Spec](https://example.com/spec "The shared spec")'));
+// File link, no tooltip, absolute path gets file:// scheme
+await page.evaluate(() => {
+  const ed = document.getElementById('note-editor');
+  ed.value = ''; ed.selectionStart = ed.selectionEnd = 0;
+  window.openLinkModal();
+});
+await page.waitForTimeout(100);
+await page.evaluate(() => {
+  document.querySelector('input[name="link-kind"][value="file"]').checked = true;
+  window.updateLinkModalHint();
+});
+await page.locator('#link-modal-target').fill('/Users/me/spec.pdf');
+await page.locator('#link-modal-title').fill('Local spec');
+await page.evaluate(() => window.submitLinkModal());
+await page.waitForTimeout(100);
+check('file link inserts markdown with file:// scheme', await page.evaluate(() =>
+  document.getElementById('note-editor').value.trim() === '[Local spec](file:///Users/me/spec.pdf)'));
+
 } finally {
   if (browser) await browser.close();
 }

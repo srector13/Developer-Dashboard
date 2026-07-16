@@ -1846,6 +1846,11 @@ function insertFormatting(type) {
       insertion = `\n> ${selection}`;
       cursorOffset = insertion.length;
       break;
+    case 'tldr':
+      insertion = `\n> **TL;DR:** ${selection}`;
+      // Place caret right after "TL;DR: " when there's no selection
+      cursorOffset = selection ? insertion.length : insertion.length;
+      break;
   }
 
   textarea.value = text.substring(0, start) + insertion + text.substring(end);
@@ -2770,6 +2775,105 @@ function handleCreateModalEnter(e) {
   if (e.key === 'Enter') {
     submitCreateModal();
   }
+}
+
+// --- Insert Hyperlink Modal -------------------------------------------------
+// Remembers where the caret was so we can insert the link back into the editor
+let linkModalSelection = null;
+
+function openLinkModal() {
+  const textarea = document.getElementById('note-editor');
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  linkModalSelection = { start, end };
+  const selected = textarea.value.substring(start, end);
+
+  // Reset fields; prefill display text with any current selection
+  document.querySelector('input[name="link-kind"][value="web"]').checked = true;
+  document.getElementById('link-modal-target').value = '';
+  document.getElementById('link-modal-title').value = selected || '';
+  document.getElementById('link-modal-hover').checked = false;
+  document.getElementById('link-modal-hovertext').value = '';
+  document.getElementById('link-modal-hover-group').style.display = 'none';
+  updateLinkModalHint();
+
+  document.getElementById('link-modal').classList.add('active');
+  setTimeout(() => document.getElementById('link-modal-target').focus(), 100);
+}
+
+function hideLinkModal() {
+  document.getElementById('link-modal').classList.remove('active');
+}
+
+function updateLinkModalHint() {
+  const kind = document.querySelector('input[name="link-kind"]:checked').value;
+  const label = document.getElementById('link-modal-target-label');
+  const input = document.getElementById('link-modal-target');
+  if (kind === 'file') {
+    label.textContent = 'File Path';
+    input.placeholder = 'e.g. /Users/me/docs/spec.pdf or ./notes/spec.md';
+  } else {
+    label.textContent = 'URL';
+    input.placeholder = 'https://example.com';
+  }
+}
+
+function toggleLinkHoverField() {
+  const on = document.getElementById('link-modal-hover').checked;
+  document.getElementById('link-modal-hover-group').style.display = on ? 'block' : 'none';
+  if (on) setTimeout(() => document.getElementById('link-modal-hovertext').focus(), 50);
+}
+
+function handleLinkModalEnter(e) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    submitLinkModal();
+  }
+}
+
+function submitLinkModal() {
+  const kind = document.querySelector('input[name="link-kind"]:checked').value;
+  let target = document.getElementById('link-modal-target').value.trim();
+  const title = document.getElementById('link-modal-title').value.trim();
+  const wantHover = document.getElementById('link-modal-hover').checked;
+  const hoverText = document.getElementById('link-modal-hovertext').value.trim();
+
+  if (!target) {
+    showToast('Enter a URL or file path first');
+    document.getElementById('link-modal-target').focus();
+    return;
+  }
+
+  // Normalize the target based on link type
+  const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(target) || target.startsWith('mailto:');
+  if (kind === 'web') {
+    if (!hasScheme) target = 'https://' + target;
+  } else {
+    // File link: absolute paths get a file:// scheme; relative paths pass through
+    if (!hasScheme) {
+      if (target.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(target)) {
+        target = 'file://' + (target[0] === '/' ? '' : '/') + target.replace(/\\/g, '/');
+      }
+    }
+  }
+
+  const display = title || target;
+  const tooltip = wantHover ? (hoverText || display) : '';
+  const markdown = tooltip
+    ? `[${display}](${target} "${tooltip.replace(/"/g, '\\"')}")`
+    : `[${display}](${target})`;
+
+  const textarea = document.getElementById('note-editor');
+  const sel = linkModalSelection || { start: textarea.selectionStart, end: textarea.selectionEnd };
+  const text = textarea.value;
+  textarea.value = text.substring(0, sel.start) + markdown + text.substring(sel.end);
+  const caret = sel.start + markdown.length;
+  textarea.selectionStart = caret;
+  textarea.selectionEnd = caret;
+
+  hideLinkModal();
+  textarea.focus();
+  handleEditorInput();
 }
 
 // Manual update check from the palette; auto-checks also run on launch.

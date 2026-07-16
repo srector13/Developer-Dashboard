@@ -256,6 +256,13 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    // The hidden quick-capture window is still a live BrowserWindow, so
+    // window-all-closed never fires on its own — without this the process
+    // (and its global shortcuts / the portable launcher stub) lingers,
+    // stacking a new zombie session on every launch. Tear it down and quit.
+    if (captureWindow && !captureWindow.isDestroyed()) captureWindow.destroy();
+    captureWindow = null;
+    if (process.platform !== 'darwin') app.quit();
   });
 
   updateWatcher();
@@ -318,6 +325,22 @@ ipcMain.handle('select-folder', async () => {
   return pathChosen;
 });
 
+
+// Single-instance lock: a second launch (or a leftover zombie trying to
+// start again) hands off to the running app and exits, instead of stacking
+// another process that fights over the global shortcuts.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      if (!mainWindow.isVisible()) mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+}
 
 app.whenReady().then(async () => {
   createWindow();
@@ -400,6 +423,12 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+// Make sure the hidden capture window can't hold up a quit
+app.on('before-quit', () => {
+  if (captureWindow && !captureWindow.isDestroyed()) captureWindow.destroy();
+  captureWindow = null;
 });
 
 // Helper: YAML frontmatter list parsing
@@ -984,6 +1013,8 @@ ipcMain.handle('create-page', async (event, dirPath, title, templateName, meta?:
     const templatePath = path.join(templatesDir, templateName);
     if (fs.existsSync(templatePath)) {
       let raw = await fsp.readFile(templatePath, 'utf8');
+      // Strip the template-title marker so it doesn't appear in the new page
+      raw = raw.replace(/^<!--\s*template-title:\s*.+?\s*-->\s*\n?/, '');
       raw = applyTemplateVars(raw, builtinTemplateVars(title, createdDate));
       // User-provided custom fields ({{project}}, {{attendees}}, …)
       if (customVars) raw = applyTemplateVars(raw, customVars);
@@ -1688,10 +1719,14 @@ ipcMain.handle('list-templates', async () => {
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
       const fullPath = path.join(dir, entry.name);
+      // Templates are note bodies (no frontmatter/H1), so their display name
+      // is stored in a leading marker written at creation; fall back to a
+      // prettified filename for templates made by hand.
       let title = cleanDisplayName(path.basename(entry.name, '.md'));
       try {
-        const meta = parseNoteMeta(await fsp.readFile(fullPath, 'utf8'), fullPath);
-        title = meta.title;
+        const raw = await fsp.readFile(fullPath, 'utf8');
+        const m = raw.match(/^<!--\s*template-title:\s*(.+?)\s*-->/);
+        if (m) title = m[1];
       } catch {}
       templates.push({ name: entry.name, fsPath: fullPath, title });
     }
@@ -1709,8 +1744,11 @@ ipcMain.handle('create-template', async (event, name: string) => {
   await fsp.mkdir(dir, { recursive: true });
 
   // Templates are note *bodies*: create-page prepends its own frontmatter
-  // and H1, so a starter template must not include those.
+  // and H1, so a starter template must not include those. The first line
+  // records the display name (stripped when a page is created from it).
   const starter = [
+    `<!-- template-title: ${name} -->`,
+    '',
     '## Overview',
     '',
     'Notes about {{title}}, started on {{weekday}} {{date}}.',
