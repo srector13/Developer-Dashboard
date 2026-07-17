@@ -22,6 +22,16 @@ The portable target keeps **all app state next to the executable** instead of `%
 
 The zip distribution can opt in to the same behavior: create a folder named `MarkdownNotebookData` next to the executable once, and the app becomes self-contained from then on. Without that folder, zip builds use the normal per-user location.
 
+## Startup performance
+
+Where launch time goes, and which build to use:
+
+- **Portable exe**: the launcher **extracts the whole app to `%TEMP%` on every run** (that's what the splash bitmap covers). That extraction is the bulk of a portable launch — often 5–15s on machines with antivirus scanning — and it cannot be skipped without reintroducing the stale-code bug above. Portable is for USB-stick / no-install situations, not the fastest daily driver.
+- **Setup installer (recommended for daily use)**: installs once, so launches skip extraction entirely — and it's the only Windows build that **auto-updates**.
+- **Zip**: extract once yourself, launch the exe directly — same fast launches as the installer, but no auto-update.
+
+In-app startup work is kept off the critical path: the first window paints before the notebook scan (in-page loading overlay), mermaid (~3&nbsp;MB) and the markdown/highlight pipeline load lazily on first use, and note metadata is served from a persistent cache (`userData/scan-meta-cache-v1.json`) so unchanged files cost one `stat()` on a cold start; full-text search docs are rebuilt in the background afterwards. Milestone timings are logged as `[startup] …` lines (run a packaged build with `--enable-logging` to see them).
+
 Independent of portable state, the app maintains a per-user pointer file (`~/.markdown-notebook/last-notebook.json`) recording the active notebook path. A fresh portable copy — or one whose data folder was deleted — falls back to that pointer, so the notebook reopens without re-selection; the folder chooser appears only when neither settings nor the pointer resolve to an existing directory.
 
 ## Code signing

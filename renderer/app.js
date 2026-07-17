@@ -293,13 +293,38 @@ function mermaidInit(theme) {
   window.mermaid.initialize({ startOnLoad: false, theme, securityLevel: 'loose' });
 }
 
+// Mermaid is 3+MB of JS. Loading it with a <script> tag blocked the app's
+// first paint on EVERY launch, diagrams or not — the single biggest chunk of
+// perceived startup time. It's now injected on first use only.
+let mermaidLoadPromise = null;
+function ensureMermaid() {
+  if (window.mermaid) return Promise.resolve(window.mermaid);
+  if (!mermaidLoadPromise) {
+    mermaidLoadPromise = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'vendor/mermaid.min.js';
+      s.onload = () => {
+        // Arrive already initialized to the current app theme
+        try { mermaidInit(THEMES[resolveThemeName(appSettings.theme)].mermaid); } catch { /* theme applies on next switch */ }
+        resolve(window.mermaid);
+      };
+      s.onerror = () => {
+        mermaidLoadPromise = null; // allow a retry on the next diagram
+        reject(new Error('Could not load the diagram renderer.'));
+      };
+      document.head.appendChild(s);
+    });
+  }
+  return mermaidLoadPromise;
+}
+
 // Run `fn` with mermaid initialized to an export theme, restoring the app
 // theme afterwards. mermaid.initialize is GLOBAL, so this must never
 // interleave with an in-app preview render — chaining onto the serialized
 // previewRenderQueue is what guarantees that.
 function withMermaidTheme(exportTheme, fn) {
   previewRenderQueue = previewRenderQueue.then(async () => {
-    if (!window.mermaid) return fn();
+    try { await ensureMermaid(); } catch { return fn(); }
     mermaidInit(exportTheme);
     try {
       return await fn();
@@ -1145,8 +1170,10 @@ async function doRenderMarkdownPreview() {
   // Render Mermaid diagrams. mermaid.run() is async — it must be awaited,
   // otherwise the SVG sizing below runs before the SVGs exist and diagrams
   // stay capped at Mermaid's inline max-width instead of filling the pane.
-  if (window.mermaid) {
+  // The library itself loads lazily, and only when the note has diagrams.
+  if (preview.querySelector('.notebook-mermaid')) {
     try {
+      await ensureMermaid();
       await window.mermaid.run({
         querySelector: '#preview-pane .notebook-mermaid',
       });
@@ -4721,7 +4748,8 @@ async function popoutMermaid(btn) {
   let svgEl = null;
   const source = (pre.dataset.mermaidSrc || '').trim();
   try {
-    if (source && window.mermaid) {
+    if (source) {
+      await ensureMermaid();
       // Re-render from source: a fresh SVG with its own unique id, so markers
       // and styles don't collide with the inline diagram's ids.
       const { svg } = await window.mermaid.render(`popout-diagram-${Date.now()}`, source);
@@ -6366,9 +6394,8 @@ async function renderBuilderPreview() {
     errorBox.style.display = 'none';
     return;
   }
-  if (!window.mermaid) return;
-
   try {
+    await ensureMermaid();
     const { svg } = await window.mermaid.render(`builder-preview-svg-${++builderRenderCounter}`, code);
     preview.innerHTML = svg;
     errorBox.style.display = 'none';

@@ -8,6 +8,15 @@ import { promisify } from 'util';
 const execFileAsync = promisify(execFile);
 const fsp = fs.promises;
 
+// Startup timing: milestones logged relative to main-process module load, so
+// slow launches can be diagnosed from the console (`--enable-logging` on a
+// packaged build). Renderer-side numbers are logged from app.js separately.
+const STARTUP_T0 = Date.now();
+let startupTreeLogged = false;
+function logStartup(label: string) {
+  console.log(`[startup] ${label}: ${Date.now() - STARTUP_T0}ms`);
+}
+
 let mainWindow: BrowserWindow | null = null;
 
 // Portable mode: keep ALL app state (settings, window state, caches) next to
@@ -271,6 +280,7 @@ function createWindow() {
   const reveal = () => {
     if (revealed) return;
     revealed = true;
+    logStartup('window shown (first paint)');
     if (mainWindow && !mainWindow.isVisible()) mainWindow.show();
   };
   mainWindow.once('ready-to-show', reveal);
@@ -366,6 +376,7 @@ if (!gotSingleInstanceLock) {
 }
 
 app.whenReady().then(async () => {
+  logStartup('electron ready');
   createWindow();
 
   // Register after the renderer loads so a registration failure (shortcut
@@ -452,6 +463,8 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   if (captureWindow && !captureWindow.isDestroyed()) captureWindow.destroy();
   captureWindow = null;
+  // Don't lose a pending debounced write of the startup meta cache
+  flushMetaCacheNow();
 });
 
 // Helper: YAML frontmatter list parsing
@@ -628,6 +641,79 @@ const SCAN_CACHE_MAX = 5000;
 // granularity on some filesystems plus the app's own write→rescan races.
 const SCAN_CACHE_FRESHNESS_MS = 2000;
 
+// ---------------------------------------------------------------------------
+// PERSISTENT meta cache: the in-memory scanCache dies with the process, so
+// every COLD start used to read and parse every note before the tree could
+// render. Metadata (title/tags/tasks — small) is persisted keyed on
+// (mtime, size); an unchanged file now costs one stat() on startup. Search
+// docs (full text) are NOT persisted — they're rebuilt in the background
+// after the tree is returned, and searches await that build.
+// ---------------------------------------------------------------------------
+interface PersistedMeta { mtimeMs: number; size: number; meta: ReturnType<typeof parseNoteMeta>; }
+const SCAN_META_CACHE_FILE = () => path.join(app.getPath('userData'), 'scan-meta-cache-v1.json');
+let persistedMetaCache: Record<string, PersistedMeta> | null = null;
+
+function loadPersistedMetaCache(): Record<string, PersistedMeta> {
+  if (persistedMetaCache) return persistedMetaCache;
+  try {
+    const raw = JSON.parse(fs.readFileSync(SCAN_META_CACHE_FILE(), 'utf8'));
+    persistedMetaCache = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  } catch {
+    persistedMetaCache = {};
+  }
+  return persistedMetaCache!;
+}
+
+let metaCacheSaveTimer: NodeJS.Timeout | null = null;
+function saveMetaCacheSoon() {
+  if (!persistedMetaCache) return;
+  if (metaCacheSaveTimer) clearTimeout(metaCacheSaveTimer);
+  metaCacheSaveTimer = setTimeout(() => {
+    metaCacheSaveTimer = null;
+    fsp.writeFile(SCAN_META_CACHE_FILE(), JSON.stringify(persistedMetaCache)).catch(() => {});
+  }, 3000);
+}
+
+function flushMetaCacheNow() {
+  if (metaCacheSaveTimer) { clearTimeout(metaCacheSaveTimer); metaCacheSaveTimer = null; }
+  if (!persistedMetaCache) return;
+  try { fs.writeFileSync(SCAN_META_CACHE_FILE(), JSON.stringify(persistedMetaCache)); } catch { /* best-effort */ }
+}
+
+// Paths served from the persisted cache during the CURRENT get-notebook-tree
+// scan — their search docs still need building. Non-null only while that
+// handler runs.
+let pendingDocPaths: string[] | null = null;
+
+// Background search-doc builder, serialized so overlapping scans can't race.
+let indexBuildQueue: Promise<void> = Promise.resolve();
+function queueSearchDocBuild(paths: string[], rootDir: string) {
+  if (!paths.length) return;
+  indexBuildQueue = indexBuildQueue.then(async () => {
+    for (let i = 0; i < paths.length; i++) {
+      const fullPath = paths[i];
+      try {
+        const st = await fsp.stat(fullPath);
+        const text = await fsp.readFile(fullPath, 'utf8');
+        const meta = parseNoteMeta(text, fullPath);
+        const doc: SearchDoc | null = text.length <= SEARCH_MAX_INDEXED_FILE
+          ? {
+              fsPath: fullPath,
+              relPath: path.relative(rootDir, fullPath).replace(/\\/g, '/'),
+              title: meta.title,
+              lines: text.split(/\r?\n/),
+            }
+          : null;
+        scanCache.set(fullPath, { mtimeMs: st.mtimeMs, size: st.size, meta, doc });
+        if (doc) searchIndex.set(fullPath, doc);
+        loadPersistedMetaCache()[fullPath] = { mtimeMs: st.mtimeMs, size: st.size, meta };
+      } catch { /* deleted/unreadable since the scan — skip */ }
+      if (i % 25 === 24) await new Promise(r => setImmediate(r)); // stay responsive
+    }
+    saveMetaCacheSoon();
+  });
+}
+
 async function scanDirectory(
   dir: string,
   rootDir: string,
@@ -675,25 +761,36 @@ async function scanDirectory(
         // Serve unchanged files from the scan cache — no read, no parse
         const st = await fsp.stat(fullPath);
         const cached = scanCache.get(fullPath);
+        const fresh = Date.now() - st.mtimeMs > SCAN_CACHE_FRESHNESS_MS;
         let meta: ReturnType<typeof parseNoteMeta>;
-        let doc: SearchDoc | null;
+        let doc: SearchDoc | null | undefined;
 
-        if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size &&
-            Date.now() - st.mtimeMs > SCAN_CACHE_FRESHNESS_MS) {
+        if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size && fresh) {
           meta = cached.meta;
           doc = cached.doc;
         } else {
-          const text = await fsp.readFile(fullPath, 'utf8');
-          meta = parseNoteMeta(text, fullPath);
-          doc = text.length <= SEARCH_MAX_INDEXED_FILE
-            ? {
-                fsPath: fullPath,
-                relPath: path.relative(rootDir, fullPath).replace(/\\/g, '/'),
-                title: meta.title,
-                lines: text.split(/\r?\n/),
-              }
-            : null;
-          scanCache.set(fullPath, { mtimeMs: st.mtimeMs, size: st.size, meta, doc });
+          // Cold start: an unchanged file's meta comes from the PERSISTED
+          // cache for the cost of the stat above — no read. Its search doc
+          // is rebuilt in the background after the tree is returned.
+          const persisted = loadPersistedMetaCache()[fullPath];
+          if (persisted && persisted.mtimeMs === st.mtimeMs && persisted.size === st.size && fresh) {
+            meta = persisted.meta;
+            doc = undefined; // pending background build
+            if (collector && pendingDocPaths) pendingDocPaths.push(fullPath);
+          } else {
+            const text = await fsp.readFile(fullPath, 'utf8');
+            meta = parseNoteMeta(text, fullPath);
+            doc = text.length <= SEARCH_MAX_INDEXED_FILE
+              ? {
+                  fsPath: fullPath,
+                  relPath: path.relative(rootDir, fullPath).replace(/\\/g, '/'),
+                  title: meta.title,
+                  lines: text.split(/\r?\n/),
+                }
+              : null;
+            scanCache.set(fullPath, { mtimeMs: st.mtimeMs, size: st.size, meta, doc });
+            loadPersistedMetaCache()[fullPath] = { mtimeMs: st.mtimeMs, size: st.size, meta };
+          }
         }
 
         if (collector && doc) {
@@ -952,7 +1049,10 @@ ipcMain.handle('get-notebook-tree', async (event, rootPath, filterTag) => {
   const ignore = new Set(settings.ignoreFolders.map(s => s.toLowerCase()));
   const collector = new Map<string, SearchDoc>();
   const seen = new Set<string>();
+  pendingDocPaths = [];
   const rootNode = await scanDirectory(rootPath, rootPath, ignore, settings.scratchpadFile, false, collector, seen);
+  const pendingDocs: string[] = pendingDocPaths || [];
+  pendingDocPaths = null;
   searchIndex = collector; // atomic swap: deleted files vanish from search
 
   // Prune cache entries for files that no longer exist (full scans only)
@@ -961,6 +1061,19 @@ ipcMain.handle('get-notebook-tree', async (event, rootPath, filterTag) => {
   }
   if (scanCache.size > SCAN_CACHE_MAX) {
     scanCache.clear(); // belt-and-braces bound; next scan rebuilds
+  }
+  const pm = loadPersistedMetaCache();
+  for (const key of Object.keys(pm)) {
+    if (!seen.has(key)) delete pm[key];
+  }
+
+  // Cache-served files get their search docs (full text) rebuilt off the
+  // critical path; searches await this build, the tree does not.
+  queueSearchDocBuild(pendingDocs, rootPath);
+  saveMetaCacheSoon();
+  if (!startupTreeLogged) {
+    startupTreeLogged = true;
+    logStartup(`first notebook scan done (${seen.size} notes, ${pendingDocs.length} meta-cached)`);
   }
 
   // Apply Tag Filtering recursively if filterTag is present
@@ -1596,6 +1709,9 @@ function makeSearchSnippet(line: string, lower: string, terms: string[], lineIdx
 ipcMain.handle('search-notes', async (event, query: string, opts?: { maxResults?: number }) => {
   const q = String(query || '').trim();
   if (q.length < 2) return [];
+  // Cold-start scans defer search-doc building to the background; make sure
+  // it's finished before searching so results are never silently partial.
+  await indexBuildQueue;
   const terms = q.toLowerCase().split(/\s+/).filter(t => t);
   if (terms.length === 0) return [];
   const maxFiles = Math.min(Math.max(1, opts?.maxResults || SEARCH_MAX_FILES), SEARCH_MAX_FILES);

@@ -1,8 +1,24 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
-import MarkdownIt from 'markdown-it';
-import hljs from 'highlight.js';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
+
+// The markdown pipeline (markdown-it + highlight.js) is built LAZILY on the
+// first renderMarkdown call. Loading it at preload time delayed every app
+// launch — the page can't even start until the preload finishes — and the
+// first render happens well after first paint, so nothing is lost.
+// highlight.js loads the "common" subset (~35 languages) instead of all ~190;
+// dart and scala are the only dropdown languages outside that set.
+let mdInstance: any = null;
+function getMd(): any {
+  if (mdInstance) return mdInstance;
+
+  /* eslint-disable @typescript-eslint/no-var-requires */
+  const MarkdownIt = require('markdown-it');
+  const hljs = require('highlight.js/lib/common');
+  try {
+    hljs.registerLanguage('dart', require('highlight.js/lib/languages/dart'));
+    hljs.registerLanguage('scala', require('highlight.js/lib/languages/scala'));
+  } catch { /* highlighting falls back to plain <pre> for these */ }
 
 // Custom Markdown-it renderer (typed as any to prevent circular type initializer warnings)
 const md: any = new MarkdownIt({
@@ -227,6 +243,10 @@ md.core.ruler.after('inline', 'notebook-task-lists', (state: any) => {
   }
 });
 
+  mdInstance = md;
+  return mdInstance;
+}
+
 // API Expose
 contextBridge.exposeInMainWorld('api', {
   // Platform ('darwin' | 'win32' | 'linux') so the UI can show the right
@@ -333,7 +353,7 @@ contextBridge.exposeInMainWorld('api', {
     // Strip first H1 heading if it is at the very start of the note body (run after stripping TOC)
     body = body.replace(/^([ \t]*\r?\n)*#[ \t]+.+(\r?\n|$)/, '');
 
-    return md.render(body, { resourceBase: opts?.resourceBase || '' });
+    return getMd().render(body, { resourceBase: opts?.resourceBase || '' });
   },
 });
 

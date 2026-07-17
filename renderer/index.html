@@ -1314,7 +1314,8 @@
   </div>
 
   <!-- Scripts -->
-  <script src="vendor/mermaid.min.js"></script>
+  <!-- mermaid (3+MB) is lazy-loaded by ensureMermaid() on first diagram use;
+       a synchronous tag here blocked first paint on every launch -->
   <script src="app.js?v=3"></script>
 </body>
 </html>
