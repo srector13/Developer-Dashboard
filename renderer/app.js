@@ -71,9 +71,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   appSettings = await window.api.getSettings();
   autoSaveEnabled = appSettings.autoSaveEnabled || false;
   document.getElementById('header-autosave').checked = autoSaveEnabled;
-  
+
   // Set theme from settings (also initializes Mermaid with the right theme)
   applyTheme(appSettings.theme);
+  applyEditorSpellcheck();
 
   // Platform-correct shortcut hints must be applied before anything renders
   // the tree (which binds tooltips and consumes the title attributes)
@@ -122,11 +123,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   // through the textarea's inline onscroll)
   document.getElementById('preview-pane').addEventListener('scroll', () => syncSplitScroll('preview'));
 
-  // [[ note-link popup: dismiss on blur, re-evaluate on click (caret moved)
+  // [[ note-link popup + AI ghost: dismiss on blur, re-evaluate on click
   const noteEditorEl = document.getElementById('note-editor');
   if (noteEditorEl) {
-    noteEditorEl.addEventListener('blur', () => setTimeout(hideWikiAutocomplete, 120));
-    noteEditorEl.addEventListener('click', updateWikiAutocomplete);
+    noteEditorEl.addEventListener('blur', () => setTimeout(() => { hideWikiAutocomplete(); hideAiGhost(); }, 120));
+    noteEditorEl.addEventListener('click', () => { updateWikiAutocomplete(); hideAiGhost(); });
   }
 
   // Tab context menu dismissal: any click or right-click elsewhere closes it
@@ -199,6 +200,11 @@ document.addEventListener('keydown', (e) => {
   } else if (isCmdOrCtrl && e.key === '/') {
     e.preventDefault();
     showShortcutsModal();
+  } else if (isCmdOrCtrl && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') {
+    // Find & replace in the open note; falls back to global search otherwise
+    e.preventDefault();
+    if (activeNote) showFindBar();
+    else openDrawerView('search');
   } else if (e.key === 'Escape') {
     closeTopOverlay();
   }
@@ -224,7 +230,9 @@ function closeTopOverlay() {
   const activeModals = document.querySelectorAll('.modal-overlay.active');
   if (activeModals.length > 0) {
     activeModals[activeModals.length - 1].classList.remove('active');
+    return;
   }
+  if (findBarVisible()) hideFindBar();
 }
 
 // ==========================================
@@ -514,10 +522,13 @@ function generateTreeHTML(node, depth) {
       }
 
       html += `
-        <div class="tree-node ${isActive ? 'active' : ''}" style="padding-left: ${(isRoot ? 0 : depth + 1) * 12 + 12}px;" 
+        <div class="tree-node ${isActive ? 'active' : ''}" style="padding-left: ${(isRoot ? 0 : depth + 1) * 12 + 12}px;"
              onclick="openNote(${jsArg(page.fsPath)})"
              draggable="true"
-             ondragstart="handleDragStart(event, ${jsArg(page.fsPath)})">
+             ondragstart="handleDragStart(event, ${jsArg(page.fsPath)})"
+             ondragover="handlePageDragOver(event)"
+             ondragleave="handlePageDragLeave(event)"
+             ondrop="handlePageDrop(event, ${jsArg(node.fsPath)}, ${jsArg(page.name)})">
           <div class="tree-node-content">
             ${iconHtml}
             <span class="tree-node-label">${escapeHtml(page.title)}</span>
@@ -1005,6 +1016,9 @@ async function doRenderMarkdownPreview() {
     el.dataset.mermaidSrc = el.textContent;
   });
 
+  // Images open in the lightbox viewer
+  wirePreviewImages(preview);
+
   // Intercept click event on checklists in preview mode
   preview.querySelectorAll('.task-checkbox-link').forEach(link => {
     link.addEventListener('click', async (e) => {
@@ -1406,6 +1420,8 @@ function handleEditorInput() {
   updateWordCount();
   updateSaveStatus(true);
   updateWikiAutocomplete();
+  scheduleAiGhost();
+  if (findBarVisible()) updateFindMatches();
 
   if (viewMode === 'split') {
     renderMarkdownPreview();
@@ -1538,6 +1554,18 @@ async function saveActiveNote() {
 // Handle special keys inside editor
 function handleEditorKeys(e) {
   const isCmdOrCtrl = IS_MAC ? e.metaKey : e.ctrlKey;
+
+  // AI ghost suggestion: Tab accepts, Escape dismisses (checked before the
+  // wiki popup since the two are never open at once)
+  if (aiGhost.open) {
+    if (e.key === 'Tab' && !e.shiftKey && !isCmdOrCtrl) {
+      e.preventDefault();
+      acceptAiGhost();
+      return;
+    }
+    if (e.key === 'Escape') { e.preventDefault(); hideAiGhost(); return; }
+    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) hideAiGhost();
+  }
 
   // The [[ note-link popup owns Up/Down/Enter/Tab/Escape while it's open
   if (wikiAC.open) {
@@ -2617,12 +2645,14 @@ function showSettingsModal() {
   document.getElementById('settings-autosave').checked = autoSaveEnabled;
 
   // Local AI (optional)
-  const ai = appSettings.ai || { enabled: false, provider: 'ollama', baseUrl: '', model: '' };
+  const ai = appSettings.ai || { enabled: false, provider: 'ollama', baseUrl: '', model: '', autocomplete: false };
   document.getElementById('settings-ai-enabled').checked = !!ai.enabled;
   document.getElementById('settings-ai-provider').value = ai.provider || 'ollama';
   document.getElementById('settings-ai-url').value = ai.baseUrl || '';
   document.getElementById('settings-ai-model').value = ai.model || '';
+  document.getElementById('settings-ai-autocomplete').checked = !!ai.autocomplete;
   document.getElementById('settings-ai-status').textContent = 'Test checks the server and lists the models it has installed.';
+  document.getElementById('settings-spellcheck').checked = appSettings.spellcheckEnabled !== false;
   toggleAiSettingsFields();
   updateAiProviderPlaceholder();
 
@@ -2659,7 +2689,9 @@ async function saveSettingsForm() {
     provider: document.getElementById('settings-ai-provider').value,
     baseUrl: document.getElementById('settings-ai-url').value.trim(),
     model: document.getElementById('settings-ai-model').value.trim(),
+    autocomplete: document.getElementById('settings-ai-autocomplete').checked,
   };
+  const spellcheck = document.getElementById('settings-spellcheck').checked;
 
   appSettings = await window.api.saveSettings({
     defaultPageWidth: width,
@@ -2675,10 +2707,12 @@ async function saveSettingsForm() {
     ignoreFolders: ignore,
     autoSaveEnabled: autosave,
     ai: ai,
+    spellcheckEnabled: spellcheck,
   });
 
   applyTheme(theme);
   toggleAutoSave(autosave);
+  applyEditorSpellcheck();
   hideSettingsModal();
   
   // Reload view styling width
@@ -2969,9 +3003,39 @@ function splitNoteHeader(content) {
   return { header, body: rest };
 }
 
+// The four AI actions share one modal; `mode` picks the prompt (in main),
+// the copy, and what Apply does with the result.
+const AI_MODES = {
+  polish: {
+    title: 'Polish with Local AI',
+    intro: 'will clean up this note\'s formatting: heading levels, list styles, spacing, tables, and code fences. Wording is only lightly touched — the content stays yours.',
+    resultLabel: 'Polished note',
+    runLabel: 'Polish Note',
+  },
+  summarize: {
+    title: 'Summarize into TL;DR',
+    intro: 'will write a 1-3 sentence TL;DR of this note. Applying inserts it as a "> **TL;DR:**" callout at the top of the note body.',
+    resultLabel: 'Summary',
+    runLabel: 'Summarize',
+  },
+  tasks: {
+    title: 'Extract Action Items',
+    intro: 'will read the note and list the action items it implies. Applying appends them under an "## Action Items" heading as unchecked tasks.',
+    resultLabel: 'Found action items',
+    runLabel: 'Extract',
+  },
+  tags: {
+    title: 'Suggest Tags',
+    intro: 'will suggest 3-6 topic tags for this note. Applying merges them into the note\'s tags (existing tags are kept).',
+    resultLabel: 'Suggested tags (comma-separated, edit freely)',
+    runLabel: 'Suggest',
+  },
+};
+
+let aiModalMode = 'polish';
 let aiPolishPending = null; // { header } while a result is showing
 
-function openAiPolishModal() {
+function openAiPolishModal(mode) {
   if (!appSettings.ai || !appSettings.ai.enabled) {
     showToast('Local AI is off — enable it in Settings first.');
     showSettingsModal();
@@ -2981,7 +3045,14 @@ function openAiPolishModal() {
     showToast('Open a note first.');
     return;
   }
+  aiModalMode = AI_MODES[mode] ? mode : 'polish';
+  const cfg = AI_MODES[aiModalMode];
   aiPolishPending = null;
+  document.getElementById('ai-polish-title').textContent = cfg.title;
+  document.getElementById('ai-polish-intro-text').textContent = cfg.intro;
+  document.getElementById('ai-polish-run-btn').textContent = cfg.runLabel;
+  document.getElementById('ai-polish-result-label').innerHTML =
+    `${escapeHtml(cfg.resultLabel)} <span class="item-desc">(editable — tweak before applying)</span>`;
   document.getElementById('ai-polish-model-label').textContent =
     appSettings.ai.model || '(no model set)';
   document.getElementById('ai-polish-intro').style.display = 'block';
@@ -3002,7 +3073,7 @@ async function runAiPolish() {
   const editor = document.getElementById('note-editor');
   const { header, body } = splitNoteHeader(editor.value);
   if (!body.trim()) {
-    document.getElementById('ai-polish-error').textContent = 'This note has no body text to polish yet.';
+    document.getElementById('ai-polish-error').textContent = 'This note has no body text to work with yet.';
     document.getElementById('ai-polish-error').style.display = 'block';
     return;
   }
@@ -3016,7 +3087,7 @@ async function runAiPolish() {
 
   let result;
   try {
-    result = await window.api.aiPolish(body);
+    result = await window.api.aiTransform(aiModalMode, body);
   } catch (err) {
     result = { ok: false, error: String(err) };
   }
@@ -3031,8 +3102,31 @@ async function runAiPolish() {
     return;
   }
 
+  let text = result.text;
+  if (aiModalMode === 'tasks' && text.trim() === 'NONE') {
+    document.getElementById('ai-polish-intro').style.display = 'block';
+    document.getElementById('ai-polish-run-btn').style.display = '';
+    const errEl = document.getElementById('ai-polish-error');
+    errEl.textContent = 'The model found no new action items in this note.';
+    errEl.style.display = 'block';
+    return;
+  }
+  if (aiModalMode === 'tags') {
+    // Normalize whatever came back into a clean comma-separated line
+    text = text.split(/[,\n]/).map(t => t.trim().replace(/^#/, '').toLowerCase())
+      .filter(t => t && /^[a-z0-9][a-z0-9-]*$/.test(t)).join(', ');
+    if (!text) {
+      document.getElementById('ai-polish-intro').style.display = 'block';
+      document.getElementById('ai-polish-run-btn').style.display = '';
+      const errEl = document.getElementById('ai-polish-error');
+      errEl.textContent = 'The model returned no usable tags — try again.';
+      errEl.style.display = 'block';
+      return;
+    }
+  }
+
   aiPolishPending = { header };
-  document.getElementById('ai-polish-output').value = result.text;
+  document.getElementById('ai-polish-output').value = text;
   document.getElementById('ai-polish-result').style.display = 'block';
   document.getElementById('ai-polish-apply-btn').style.display = '';
 }
@@ -3040,19 +3134,376 @@ async function runAiPolish() {
 function applyAiPolish() {
   if (!aiPolishPending) return;
   const editor = document.getElementById('note-editor');
-  const polished = document.getElementById('ai-polish-output').value;
-  // Reattach the untouched header exactly as it was, with one blank line
-  // between it and the polished body
-  let glue = '';
-  if (aiPolishPending.header) {
-    if (!aiPolishPending.header.endsWith('\n')) glue += '\n';
-    if (!polished.startsWith('\n')) glue += '\n';
+  const output = document.getElementById('ai-polish-output').value;
+  const header = aiPolishPending.header;
+
+  if (aiModalMode === 'summarize') {
+    // TL;DR callout at the top of the body, header untouched
+    const { header: h, body } = splitNoteHeader(editor.value);
+    const tldr = `> **TL;DR:** ${output.trim().replace(/\n+/g, ' ')}\n\n`;
+    editor.value = h + (h && !h.endsWith('\n') ? '\n' : '') + (h ? '\n' : '') + tldr + body.replace(/^\n+/, '');
+  } else if (aiModalMode === 'tasks') {
+    // Append as unchecked tasks under an Action Items heading
+    const lines = output.split('\n').map(l => l.trim()).filter(l => l)
+      .map(l => /^[-*+]\s*\[[ xX]\]/.test(l) ? l.replace(/^[*+]/, '-') : `- [ ] ${l.replace(/^[-*+]\s*/, '')}`);
+    const hasHeading = /^##\s+Action Items\s*$/mi.test(editor.value);
+    const block = (hasHeading ? '' : '\n## Action Items\n') + '\n' + lines.join('\n') + '\n';
+    editor.value = editor.value.replace(/\s*$/, '\n') + block;
+  } else if (aiModalMode === 'tags') {
+    applyAiTags(editor, output);
+  } else {
+    // polish: replace the body, reattach the untouched header
+    let glue = '';
+    if (header) {
+      if (!header.endsWith('\n')) glue += '\n';
+      if (!output.startsWith('\n')) glue += '\n';
+    }
+    editor.value = header + glue + output;
   }
-  editor.value = aiPolishPending.header + glue + polished;
+
   hideAiPolishModal();
   editor.focus();
   handleEditorInput();
-  showToast('AI polish applied — review, then save.');
+  showToast('Applied — review, then save.');
+}
+
+// Merge suggested tags into the frontmatter's tags line, editing only the
+// editor buffer (nothing touches disk until the user saves).
+function applyAiTags(editor, tagLine) {
+  const suggested = tagLine.split(',').map(t => t.trim()).filter(t => t);
+  if (!suggested.length) return;
+  let value = editor.value;
+  const fm = value.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (fm) {
+    const tagsRe = /^tags:\s*(?:\[([^\]]*)\]|(.*))\s*$/m;
+    const m = fm[1].match(tagsRe);
+    const existing = m ? (m[1] !== undefined ? m[1] : m[2] || '').split(',').map(t => t.trim()).filter(t => t) : [];
+    const merged = [...existing];
+    suggested.forEach(t => { if (!merged.some(e => e.toLowerCase() === t.toLowerCase())) merged.push(t); });
+    const newLine = `tags: [${merged.join(', ')}]`;
+    let newFm;
+    if (m) {
+      newFm = fm[1].replace(tagsRe, newLine);
+    } else {
+      newFm = fm[1] + (fm[1].endsWith('\n') || fm[1] === '' ? '' : '\n') + newLine;
+    }
+    value = value.slice(0, fm.index) + fm[0].replace(fm[1], newFm) + value.slice(fm.index + fm[0].length);
+  } else {
+    // No frontmatter yet: create a minimal one carrying the tags
+    value = `---\ntags: [${suggested.join(', ')}]\n---\n\n` + value;
+  }
+  editor.value = value;
+}
+
+// --- AI smart autocomplete (ghost suggestion at the caret) ------------------
+// Debounced: fires only after a pause, only at the end of a line, and only
+// while both ai.enabled and ai.autocomplete are on. Tab accepts, Esc or any
+// edit dismisses. Failures are silent — this must never interrupt typing.
+let aiGhost = { open: false, text: '', pos: -1, timer: null, reqToken: 0 };
+
+function aiGhostEnabled() {
+  return !!(appSettings && appSettings.ai && appSettings.ai.enabled &&
+    appSettings.ai.autocomplete && activeNote && (viewMode === 'edit' || viewMode === 'split'));
+}
+
+function scheduleAiGhost() {
+  if (aiGhost.timer) { clearTimeout(aiGhost.timer); aiGhost.timer = null; }
+  hideAiGhost();
+  if (!aiGhostEnabled()) return;
+  const delay = window.__aiGhostDebounce || 1200;
+  aiGhost.timer = setTimeout(requestAiGhost, delay);
+}
+
+async function requestAiGhost() {
+  const textarea = document.getElementById('note-editor');
+  if (!textarea || document.activeElement !== textarea || wikiAC.open) return;
+  const pos = textarea.selectionStart;
+  if (pos !== textarea.selectionEnd) return;
+  // Only complete at the end of a line — mid-word ghosts are noise
+  const nextCh = textarea.value.charAt(pos);
+  if (nextCh && nextCh !== '\n') return;
+  const context = textarea.value.slice(Math.max(0, pos - 2000), pos);
+  if (!context.trim()) return;
+
+  const token = ++aiGhost.reqToken;
+  let result;
+  try {
+    result = await window.api.aiComplete(context);
+  } catch {
+    return;
+  }
+  // Stale or superseded: the user typed while we waited
+  if (token !== aiGhost.reqToken || !result || !result.ok) return;
+  if (document.activeElement !== textarea || textarea.selectionStart !== pos) return;
+
+  const suggestion = String(result.text || '').replace(/^\n+/, '');
+  if (!suggestion.trim()) return;
+  aiGhost.open = true;
+  aiGhost.text = suggestion;
+  aiGhost.pos = pos;
+  renderAiGhost(textarea, suggestion);
+}
+
+function renderAiGhost(textarea, suggestion) {
+  let ghost = document.getElementById('ai-ghost');
+  if (!ghost) {
+    ghost = document.createElement('div');
+    ghost.id = 'ai-ghost';
+    document.body.appendChild(ghost);
+  }
+  const shown = suggestion.length > 160 ? suggestion.slice(0, 160) + '…' : suggestion;
+  ghost.textContent = shown;
+  const hint = document.createElement('span');
+  hint.className = 'ai-ghost-hint';
+  hint.textContent = 'Tab';
+  ghost.appendChild(hint);
+  ghost.style.display = 'block';
+  const caret = editorCaretRect(textarea, textarea.selectionStart);
+  const maxLeft = window.innerWidth - 440;
+  const belowTop = caret.y + caret.lineHeight + 2;
+  const flipUp = belowTop + ghost.offsetHeight > window.innerHeight - 8;
+  ghost.style.left = `${Math.max(8, Math.min(caret.x, maxLeft))}px`;
+  ghost.style.top = `${flipUp ? Math.max(8, caret.y - ghost.offsetHeight - 2) : belowTop}px`;
+}
+
+function hideAiGhost() {
+  if (!aiGhost.open) return;
+  aiGhost.open = false;
+  aiGhost.text = '';
+  const ghost = document.getElementById('ai-ghost');
+  if (ghost) ghost.style.display = 'none';
+}
+
+function acceptAiGhost() {
+  if (!aiGhost.open) return false;
+  const textarea = document.getElementById('note-editor');
+  if (!textarea || textarea.selectionStart !== aiGhost.pos) { hideAiGhost(); return false; }
+  const text = aiGhost.text;
+  hideAiGhost();
+  replaceEditorRange(textarea, aiGhost.pos, aiGhost.pos, text);
+  return true;
+}
+
+// Editor spell-check squiggles follow the settings toggle
+function applyEditorSpellcheck() {
+  const textarea = document.getElementById('note-editor');
+  if (!textarea) return;
+  const on = !appSettings || appSettings.spellcheckEnabled !== false;
+  textarea.spellcheck = on;
+  // Chromium only re-evaluates squiggles on focus/edit; nudge it
+  if (document.activeElement === textarea) { textarea.blur(); textarea.focus(); }
+}
+
+// --- FIND & REPLACE (within the open note) -----------------------------------
+let findMatches = [];
+let findIndex = -1;
+
+function findBarVisible() {
+  const bar = document.getElementById('find-replace-bar');
+  return !!bar && bar.style.display !== 'none';
+}
+
+function showFindBar() {
+  if (!activeNote) return;
+  if (viewMode === 'preview') setViewMode('edit'); // the bar lives on the editor pane
+  document.getElementById('find-replace-bar').style.display = 'flex';
+  const input = document.getElementById('find-input');
+  const ta = document.getElementById('note-editor');
+  const sel = ta.value.substring(ta.selectionStart, ta.selectionEnd);
+  if (sel && !sel.includes('\n')) input.value = sel;
+  input.focus();
+  input.select();
+  updateFindMatches();
+}
+
+function hideFindBar() {
+  document.getElementById('find-replace-bar').style.display = 'none';
+  findMatches = [];
+  findIndex = -1;
+  const ta = document.getElementById('note-editor');
+  if (ta) ta.focus();
+}
+
+function updateFindMatches() {
+  const q = document.getElementById('find-input').value;
+  const caseSensitive = document.getElementById('find-case').checked;
+  const ta = document.getElementById('note-editor');
+  findMatches = [];
+  findIndex = -1;
+  if (q && ta) {
+    const hay = caseSensitive ? ta.value : ta.value.toLowerCase();
+    const needle = caseSensitive ? q : q.toLowerCase();
+    let i = 0;
+    while ((i = hay.indexOf(needle, i)) !== -1 && findMatches.length < 5000) {
+      findMatches.push(i);
+      i += needle.length || 1;
+    }
+  }
+  updateFindCount();
+}
+
+function updateFindCount() {
+  document.getElementById('find-count').textContent =
+    findMatches.length ? `${findIndex + 1 > 0 ? findIndex + 1 : '–'}/${findMatches.length}` : '0/0';
+}
+
+function findNext(dir) {
+  const q = document.getElementById('find-input').value;
+  if (!q || !findMatches.length) return;
+  const ta = document.getElementById('note-editor');
+  let idx;
+  if (dir > 0) {
+    const from = ta.selectionEnd;
+    idx = findMatches.findIndex(m => m >= from);
+    if (idx === -1) idx = 0; // wrap to top
+  } else {
+    const from = ta.selectionStart;
+    idx = -1;
+    for (let i = findMatches.length - 1; i >= 0; i--) {
+      if (findMatches[i] < from) { idx = i; break; }
+    }
+    if (idx === -1) idx = findMatches.length - 1; // wrap to bottom
+  }
+  findIndex = idx;
+  const m = findMatches[idx];
+  ta.setSelectionRange(m, m + q.length);
+  scrollEditorCaretIntoView(ta);
+  updateFindCount();
+}
+
+function replaceCurrent() {
+  const q = document.getElementById('find-input').value;
+  if (!q) return;
+  const ta = document.getElementById('note-editor');
+  const caseSensitive = document.getElementById('find-case').checked;
+  const selected = ta.value.substring(ta.selectionStart, ta.selectionEnd);
+  const onMatch = caseSensitive ? selected === q : selected.toLowerCase() === q.toLowerCase();
+  if (!onMatch) { findNext(1); return; } // first press selects, second replaces
+  const r = document.getElementById('replace-input').value;
+  replaceEditorRange(ta, ta.selectionStart, ta.selectionEnd, r);
+  updateFindMatches();
+  findNext(1);
+}
+
+function replaceAllMatches() {
+  const q = document.getElementById('find-input').value;
+  if (!q) return;
+  updateFindMatches();
+  const n = findMatches.length;
+  if (!n) { showToast('No matches to replace.'); return; }
+  const r = document.getElementById('replace-input').value;
+  const ta = document.getElementById('note-editor');
+  const caseSensitive = document.getElementById('find-case').checked;
+  const esc = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(esc, caseSensitive ? 'g' : 'gi');
+  ta.value = ta.value.replace(re, () => r);
+  handleEditorInput();
+  updateFindMatches();
+  showToast(`Replaced ${n} occurrence${n === 1 ? '' : 's'}.`);
+}
+
+function handleFindInputKeys(e) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    findNext(e.shiftKey ? -1 : 1);
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    hideFindBar();
+  }
+}
+
+// --- TASK BOARD (kanban over every open checkbox in the notebook) -----------
+function showTaskBoardModal() {
+  buildTaskBoard();
+  document.getElementById('taskboard-modal').classList.add('active');
+}
+
+function hideTaskBoardModal() {
+  document.getElementById('taskboard-modal').classList.remove('active');
+}
+
+function buildTaskBoard() {
+  const container = document.getElementById('taskboard-columns');
+  if (!treeData) {
+    container.innerHTML = '<div class="taskboard-empty">No notebook loaded yet.</div>';
+    return;
+  }
+  // One column per top-level section (plus loose root pages), cards = open tasks
+  const groups = [];
+  if ((treeData.pages || []).length) groups.push({ name: 'Notebook Root', pages: treeData.pages });
+  (treeData.sections || []).forEach(sec => groups.push({ name: sec.name, pages: gatherPagesRecursively(sec) }));
+
+  let html = '';
+  groups.forEach(g => {
+    const cards = [];
+    g.pages.forEach(p => (p.taskLines || []).forEach(t =>
+      cards.push({ fsPath: p.fsPath, title: p.title, text: t.text, line: t.line })));
+    if (!cards.length) return;
+    html += `<div class="taskboard-column">
+      <div class="taskboard-column-title">${escapeHtml(g.name)} <span class="taskboard-count">${cards.length}</span></div>` +
+      cards.map(c => `
+        <div class="taskboard-card-item" data-fspath="${escapeHtml(c.fsPath)}" data-line="${c.line}" onclick="taskBoardOpenNote(this)">
+          <input type="checkbox" onclick="event.stopPropagation()" onchange="taskBoardToggle(this)">
+          <div>
+            <span class="taskboard-task-text">${escapeHtml(c.text)}</span>
+            <span class="taskboard-task-note">${escapeHtml(c.title)}</span>
+          </div>
+        </div>`).join('') +
+      '</div>';
+  });
+  container.innerHTML = html || '<div class="taskboard-empty">No open tasks anywhere — nice work! 🎉</div>';
+}
+
+async function taskBoardToggle(checkbox) {
+  const card = checkbox.closest('.taskboard-card-item');
+  const fsPath = card.dataset.fspath;
+  const line = parseInt(card.dataset.line, 10);
+  const ok = await window.api.toggleTaskAtLine(fsPath, line);
+  if (!ok) {
+    checkbox.checked = false;
+    showToast('Could not toggle the task.', 'error');
+    return;
+  }
+  card.classList.add('done');
+  // Keep the open editor in sync if it shows the same note
+  if (activeNote === fsPath) {
+    const fresh = await window.api.readNote(fsPath);
+    noteContent = fresh;
+    noteOriginalContent = fresh;
+    document.getElementById('note-editor').value = fresh;
+    renderActiveNote();
+  }
+}
+
+function taskBoardOpenNote(card) {
+  hideTaskBoardModal();
+  openNote(card.dataset.fspath);
+}
+
+// --- IMAGE LIGHTBOX ----------------------------------------------------------
+function wirePreviewImages(preview) {
+  preview.querySelectorAll('img').forEach(img => {
+    if (img.closest('a')) return; // linked images keep their link behavior
+    img.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showImageLightbox(img);
+    });
+  });
+}
+
+function showImageLightbox(img) {
+  document.getElementById('image-lightbox-img').src = img.src;
+  const fig = img.closest('figure');
+  const figcap = fig ? fig.querySelector('figcaption') : null;
+  document.getElementById('image-lightbox-caption').textContent =
+    (figcap && figcap.textContent) || img.title || '';
+  document.getElementById('image-lightbox').classList.add('active');
+}
+
+function hideImageLightbox() {
+  document.getElementById('image-lightbox').classList.remove('active');
+  document.getElementById('image-lightbox-img').src = '';
 }
 
 // Manual update check from the palette; auto-checks also run on launch.
@@ -4800,9 +5251,23 @@ function initAttachmentHandlers() {
   const editorPane = document.getElementById('editor-pane');
   if (!textarea || !editorPane) return;
 
+  // Paste: URL onto a selection turns it into a markdown link
+  textarea.addEventListener('paste', (e) => {
+    if (!e.clipboardData) return;
+    const text = (e.clipboardData.getData('text/plain') || '').trim();
+    if (!text || !/^https?:\/\/\S+$/i.test(text)) return;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    if (start === end) return; // no selection: let the URL paste plain
+    e.preventDefault();
+    const selected = textarea.value.substring(start, end);
+    replaceEditorRange(textarea, start, end, `[${selected}](${text})`);
+  });
+
   // Paste: intercept image data only; plain text pastes fall through
   textarea.addEventListener('paste', async (e) => {
     if (!e.clipboardData) return;
+    if (e.defaultPrevented) return; // the URL-link paste above already handled it
     const imageItem = Array.from(e.clipboardData.items).find(item => item.type.startsWith('image/'));
     if (!imageItem) return;
 
@@ -6004,6 +6469,80 @@ async function handleDrop(e, targetFsPath) {
     await refreshNotebook();
     if (activeNote === srcPath) {
       closeNoteCanvas();
+    }
+  }
+}
+
+// --- Drag & drop onto PAGE rows: reorder within a section, or move across ---
+function nodeParentDir(fsPath) {
+  const i = Math.max(fsPath.lastIndexOf('/'), fsPath.lastIndexOf('\\'));
+  return i > 0 ? fsPath.slice(0, i) : fsPath;
+}
+
+// Whether the pointer is in the top half of the row = insert BEFORE it
+function pageDropBefore(e, row) {
+  if (!row || typeof row.getBoundingClientRect !== 'function') return true;
+  const rect = row.getBoundingClientRect();
+  return (e.clientY - rect.top) < rect.height / 2;
+}
+
+function handlePageDragOver(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+  const row = e.currentTarget;
+  const before = pageDropBefore(e, row);
+  if (row && row.classList) {
+    row.classList.toggle('drag-over-top', before);
+    row.classList.toggle('drag-over-bottom', !before);
+  }
+}
+
+function handlePageDragLeave(e) {
+  e.stopPropagation();
+  const row = e.currentTarget;
+  if (row && row.classList) row.classList.remove('drag-over-top', 'drag-over-bottom');
+}
+
+async function handlePageDrop(e, dirPath, targetName) {
+  e.preventDefault();
+  e.stopPropagation();
+  const row = e.currentTarget;
+  const before = pageDropBefore(e, row);
+  if (row && row.classList) row.classList.remove('drag-over-top', 'drag-over-bottom');
+
+  const srcPath = dragSourcePath;
+  if (!srcPath) return;
+  const srcDir = nodeParentDir(srcPath);
+  const srcName = srcPath.slice(srcDir.length + 1);
+
+  if (!/\.md$/i.test(srcPath)) {
+    // A section dropped onto a page row: move it into that page's folder
+    if (srcDir !== dirPath && srcPath !== dirPath) {
+      const ok = await window.api.relocateNode(srcPath, dirPath);
+      if (ok) await refreshNotebook();
+    }
+    return;
+  }
+
+  if (srcDir === dirPath) {
+    // Same section: rewrite the order file with the page in its new slot
+    if (srcName.toLowerCase() === targetName.toLowerCase()) return;
+    const section = findSectionByFsPath(treeData, dirPath);
+    if (!section) return;
+    const ord = section.pages.map(p => p.name).filter(n => n.toLowerCase() !== srcName.toLowerCase());
+    let ti = ord.findIndex(n => n.toLowerCase() === targetName.toLowerCase());
+    if (ti === -1) return;
+    if (!before) ti += 1;
+    ord.splice(ti, 0, srcName);
+    const ok = await window.api.setNodeOrder(dirPath, ord);
+    if (ok) await refreshNotebook();
+  } else {
+    // Different section: move the page there (lands at the default position)
+    const ok = await window.api.relocateNode(srcPath, dirPath);
+    if (ok) {
+      await refreshNotebook();
+      if (activeNote === srcPath) closeNoteCanvas();
     }
   }
 }

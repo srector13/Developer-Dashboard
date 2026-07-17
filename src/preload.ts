@@ -126,17 +126,41 @@ md.inline.ruler.after('link', 'notebook-wiki-link', (state: any, silent: boolean
 // print HTML inherits the absolute URLs.
 const defaultImage = md.renderer.rules.image || ((tokens: any[], idx: number, options: any, env: any, self: any) => self.renderToken(tokens, idx, options));
 md.renderer.rules.image = (tokens: any[], idx: number, options: any, env: any, self: any) => {
+  const token = tokens[idx];
   const base = env && env.resourceBase;
   if (base) {
-    const src = tokens[idx].attrGet('src') || '';
+    const src = token.attrGet('src') || '';
     const isAbsoluteOrScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(src) || src.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(src);
     if (src && !isAbsoluteOrScheme) {
       try {
-        tokens[idx].attrSet('src', pathToFileURL(path.resolve(base, decodeURI(src))).href);
+        token.attrSet('src', pathToFileURL(path.resolve(base, decodeURI(src))).href);
       } catch {}
     }
   }
-  return defaultImage(tokens, idx, options, env, self);
+
+  // Obsidian-style width control: ![diagram|400](img.png) renders 400px wide.
+  // The "|400" lives in the alt text, so strip it and emit a width style.
+  const widthMatch = (token.content || '').match(/^(.*?)\s*\|\s*(\d{2,4})\s*$/);
+  if (widthMatch) {
+    token.content = widthMatch[1];
+    if (Array.isArray(token.children)) {
+      token.children.forEach((child: any) => {
+        if (child.type === 'text' && typeof child.content === 'string') {
+          child.content = child.content.replace(/\s*\|\s*\d{2,4}\s*$/, '');
+        }
+      });
+    }
+    token.attrJoin('style', `width: ${widthMatch[2]}px;`);
+  }
+
+  let html = defaultImage(tokens, idx, options, env, self);
+
+  // A quoted title (![alt](src "caption")) becomes a visible figcaption
+  const title = token.attrGet('title');
+  if (title) {
+    html = `<figure class="notebook-figure">${html}<figcaption>${md.utils.escapeHtml(title)}</figcaption></figure>`;
+  }
+  return html;
 };
 
 // 4. External link target blank
@@ -227,6 +251,7 @@ contextBridge.exposeInMainWorld('api', {
   updateNoteMeta: (filePath: string, meta: { created?: string; tags?: string[]; pinned?: boolean }) => ipcRenderer.invoke('update-note-meta', filePath, meta),
   relocateNode: (srcPath: string, destDir: string) => ipcRenderer.invoke('relocate-node', srcPath, destDir),
   moveNode: (dirPath: string, fileName: string, direction: 'up' | 'down') => ipcRenderer.invoke('move-node', dirPath, fileName, direction),
+  setNodeOrder: (dirPath: string, orderedNames: string[]) => ipcRenderer.invoke('set-node-order', dirPath, orderedNames),
   
   // Quick Scratchpad
   readScratchpad: () => ipcRenderer.invoke('read-scratchpad'),
@@ -282,7 +307,8 @@ contextBridge.exposeInMainWorld('api', {
 
   // Local AI (Ollama / LM Studio) — optional, disabled by default
   aiListModels: () => ipcRenderer.invoke('ai-list-models'),
-  aiPolish: (text: string) => ipcRenderer.invoke('ai-polish', text),
+  aiTransform: (mode: string, text: string) => ipcRenderer.invoke('ai-transform', mode, text),
+  aiComplete: (context: string) => ipcRenderer.invoke('ai-complete', context),
   
   // Inline actions in renderer
   toggleTaskAtLine: (filePath: string, line: number) => ipcRenderer.invoke('toggle-task-at-line', filePath, line),

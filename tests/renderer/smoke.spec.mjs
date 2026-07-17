@@ -156,7 +156,8 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
     quickCaptureShortcut: 'CommandOrControl+Shift+N',
     clipboardCaptureShortcut: 'CommandOrControl+Shift+G',
     clipboardCaptureTarget: '',
-    ai: { enabled: false, provider: 'ollama', baseUrl: '', model: '' },
+    ai: { enabled: false, provider: 'ollama', baseUrl: '', model: '', autocomplete: false },
+    spellcheckEnabled: true,
   };
 
   window.api = {
@@ -179,10 +180,16 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
       return JSON.parse(JSON.stringify(settingsState));
     },
     aiListModels: async () => (window.__aiModelsStub || { ok: true, models: ['llama3.1:8b', 'qwen2.5:3b'] }),
-    aiPolish: async (text) => {
+    aiTransform: async (mode, text) => {
       window.__aiPolishCall = text;
+      window.__aiTransformMode = mode;
       return window.__aiPolishStub || { ok: true, text: '## Polished\n\n- cleaned up\n' };
     },
+    aiComplete: async (context) => {
+      window.__aiCompleteCall = context;
+      return window.__aiCompleteStub || { ok: true, text: ' and finish the thought.' };
+    },
+    setNodeOrder: async (dir, names) => { window.__setOrderCall = { dir, names }; return true; },
     getNotebookTree: async () => { window.__treeCalls++; return JSON.parse(JSON.stringify(tree)); },
     readNote: async (p) => files[p] || '',
     writeNote: async (p, c) => { files[p] = c; window.__writes.push(p); return true; },
@@ -194,7 +201,7 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
     getAppVersion: async () => '1.0.0',
     deleteNode: async () => true,
     renameNode: async () => true,
-    relocateNode: async () => true,
+    relocateNode: async (src, dest) => { window.__relocateCall = { src, dest }; return true; },
     moveNode: async () => true,
     readScratchpad: async () => '',
     appendScratchpad: async () => true,
@@ -1938,6 +1945,254 @@ check('AI button with AI disabled opens Settings, not the polish modal', await p
   !document.getElementById('ai-polish-modal').classList.contains('active') &&
   document.getElementById('settings-modal').classList.contains('active')));
 await page.evaluate(() => window.hideSettingsModal());
+
+// --- 53. AI actions dropdown menu ---
+check('AI dropdown offers all four actions', await page.evaluate(() => {
+  const items = Array.from(document.querySelectorAll('#dropdown-ai .dropdown-item')).map(i => i.textContent.trim());
+  return items.length === 4 && items.includes('Polish Formatting') && items.includes('Summarize into TL;DR') &&
+    items.includes('Extract Action Items') && items.includes('Suggest Tags');
+}));
+
+// Re-enable AI for the mode tests (the gate test above turned it off)
+await page.evaluate(async () => {
+  window.showSettingsModal();
+  document.getElementById('settings-ai-enabled').checked = true;
+  window.toggleAiSettingsFields();
+  document.getElementById('settings-ai-model').value = 'llama3.1:8b';
+  await window.saveSettingsForm();
+});
+await page.waitForTimeout(300);
+await page.evaluate(() => window.openNote('/nb/smoke.md'));
+await page.waitForTimeout(300);
+await page.evaluate(() => window.setViewMode('edit'));
+await page.waitForTimeout(200);
+
+// --- 54. Summarize mode: TL;DR inserted at the top of the body ---
+const AI_HEADER2 = '---\ntitle: Test Note\n---\n# Test Note\n**Related:** [[other]]\n';
+await page.evaluate((h) => {
+  document.getElementById('note-editor').value = h + '\nBody paragraph.\n';
+  window.__aiPolishStub = { ok: true, text: 'This is the summary.' };
+  window.openAiPolishModal('summarize');
+}, AI_HEADER2);
+await page.waitForTimeout(120);
+check('summarize modal shows mode-specific title', await page.evaluate(() =>
+  document.getElementById('ai-polish-title').textContent === 'Summarize into TL;DR'));
+await page.evaluate(() => window.runAiPolish());
+await page.waitForTimeout(200);
+check('summarize sent only the body', await page.evaluate(() =>
+  window.__aiTransformMode === 'summarize' && !window.__aiPolishCall.includes('# Test Note')));
+await page.evaluate(() => window.applyAiPolish());
+await page.waitForTimeout(150);
+check('summarize apply inserts TL;DR after the header', await page.evaluate((h) => {
+  const v = document.getElementById('note-editor').value;
+  return v.startsWith(h) && v.includes('> **TL;DR:** This is the summary.') &&
+    v.indexOf('> **TL;DR:**') < v.indexOf('Body paragraph.');
+}, AI_HEADER2));
+
+// --- 55. Tasks mode: appended under an Action Items heading ---
+await page.evaluate(() => {
+  document.getElementById('note-editor').value = '# T\n\nCall Bob about pricing soon.\n';
+  window.__aiPolishStub = { ok: true, text: '- [ ] Call Bob about pricing\nEmail the team' };
+  window.openAiPolishModal('tasks');
+});
+await page.waitForTimeout(120);
+await page.evaluate(() => window.runAiPolish());
+await page.waitForTimeout(200);
+await page.evaluate(() => window.applyAiPolish());
+await page.waitForTimeout(150);
+check('tasks apply appends normalized checkboxes under Action Items', await page.evaluate(() => {
+  const v = document.getElementById('note-editor').value;
+  return v.includes('## Action Items') && v.includes('- [ ] Call Bob about pricing') &&
+    v.includes('- [ ] Email the team');
+}));
+
+// --- 56. Tags mode: merged into frontmatter tags in the buffer ---
+await page.evaluate(() => {
+  document.getElementById('note-editor').value = '---\ntitle: T\ntags: [meeting]\n---\n# T\n\nbody\n';
+  window.__aiPolishStub = { ok: true, text: 'Alpha, #beta, meeting, not a tag!!' };
+  window.openAiPolishModal('tags');
+});
+await page.waitForTimeout(120);
+await page.evaluate(() => window.runAiPolish());
+await page.waitForTimeout(200);
+check('tags result normalized to clean comma list', await page.evaluate(() =>
+  document.getElementById('ai-polish-output').value === 'alpha, beta, meeting'));
+await page.evaluate(() => window.applyAiPolish());
+await page.waitForTimeout(150);
+check('tags apply merges without duplicating existing tags', await page.evaluate(() =>
+  document.getElementById('note-editor').value.includes('tags: [meeting, alpha, beta]')));
+await page.evaluate(() => { window.__aiPolishStub = null; });
+
+// --- 57. AI ghost autocomplete ---
+await page.evaluate(async () => {
+  window.showSettingsModal();
+  document.getElementById('settings-ai-autocomplete').checked = true;
+  await window.saveSettingsForm();
+});
+await page.waitForTimeout(300);
+await page.evaluate(() => window.openNote('/nb/smoke.md'));
+await page.waitForTimeout(300);
+await page.evaluate(() => {
+  window.setViewMode('edit');
+  window.__aiGhostDebounce = 50;
+  window.__aiCompleteStub = { ok: true, text: 'finish the sentence.' };
+  const ed = document.getElementById('note-editor');
+  ed.value = '# Note\n\nStarted writing and then ';
+  ed.focus();
+  ed.selectionStart = ed.selectionEnd = ed.value.length;
+});
+await page.evaluate(() => window.handleEditorInput());
+await page.waitForTimeout(400);
+check('ghost suggestion appears after the debounce', await page.evaluate(() => {
+  const g = document.getElementById('ai-ghost');
+  return !!g && g.style.display === 'block' && g.textContent.includes('finish the sentence.');
+}));
+check('completion request carried the text before the caret', await page.evaluate(() =>
+  typeof window.__aiCompleteCall === 'string' && window.__aiCompleteCall.endsWith('Started writing and then ')));
+await page.keyboard.press('Tab');
+await page.waitForTimeout(150);
+check('Tab accepts the ghost into the editor', await page.evaluate(() =>
+  document.getElementById('note-editor').value.includes('Started writing and then finish the sentence.')));
+await page.evaluate(async () => {
+  delete window.__aiGhostDebounce;
+  window.hideAiGhost();
+  window.showSettingsModal();
+  document.getElementById('settings-ai-autocomplete').checked = false;
+  await window.saveSettingsForm();
+});
+await page.waitForTimeout(250);
+
+// --- 58. Find & replace ---
+await page.evaluate(() => window.openNote('/nb/smoke.md'));
+await page.waitForTimeout(300);
+await page.evaluate(() => {
+  window.setViewMode('edit');
+  document.getElementById('note-editor').value = 'alpha target beta Target gamma target\n';
+  window.showFindBar();
+});
+await page.waitForTimeout(150);
+check('find bar opens', await page.evaluate(() =>
+  document.getElementById('find-replace-bar').style.display !== 'none'));
+await page.evaluate(() => {
+  document.getElementById('find-input').value = 'target';
+  document.getElementById('find-case').checked = false;
+  window.updateFindMatches();
+});
+check('case-insensitive count finds all three', await page.evaluate(() =>
+  document.getElementById('find-count').textContent.endsWith('/3')));
+await page.evaluate(() => {
+  document.getElementById('note-editor').setSelectionRange(0, 0);
+  window.findNext(1);
+});
+check('findNext selects the first match', await page.evaluate(() => {
+  const ta = document.getElementById('note-editor');
+  return ta.selectionStart === 6 && ta.value.substring(ta.selectionStart, ta.selectionEnd) === 'target';
+}));
+await page.evaluate(() => {
+  document.getElementById('find-case').checked = true;
+  window.updateFindMatches();
+});
+check('case-sensitive count drops to two', await page.evaluate(() =>
+  document.getElementById('find-count').textContent.endsWith('/2')));
+await page.evaluate(() => {
+  document.getElementById('find-case').checked = false;
+  document.getElementById('replace-input').value = 'goal';
+  window.updateFindMatches();
+  window.replaceAllMatches();
+});
+await page.waitForTimeout(150);
+check('replace all rewrites every match', await page.evaluate(() =>
+  document.getElementById('note-editor').value === 'alpha goal beta goal gamma goal\n'));
+await page.evaluate(() => window.hideFindBar());
+
+// --- 59. Paste URL onto a selection makes a link ---
+await page.evaluate(() => {
+  const ta = document.getElementById('note-editor');
+  ta.value = 'see the spec here\n';
+  ta.focus();
+  ta.setSelectionRange(8, 12); // "spec"
+  const dt = new DataTransfer();
+  dt.setData('text/plain', 'https://example.com/spec');
+  ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, cancelable: true, bubbles: true }));
+});
+await page.waitForTimeout(150);
+check('pasting a URL onto a selection wraps it as a link', await page.evaluate(() =>
+  document.getElementById('note-editor').value.includes('see the [spec](https://example.com/spec) here')));
+
+// --- 60. Drag & drop reordering ---
+const fakeDragEvent = `{ preventDefault(){}, stopPropagation(){}, clientY: 0, currentTarget: null,
+  dataTransfer: { setData(){}, effectAllowed: '' } }`;
+await page.evaluate(`(async () => {
+  window.__setOrderCall = null;
+  window.handleDragStart(${fakeDragEvent}, '/nb/xss.md');
+  await window.handlePageDrop(${fakeDragEvent}, '/nb', 'smoke.md');
+})()`);
+await page.waitForTimeout(200);
+check('same-section drop rewrites the order file', await page.evaluate(() => {
+  const c = window.__setOrderCall;
+  return !!c && c.dir === '/nb' && c.names.indexOf('xss.md') !== -1 &&
+    c.names.indexOf('xss.md') < c.names.indexOf('smoke.md');
+}));
+await page.evaluate(`(async () => {
+  window.__relocateCall = null;
+  window.handleDragStart(${fakeDragEvent}, '/nb/Projects/alpha.md');
+  await window.handlePageDrop(${fakeDragEvent}, '/nb', 'smoke.md');
+})()`);
+await page.waitForTimeout(200);
+check('cross-section drop relocates into the target folder', await page.evaluate(() => {
+  const c = window.__relocateCall;
+  return !!c && c.src === '/nb/Projects/alpha.md' && c.dest === '/nb';
+}));
+
+// --- 61. Image lightbox ---
+await page.evaluate(() => {
+  const preview = document.getElementById('preview-pane');
+  const fig = document.createElement('figure');
+  fig.className = 'notebook-figure';
+  fig.innerHTML = '<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="tiny"><figcaption>My caption</figcaption>';
+  preview.appendChild(fig);
+  window.wirePreviewImages(preview);
+  preview.querySelector('img').click();
+});
+await page.waitForTimeout(150);
+check('clicking a preview image opens the lightbox with its caption', await page.evaluate(() =>
+  document.getElementById('image-lightbox').classList.contains('active') &&
+  document.getElementById('image-lightbox-caption').textContent === 'My caption'));
+await page.evaluate(() => window.hideImageLightbox());
+check('lightbox closes', await page.evaluate(() =>
+  !document.getElementById('image-lightbox').classList.contains('active')));
+
+// --- 62. Task board ---
+await page.evaluate(() => window.showTaskBoardModal());
+await page.waitForTimeout(200);
+check('task board opens with the Projects column and its open task', await page.evaluate(() => {
+  const modal = document.getElementById('taskboard-modal');
+  const cols = Array.from(document.querySelectorAll('.taskboard-column-title')).map(el => el.textContent);
+  const cards = Array.from(document.querySelectorAll('.taskboard-card-item .taskboard-task-text')).map(el => el.textContent);
+  return modal.classList.contains('active') && cols.some(c => c.includes('Projects')) && cards.includes('task');
+}));
+await page.evaluate(() => { window.__taskToggles = []; });
+await page.evaluate(() => {
+  const cb = document.querySelector('.taskboard-card-item input[type="checkbox"]');
+  cb.checked = true;
+  cb.dispatchEvent(new Event('change'));
+});
+await page.waitForTimeout(200);
+check('board checkbox completes the task via toggleTaskAtLine', await page.evaluate(() =>
+  document.querySelector('.taskboard-card-item').classList.contains('done')));
+await page.evaluate(() => window.hideTaskBoardModal());
+
+// --- 63. Spellcheck setting drives the editor attribute ---
+check('spellcheck on by default', await page.evaluate(() =>
+  document.getElementById('note-editor').spellcheck === true));
+await page.evaluate(async () => {
+  window.showSettingsModal();
+  document.getElementById('settings-spellcheck').checked = false;
+  await window.saveSettingsForm();
+});
+await page.waitForTimeout(250);
+check('disabling spellcheck updates the editor', await page.evaluate(() =>
+  document.getElementById('note-editor').spellcheck === false));
 
 } finally {
   if (browser) await browser.close();

@@ -182,9 +182,18 @@
           <button class="toolbar-btn" onclick="openLinkModal()" title="Insert a hyperlink">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
           </button>
-          <button class="toolbar-btn" id="btn-ai-polish" onclick="openAiPolishModal()" title="Polish note with your local AI (Ollama / LM Studio)">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/><path d="M5 2l.7 1.6L7.3 4.3 5.7 5 5 6.6 4.3 5 2.7 4.3 4.3 3.6z"/></svg>
-          </button>
+          <div class="editor-dropdown">
+            <button class="toolbar-btn dropdown-toggle" id="btn-ai-polish" onclick="toggleEditorDropdown('dropdown-ai', event)" title="AI actions using your local model (Ollama / LM Studio)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/><path d="M5 2l.7 1.6L7.3 4.3 5.7 5 5 6.6 4.3 5 2.7 4.3 4.3 3.6z"/></svg>
+              <svg class="chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div id="dropdown-ai" class="dropdown-menu glass-card">
+              <div class="dropdown-item" onclick="openAiPolishModal('polish')" title="Clean up formatting: headings, lists, spacing, tables, code fences">Polish Formatting</div>
+              <div class="dropdown-item" onclick="openAiPolishModal('summarize')" title="Write a short TL;DR callout at the top of the note">Summarize into TL;DR</div>
+              <div class="dropdown-item" onclick="openAiPolishModal('tasks')" title="Find action items in the note and add them as a task checklist">Extract Action Items</div>
+              <div class="dropdown-item" onclick="openAiPolishModal('tags')" title="Suggest topic tags based on the note's content">Suggest Tags</div>
+            </div>
+          </div>
 
           <!-- 3. Code Block Dropdown -->
           <div class="editor-dropdown">
@@ -312,6 +321,9 @@
           <button class="icon-btn" id="btn-toggle-outline" onclick="openDrawerView('outline')" title="Outline & Backlinks">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="21" y1="10" x2="7" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="21" y1="18" x2="7" y2="18"/></svg>
           </button>
+          <button class="icon-btn" id="btn-task-board" onclick="showTaskBoardModal()" title="Task Board — every open task across the notebook">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="18" rx="1"/><rect x="14" y="3" width="7" height="12" rx="1"/></svg>
+          </button>
           <button class="icon-btn" id="btn-open-settings" onclick="showSettingsModal()" title="Settings">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           </button>
@@ -367,9 +379,25 @@
         <div id="editor-preview-container" class="preview-mode">
           <!-- Raw text editor pane -->
           <div id="editor-pane" class="pane">
+            <!-- Find & Replace bar (Cmd/Ctrl+F in edit or split mode) -->
+            <div id="find-replace-bar" style="display: none;">
+              <input type="text" id="find-input" placeholder="Find…" oninput="updateFindMatches()" onkeydown="handleFindInputKeys(event)">
+              <span id="find-count">0/0</span>
+              <button class="icon-btn" onclick="findNext(-1)" title="Previous match (Shift+Enter)">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>
+              </button>
+              <button class="icon-btn" onclick="findNext(1)" title="Next match (Enter)">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
+              <label class="find-case-label" title="Match case"><input type="checkbox" id="find-case" onchange="updateFindMatches()"> Aa</label>
+              <input type="text" id="replace-input" placeholder="Replace with…" onkeydown="handleFindInputKeys(event)">
+              <button class="btn btn-sm btn-outline" onclick="replaceCurrent()" title="Replace the selected match">Replace</button>
+              <button class="btn btn-sm btn-outline" onclick="replaceAllMatches()" title="Replace every match">All</button>
+              <button class="icon-btn" onclick="hideFindBar()" title="Close (Esc)">&times;</button>
+            </div>
             <div class="editor-wrapper">
               <div class="line-numbers" id="line-numbers"></div>
-              <textarea id="note-editor" oninput="handleEditorInput()" onkeydown="handleEditorKeys(event)" onscroll="syncEditorScroll(); syncSplitScroll('editor')" placeholder="Type Markdown here..."></textarea>
+              <textarea id="note-editor" spellcheck="true" oninput="handleEditorInput()" onkeydown="handleEditorKeys(event)" onscroll="syncEditorScroll(); syncSplitScroll('editor')" placeholder="Type Markdown here..."></textarea>
             </div>
           </div>
 
@@ -628,12 +656,21 @@
             </div>
             <div class="form-hint" id="settings-ai-status">Test checks the server and lists the models it has installed.</div>
           </div>
+          <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
+            <input type="checkbox" id="settings-ai-autocomplete" style="width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent-blue);">
+            <label for="settings-ai-autocomplete" style="margin-bottom: 0; cursor: pointer; user-select: none;">Smart autocomplete (ghost suggestions while typing — Tab accepts)</label>
+          </div>
+          <div class="form-hint" style="margin-top: -8px;">Works best with a small, fast model. Suggestions appear after a short pause at the end of a line.</div>
         </div>
 
         <!-- Auto Save Checkbox in Settings Modal -->
         <div class="form-group" style="display: flex; align-items: center; gap: 10px; margin-top: 20px;">
           <input type="checkbox" id="settings-autosave" style="width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent-blue);">
           <label for="settings-autosave" style="margin-bottom: 0; cursor: pointer; user-select: none;">Enable Auto-Save (automatically saves note 1 second after typing)</label>
+        </div>
+        <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
+          <input type="checkbox" id="settings-spellcheck" style="width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent-blue);">
+          <label for="settings-spellcheck" style="margin-bottom: 0; cursor: pointer; user-select: none;">Spell-check in the editor (red squiggles under misspelled words)</label>
         </div>
       </div>
       <div class="modal-footer">
@@ -753,13 +790,13 @@
   <div id="ai-polish-modal" class="modal-overlay">
     <div class="glass-card modal-card" style="max-width: 760px; width: 92%;">
       <div class="modal-header">
-        <h3>Polish with Local AI</h3>
+        <h3 id="ai-polish-title">Polish with Local AI</h3>
         <button class="close-btn" onclick="hideAiPolishModal()">&times;</button>
       </div>
       <div class="modal-body">
         <div id="ai-polish-intro">
-          <p style="margin: 0 0 10px;">Your local model (<strong id="ai-polish-model-label">—</strong>) will clean up this note's formatting: heading levels, list styles, spacing, tables, and code fences. Wording is only lightly touched — the content stays yours.</p>
-          <div class="form-hint">The note's header (frontmatter, title, and Related links) is kept back and re-attached untouched — the model never sees or edits it. Nothing is saved until you review and apply.</div>
+          <p style="margin: 0 0 10px;">Your local model (<strong id="ai-polish-model-label">—</strong>) <span id="ai-polish-intro-text">will clean up this note's formatting: heading levels, list styles, spacing, tables, and code fences. Wording is only lightly touched — the content stays yours.</span></p>
+          <div class="form-hint">The note's header (frontmatter, title, and Related links) is kept back untouched — the model never sees or edits it. Nothing is saved until you review and apply.</div>
         </div>
         <div id="ai-polish-running" style="display: none; text-align: center; padding: 24px 0;">
           <div class="app-loading-spinner" style="margin: 0 auto 12px;"></div>
@@ -768,7 +805,7 @@
         </div>
         <div id="ai-polish-result" style="display: none;">
           <div class="form-group">
-            <label>Polished note <span class="item-desc">(editable — tweak before applying; the header is re-attached automatically)</span></label>
+            <label id="ai-polish-result-label">Result <span class="item-desc">(editable — tweak before applying)</span></label>
             <textarea id="ai-polish-output" rows="16" style="width: 100%; font-family: var(--font-mono, monospace); font-size: 12.5px; resize: vertical;"></textarea>
           </div>
         </div>
@@ -776,10 +813,29 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-outline" onclick="hideAiPolishModal()">Cancel</button>
-        <button class="btn btn-primary" id="ai-polish-run-btn" onclick="runAiPolish()">Polish Note</button>
+        <button class="btn btn-primary" id="ai-polish-run-btn" onclick="runAiPolish()">Run</button>
         <button class="btn btn-primary" id="ai-polish-apply-btn" style="display: none;" onclick="applyAiPolish()">Apply to Note</button>
       </div>
     </div>
+  </div>
+
+  <!-- Task Board: every open task across the notebook, one column per section -->
+  <div id="taskboard-modal" class="modal-overlay">
+    <div class="glass-card modal-card taskboard-card">
+      <div class="modal-header">
+        <h3>Task Board</h3>
+        <button class="close-btn" onclick="hideTaskBoardModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="taskboard-columns"><!-- built dynamically --></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Image lightbox: click any preview image to view it large -->
+  <div id="image-lightbox" class="modal-overlay" onclick="hideImageLightbox()">
+    <img id="image-lightbox-img" src="" alt="">
+    <div id="image-lightbox-caption"></div>
   </div>
 
   <!-- Template Fields Modal: prompts for a template's custom {{variables}} -->

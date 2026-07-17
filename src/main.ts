@@ -53,6 +53,8 @@ interface AiSettings {
   baseUrl: string;
   /** Model name/id as the local server knows it (e.g. "llama3.1:8b"). */
   model: string;
+  /** Ghost-text completions while typing (needs `enabled` too). */
+  autocomplete: boolean;
 }
 
 interface AppSettings {
@@ -78,6 +80,8 @@ interface AppSettings {
   clipboardCaptureTarget: string;
   /** Optional local AI (Ollama / LM Studio) integration. */
   ai: AiSettings;
+  /** Browser spell-check squiggles in the note editor. */
+  spellcheckEnabled: boolean;
 }
 
 const defaultSettings: AppSettings = {
@@ -95,7 +99,8 @@ const defaultSettings: AppSettings = {
   quickCaptureShortcut: 'CommandOrControl+Shift+N',
   clipboardCaptureShortcut: 'CommandOrControl+Shift+G',
   clipboardCaptureTarget: '',
-  ai: { enabled: false, provider: 'ollama', baseUrl: '', model: '' },
+  ai: { enabled: false, provider: 'ollama', baseUrl: '', model: '', autocomplete: false },
+  spellcheckEnabled: true,
 };
 
 // Migrate settings written by older versions to the current shape
@@ -776,23 +781,143 @@ function aiProviderLabel(settings: AppSettings): string {
   return settings.ai.provider === 'lmstudio' ? 'LM Studio' : 'Ollama';
 }
 
-// The formatting contract sent with every polish request. The renderer also
-// strips the YAML frontmatter off mechanically before the text ever reaches
-// the model, so the header survives even a model that ignores instructions.
-const AI_POLISH_SYSTEM_PROMPT = [
-  'You are a markdown formatting assistant inside a note-taking app. The user gives you one note; you return the same note, cleaned up.',
-  '',
-  'What to improve:',
-  '- Fix heading hierarchy and spacing between sections.',
-  '- Normalize list formatting (bullets, numbering, indentation) and table alignment.',
-  '- Repair broken or unlabeled code fences.',
-  '- Correct obvious typos and punctuation. You may lightly smooth wording, but never change meaning, drop information, or invent content that is not in the note.',
-  '',
+// Every prompt shares the header-protection contract. The renderer ALSO
+// strips the YAML frontmatter/H1/Related lines mechanically before the text
+// ever reaches the model, so the header survives even a model that ignores
+// instructions.
+const AI_HARD_RULES = [
   'Hard rules — never break these:',
   '- Do NOT alter the note\'s custom header: any YAML frontmatter (--- ... --- block), the first H1 title line, and any "**Related:**" links line must be returned character-for-character unchanged, in their original position.',
   '- Keep [[wiki-links]], #tags, task checkboxes ("- [ ]" / "- [x]"), ```mermaid blocks, HTML comments, and image/attachment paths exactly as written.',
-  '- Return ONLY the reformatted markdown. No commentary, no explanations, and no wrapping code fence around the whole note.',
 ].join('\n');
+
+const AI_TRANSFORM_PROMPTS: Record<string, string> = {
+  polish: [
+    'You are a markdown formatting assistant inside a note-taking app. The user gives you one note; you return the same note, cleaned up.',
+    '',
+    'What to improve:',
+    '- Fix heading hierarchy and spacing between sections.',
+    '- Normalize list formatting (bullets, numbering, indentation) and table alignment.',
+    '- Repair broken or unlabeled code fences.',
+    '- Correct obvious typos and punctuation. You may lightly smooth wording, but never change meaning, drop information, or invent content that is not in the note.',
+    '',
+    AI_HARD_RULES,
+    '- Return ONLY the reformatted markdown. No commentary, no explanations, and no wrapping code fence around the whole note.',
+  ].join('\n'),
+  summarize: [
+    'You are a summarizing assistant inside a note-taking app. The user gives you one markdown note.',
+    'Write a 1-3 sentence TL;DR of the note: the key facts, decisions, or takeaways. Plain sentences, no headings, no bullet list, no preamble.',
+    'Return ONLY the summary text — it will be inserted into a "> **TL;DR:**" callout, so do not include "TL;DR" yourself.',
+  ].join('\n'),
+  tasks: [
+    'You are a task-extraction assistant inside a note-taking app. The user gives you one markdown note.',
+    'Find every action item, commitment, follow-up, or to-do implied by the note and return them as a markdown task list: one "- [ ] item" per line.',
+    'Skip tasks the note already lists as checkboxes. If there are no new action items, return exactly: NONE',
+    'Return ONLY the task lines (or NONE) — no headings, no commentary.',
+  ].join('\n'),
+  tags: [
+    'You are a tagging assistant inside a note-taking app. The user gives you one markdown note.',
+    'Suggest 3-6 short lowercase topic tags for it (single words or hyphenated-words, no # prefix).',
+    'Return ONLY the tags as one comma-separated line, e.g.: planning, budget, q3-review',
+  ].join('\n'),
+};
+
+const AI_COMPLETE_SYSTEM_PROMPT = [
+  'You autocomplete markdown notes. The user gives you the text before their cursor.',
+  'Continue it naturally with ONE short completion: at most one sentence, or one list item if the cursor is in a list.',
+  'Return ONLY the continuation text. Do not repeat any text the user already wrote, do not wrap it in quotes or a code fence, and do not explain.',
+].join('\n');
+
+// One chat round-trip against whichever provider is configured.
+async function aiChat(
+  settings: AppSettings,
+  messages: Array<{ role: string; content: string }>,
+  maxTokens: number,
+  timeoutMs: number,
+): Promise<string> {
+  const base = aiBaseUrl(settings);
+  const model = (settings.ai.model || '').trim();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    let content = '';
+    if (settings.ai.provider === 'lmstudio') {
+      const res = await fetch(`${base}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, messages, temperature: 0.2, stream: false, max_tokens: maxTokens }),
+        signal: controller.signal,
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+      const json: any = await res.json();
+      content = json.choices?.[0]?.message?.content ?? '';
+    } else {
+      const res = await fetch(`${base}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, messages, stream: false, options: { temperature: 0.2, num_predict: maxTokens } }),
+        signal: controller.signal,
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+      const json: any = await res.json();
+      content = json.message?.content ?? '';
+    }
+    // Reasoning models prepend <think> blocks; some models wrap the whole
+    // reply in a markdown fence despite instructions. Strip both.
+    content = content.replace(/^<think>[\s\S]*?<\/think>\s*/, '');
+    content = content.replace(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/, '$1');
+    return content;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function aiErrorMessage(err: any, settings: AppSettings, timeoutHint: string): string {
+  if (err?.name === 'AbortError') return timeoutHint;
+  if (/fetch failed|ECONNREFUSED|ENOTFOUND/i.test(String(err))) {
+    return `Could not reach ${aiBaseUrl(settings)} — is ${aiProviderLabel(settings)} running?`;
+  }
+  return String(err?.message || err);
+}
+
+ipcMain.handle('ai-transform', async (event, mode: string, text: string) => {
+  const settings = await readSettings();
+  if (!settings.ai.enabled) return { ok: false, error: 'Local AI is disabled — enable it in Settings first.' };
+  if (!(settings.ai.model || '').trim()) return { ok: false, error: 'No model configured — set one in Settings (use Test to list what\'s installed).' };
+  if (!text || !text.trim()) return { ok: false, error: 'This note has no content to work with yet.' };
+  const system = AI_TRANSFORM_PROMPTS[mode];
+  if (!system) return { ok: false, error: `Unknown AI action: ${mode}` };
+
+  try {
+    const content = await aiChat(settings, [
+      { role: 'system', content: system },
+      { role: 'user', content: text },
+    ], mode === 'polish' ? 4096 : 512, 180000); // local models can be slow
+    if (!content.trim()) return { ok: false, error: 'The model returned an empty response — try a different model.' };
+    return { ok: true, text: content };
+  } catch (err: any) {
+    return { ok: false, error: aiErrorMessage(err, settings, 'Timed out waiting for the model (3 min). A smaller/faster model may work better.') };
+  }
+});
+
+// Ghost-text completion: short, fast, and quiet — failures return ok:false
+// with no user-facing noise (the renderer just doesn't show a suggestion).
+ipcMain.handle('ai-complete', async (event, context: string) => {
+  const settings = await readSettings();
+  if (!settings.ai.enabled || !settings.ai.autocomplete) return { ok: false, error: 'disabled' };
+  if (!(settings.ai.model || '').trim()) return { ok: false, error: 'no model' };
+  if (!context || !context.trim()) return { ok: false, error: 'no context' };
+
+  try {
+    const content = await aiChat(settings, [
+      { role: 'system', content: AI_COMPLETE_SYSTEM_PROMPT },
+      { role: 'user', content: context },
+    ], 48, 20000);
+    return content.trim() ? { ok: true, text: content.replace(/\s+$/, '') } : { ok: false, error: 'empty' };
+  } catch (err: any) {
+    return { ok: false, error: aiErrorMessage(err, settings, 'timeout') };
+  }
+});
 
 // Reachability probe + model listing for the Settings "Test" button.
 ipcMain.handle('ai-list-models', async () => {
@@ -815,61 +940,6 @@ ipcMain.handle('ai-list-models', async () => {
     const msg = err?.name === 'AbortError'
       ? `Timed out reaching ${base} — is ${aiProviderLabel(settings)} running?`
       : `Could not reach ${base} — is ${aiProviderLabel(settings)} running? (${String(err?.message || err)})`;
-    return { ok: false, error: msg };
-  } finally {
-    clearTimeout(timer);
-  }
-});
-
-ipcMain.handle('ai-polish', async (event, text: string) => {
-  const settings = await readSettings();
-  if (!settings.ai.enabled) return { ok: false, error: 'Local AI is disabled — enable it in Settings first.' };
-  const model = (settings.ai.model || '').trim();
-  if (!model) return { ok: false, error: 'No model configured — set one in Settings (use Test to list what\'s installed).' };
-  if (!text || !text.trim()) return { ok: false, error: 'This note has no content to polish yet.' };
-
-  const base = aiBaseUrl(settings);
-  const messages = [
-    { role: 'system', content: AI_POLISH_SYSTEM_PROMPT },
-    { role: 'user', content: text },
-  ];
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 180000); // local models can be slow
-  try {
-    let content = '';
-    if (settings.ai.provider === 'lmstudio') {
-      const res = await fetch(`${base}/v1/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, messages, temperature: 0.2, stream: false }),
-        signal: controller.signal,
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
-      const json: any = await res.json();
-      content = json.choices?.[0]?.message?.content ?? '';
-    } else {
-      const res = await fetch(`${base}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, messages, stream: false, options: { temperature: 0.2 } }),
-        signal: controller.signal,
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
-      const json: any = await res.json();
-      content = json.message?.content ?? '';
-    }
-    // Reasoning models prepend <think> blocks; some models wrap the whole
-    // reply in a markdown fence despite instructions. Strip both.
-    content = content.replace(/^<think>[\s\S]*?<\/think>\s*/, '');
-    content = content.replace(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/, '$1');
-    if (!content.trim()) return { ok: false, error: 'The model returned an empty response — try a different model.' };
-    return { ok: true, text: content };
-  } catch (err: any) {
-    const msg = err?.name === 'AbortError'
-      ? 'Timed out waiting for the model (3 min). A smaller/faster model may work better.'
-      : /fetch failed|ECONNREFUSED|ENOTFOUND/i.test(String(err))
-        ? `Could not reach ${base} — is ${aiProviderLabel(settings)} running?`
-        : String(err?.message || err);
     return { ok: false, error: msg };
   } finally {
     clearTimeout(timer);
@@ -1717,6 +1787,16 @@ ipcMain.handle('move-node', async (event, dirPath, fileName, direction) => {
   }
 
   await writeOrderFile(dirPath, ord);
+  notifyFilesChanged();
+  return true;
+});
+
+// Wholesale reorder from drag & drop: the renderer sends the section's full
+// page list in its new order.
+ipcMain.handle('set-node-order', async (event, dirPath: string, orderedNames: string[]) => {
+  if (!dirPath || !Array.isArray(orderedNames)) return false;
+  if (!fs.existsSync(dirPath)) return false;
+  await writeOrderFile(dirPath, orderedNames.filter(n => typeof n === 'string' && n.trim().length > 0));
   notifyFilesChanged();
   return true;
 });
