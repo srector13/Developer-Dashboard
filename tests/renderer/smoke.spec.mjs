@@ -146,6 +146,19 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
     return html;
   }
 
+  // Stateful settings: saveSettings merges partial patches like real main does
+  const settingsState = {
+    notebookRoot: '/nb', defaultPageWidth: 'standard', defaultMermaidZoom: 100,
+    theme: 'dark', ignoreFolders: ['templates'], templatesFolder: 'templates',
+    author: '', scratchpadFile: 'scratchpad.md', autoSaveEnabled: false,
+    pandocPath: '',
+    pdfExport: { theme: 'light', pageSize: 'A4', openAfter: true, reveal: false },
+    quickCaptureShortcut: 'CommandOrControl+Shift+N',
+    clipboardCaptureShortcut: 'CommandOrControl+Shift+G',
+    clipboardCaptureTarget: '',
+    ai: { enabled: false, provider: 'ollama', baseUrl: '', model: '' },
+  };
+
   window.api = {
     searchNotes: async (q) => (window.__searchStub || []),
     saveAttachment: async (p) => ({ success: true, fsPath: '/nb/attachments/pasted.png', relPath: 'attachments/pasted.png' }),
@@ -159,17 +172,17 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
     readNoteHistory: async (p, id) => '# Old version\n\nOld content.',
     restoreNoteHistory: async (p, id) => true,
     platform,
-    getSettings: async () => ({
-      notebookRoot: '/nb', defaultPageWidth: 'standard', defaultMermaidZoom: 100,
-      theme: 'dark', ignoreFolders: ['templates'], templatesFolder: 'templates',
-      author: '', scratchpadFile: 'scratchpad.md', autoSaveEnabled: false,
-      pandocPath: '',
-      pdfExport: { theme: 'light', pageSize: 'A4', openAfter: true, reveal: false },
-      quickCaptureShortcut: 'CommandOrControl+Shift+N',
-      clipboardCaptureShortcut: 'CommandOrControl+Shift+G',
-      clipboardCaptureTarget: '',
-    }),
-    saveSettings: async (s) => { window.__savedSettings = s; return s; },
+    getSettings: async () => JSON.parse(JSON.stringify(settingsState)),
+    saveSettings: async (s) => {
+      window.__savedSettings = s;
+      Object.assign(settingsState, s);
+      return JSON.parse(JSON.stringify(settingsState));
+    },
+    aiListModels: async () => (window.__aiModelsStub || { ok: true, models: ['llama3.1:8b', 'qwen2.5:3b'] }),
+    aiPolish: async (text) => {
+      window.__aiPolishCall = text;
+      return window.__aiPolishStub || { ok: true, text: '## Polished\n\n- cleaned up\n' };
+    },
     getNotebookTree: async () => { window.__treeCalls++; return JSON.parse(JSON.stringify(tree)); },
     readNote: async (p) => files[p] || '',
     writeNote: async (p, c) => { files[p] = c; window.__writes.push(p); return true; },
@@ -1827,6 +1840,104 @@ await page.evaluate(() => window.submitLinkModal());
 await page.waitForTimeout(100);
 check('file link inserts markdown with file:// scheme', await page.evaluate(() =>
   document.getElementById('note-editor').value.trim() === '[Local spec](file:///Users/me/spec.pdf)'));
+
+// --- 50. Settings gear moved out of the (collapsible) sidebar ---
+check('settings gear no longer in the sidebar header', await page.evaluate(() =>
+  !document.querySelector('#sidebar .header-actions button[title="Settings"]')));
+check('settings gear lives in the right toolbar group', await page.evaluate(() => {
+  const btn = document.getElementById('btn-open-settings');
+  return !!btn && !!btn.closest('.toolbar') && !btn.closest('#sidebar');
+}));
+
+// --- 51. Local AI settings section ---
+await page.evaluate(() => window.showSettingsModal());
+await page.waitForTimeout(150);
+check('AI fields hidden while disabled', await page.evaluate(() =>
+  !document.getElementById('settings-ai-enabled').checked &&
+  document.getElementById('settings-ai-fields').style.display === 'none'));
+await page.evaluate(() => {
+  document.getElementById('settings-ai-enabled').checked = true;
+  window.toggleAiSettingsFields();
+});
+check('enabling AI reveals provider/url/model fields', await page.evaluate(() =>
+  document.getElementById('settings-ai-fields').style.display === 'block'));
+await page.evaluate(() => window.testAiConnection());
+await page.waitForTimeout(200);
+check('Test lists models from the stubbed server', await page.evaluate(() =>
+  document.getElementById('settings-ai-status').textContent.includes('llama3.1:8b')));
+check('Test autofills an empty model box with the first model', await page.evaluate(() =>
+  document.getElementById('settings-ai-model').value === 'llama3.1:8b'));
+await page.evaluate(() => window.saveSettingsForm());
+await page.waitForTimeout(300);
+check('saved settings carry the ai config', await page.evaluate(() =>
+  window.__savedSettings && window.__savedSettings.ai &&
+  window.__savedSettings.ai.enabled === true && window.__savedSettings.ai.model === 'llama3.1:8b'));
+
+// --- 52. AI polish flow: header split, run, apply ---
+// Re-open a real tree note first: the saveSettingsForm above refreshed the
+// notebook, which closed the phantom '/nb/new.md' left by the createPage test
+await page.evaluate(() => window.openNote('/nb/smoke.md'));
+await page.waitForTimeout(300);
+const AI_HEADER = '---\ntitle: Test Note\ncreated: 2026-01-01\n---\n# Test Note\n**Related:** [[other-page]]\n';
+await page.evaluate((header) => {
+  const ed = document.getElementById('note-editor');
+  ed.value = header + '\nsome   messy    body text\n-  bad list\n';
+}, AI_HEADER);
+await page.evaluate(() => window.openAiPolishModal());
+await page.waitForTimeout(120);
+check('AI polish modal opens when enabled', await page.evaluate(() =>
+  document.getElementById('ai-polish-modal').classList.contains('active')));
+check('modal names the configured model', await page.evaluate(() =>
+  document.getElementById('ai-polish-model-label').textContent === 'llama3.1:8b'));
+await page.evaluate(() => window.runAiPolish());
+await page.waitForTimeout(250);
+check('model never receives the custom header', await page.evaluate(() =>
+  typeof window.__aiPolishCall === 'string' &&
+  !window.__aiPolishCall.includes('---') &&
+  !window.__aiPolishCall.includes('# Test Note') &&
+  !window.__aiPolishCall.includes('**Related:**') &&
+  window.__aiPolishCall.includes('messy')));
+check('polished result shown with Apply button', await page.evaluate(() =>
+  document.getElementById('ai-polish-result').style.display === 'block' &&
+  document.getElementById('ai-polish-apply-btn').style.display !== 'none' &&
+  document.getElementById('ai-polish-output').value.includes('## Polished')));
+await page.evaluate(() => window.applyAiPolish());
+await page.waitForTimeout(150);
+check('apply reattaches the header untouched + polished body', await page.evaluate((header) => {
+  const v = document.getElementById('note-editor').value;
+  return v.startsWith(header) && v.includes('## Polished') && !v.includes('messy');
+}, AI_HEADER));
+check('modal closes after apply', await page.evaluate(() =>
+  !document.getElementById('ai-polish-modal').classList.contains('active')));
+
+// Error path: backend failure shows the message and offers to re-run
+await page.evaluate(() => {
+  window.__aiPolishStub = { ok: false, error: 'Could not reach http://localhost:11434 — is Ollama running?' };
+  const ed = document.getElementById('note-editor');
+  ed.value = '# T\n\nbody\n';
+  window.openAiPolishModal();
+});
+await page.waitForTimeout(120);
+await page.evaluate(() => window.runAiPolish());
+await page.waitForTimeout(250);
+check('AI failure surfaces the error and restores Run', await page.evaluate(() =>
+  document.getElementById('ai-polish-error').style.display === 'block' &&
+  document.getElementById('ai-polish-error').textContent.includes('is Ollama running') &&
+  document.getElementById('ai-polish-run-btn').style.display !== 'none'));
+await page.evaluate(() => { window.__aiPolishStub = null; window.hideAiPolishModal(); });
+
+// Disabled gate: turning AI back off routes the button to Settings
+await page.evaluate(async () => {
+  document.getElementById('settings-ai-enabled').checked = false;
+  await window.saveSettingsForm();
+});
+await page.waitForTimeout(250);
+await page.evaluate(() => window.openAiPolishModal());
+await page.waitForTimeout(120);
+check('AI button with AI disabled opens Settings, not the polish modal', await page.evaluate(() =>
+  !document.getElementById('ai-polish-modal').classList.contains('active') &&
+  document.getElementById('settings-modal').classList.contains('active')));
+await page.evaluate(() => window.hideSettingsModal());
 
 } finally {
   if (browser) await browser.close();

@@ -45,6 +45,16 @@ interface PdfExportOptions {
   reveal: boolean;
 }
 
+interface AiSettings {
+  /** Master switch — every AI feature is a no-op while this is false. */
+  enabled: boolean;
+  provider: 'ollama' | 'lmstudio';
+  /** Server base URL; empty uses the provider's default localhost port. */
+  baseUrl: string;
+  /** Model name/id as the local server knows it (e.g. "llama3.1:8b"). */
+  model: string;
+}
+
 interface AppSettings {
   notebookRoot: string;
   defaultPageWidth: 'standard' | 'wide' | 'full';
@@ -66,6 +76,8 @@ interface AppSettings {
   clipboardCaptureShortcut: string;
   /** Where windowless clipboard captures go: a note's relPath, or '' for today's daily note. */
   clipboardCaptureTarget: string;
+  /** Optional local AI (Ollama / LM Studio) integration. */
+  ai: AiSettings;
 }
 
 const defaultSettings: AppSettings = {
@@ -83,11 +95,17 @@ const defaultSettings: AppSettings = {
   quickCaptureShortcut: 'CommandOrControl+Shift+N',
   clipboardCaptureShortcut: 'CommandOrControl+Shift+G',
   clipboardCaptureTarget: '',
+  ai: { enabled: false, provider: 'ollama', baseUrl: '', model: '' },
 };
 
 // Migrate settings written by older versions to the current shape
 function migrateSettings(raw: Partial<AppSettings>): AppSettings {
-  const merged: AppSettings = { ...defaultSettings, ...raw, pdfExport: { ...defaultSettings.pdfExport, ...(raw.pdfExport || {}) } };
+  const merged: AppSettings = {
+    ...defaultSettings,
+    ...raw,
+    pdfExport: { ...defaultSettings.pdfExport, ...(raw.pdfExport || {}) },
+    ai: { ...defaultSettings.ai, ...(raw.ai || {}) },
+  };
   if (!raw.theme && raw.previewTheme) {
     merged.theme = raw.previewTheme === 'github-dark' ? 'dark' : raw.previewTheme === 'off' ? 'light' : 'system';
   }
@@ -740,6 +758,122 @@ ipcMain.handle('save-settings', async (event, settings) => {
     registerClipboardCaptureShortcut(updated.clipboardCaptureShortcut);
   }
   return updated;
+});
+
+// ==========================================
+// LOCAL AI (Ollama / LM Studio)
+// Optional, off by default. Talks only to a model server on the user's own
+// machine — note content never leaves it. Ollama speaks its native /api/chat;
+// LM Studio speaks the OpenAI-compatible /v1/chat/completions.
+// ==========================================
+
+function aiBaseUrl(settings: AppSettings): string {
+  if (settings.ai.baseUrl) return settings.ai.baseUrl.replace(/\/+$/, '');
+  return settings.ai.provider === 'lmstudio' ? 'http://localhost:1234' : 'http://localhost:11434';
+}
+
+function aiProviderLabel(settings: AppSettings): string {
+  return settings.ai.provider === 'lmstudio' ? 'LM Studio' : 'Ollama';
+}
+
+// The formatting contract sent with every polish request. The renderer also
+// strips the YAML frontmatter off mechanically before the text ever reaches
+// the model, so the header survives even a model that ignores instructions.
+const AI_POLISH_SYSTEM_PROMPT = [
+  'You are a markdown formatting assistant inside a note-taking app. The user gives you one note; you return the same note, cleaned up.',
+  '',
+  'What to improve:',
+  '- Fix heading hierarchy and spacing between sections.',
+  '- Normalize list formatting (bullets, numbering, indentation) and table alignment.',
+  '- Repair broken or unlabeled code fences.',
+  '- Correct obvious typos and punctuation. You may lightly smooth wording, but never change meaning, drop information, or invent content that is not in the note.',
+  '',
+  'Hard rules — never break these:',
+  '- Do NOT alter the note\'s custom header: any YAML frontmatter (--- ... --- block), the first H1 title line, and any "**Related:**" links line must be returned character-for-character unchanged, in their original position.',
+  '- Keep [[wiki-links]], #tags, task checkboxes ("- [ ]" / "- [x]"), ```mermaid blocks, HTML comments, and image/attachment paths exactly as written.',
+  '- Return ONLY the reformatted markdown. No commentary, no explanations, and no wrapping code fence around the whole note.',
+].join('\n');
+
+// Reachability probe + model listing for the Settings "Test" button.
+ipcMain.handle('ai-list-models', async () => {
+  const settings = await readSettings();
+  const base = aiBaseUrl(settings);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    if (settings.ai.provider === 'lmstudio') {
+      const res = await fetch(`${base}/v1/models`, { signal: controller.signal });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json: any = await res.json();
+      return { ok: true, models: (json.data || []).map((m: any) => m.id) };
+    }
+    const res = await fetch(`${base}/api/tags`, { signal: controller.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json: any = await res.json();
+    return { ok: true, models: (json.models || []).map((m: any) => m.name) };
+  } catch (err: any) {
+    const msg = err?.name === 'AbortError'
+      ? `Timed out reaching ${base} — is ${aiProviderLabel(settings)} running?`
+      : `Could not reach ${base} — is ${aiProviderLabel(settings)} running? (${String(err?.message || err)})`;
+    return { ok: false, error: msg };
+  } finally {
+    clearTimeout(timer);
+  }
+});
+
+ipcMain.handle('ai-polish', async (event, text: string) => {
+  const settings = await readSettings();
+  if (!settings.ai.enabled) return { ok: false, error: 'Local AI is disabled — enable it in Settings first.' };
+  const model = (settings.ai.model || '').trim();
+  if (!model) return { ok: false, error: 'No model configured — set one in Settings (use Test to list what\'s installed).' };
+  if (!text || !text.trim()) return { ok: false, error: 'This note has no content to polish yet.' };
+
+  const base = aiBaseUrl(settings);
+  const messages = [
+    { role: 'system', content: AI_POLISH_SYSTEM_PROMPT },
+    { role: 'user', content: text },
+  ];
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 180000); // local models can be slow
+  try {
+    let content = '';
+    if (settings.ai.provider === 'lmstudio') {
+      const res = await fetch(`${base}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, messages, temperature: 0.2, stream: false }),
+        signal: controller.signal,
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+      const json: any = await res.json();
+      content = json.choices?.[0]?.message?.content ?? '';
+    } else {
+      const res = await fetch(`${base}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, messages, stream: false, options: { temperature: 0.2 } }),
+        signal: controller.signal,
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+      const json: any = await res.json();
+      content = json.message?.content ?? '';
+    }
+    // Reasoning models prepend <think> blocks; some models wrap the whole
+    // reply in a markdown fence despite instructions. Strip both.
+    content = content.replace(/^<think>[\s\S]*?<\/think>\s*/, '');
+    content = content.replace(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/, '$1');
+    if (!content.trim()) return { ok: false, error: 'The model returned an empty response — try a different model.' };
+    return { ok: true, text: content };
+  } catch (err: any) {
+    const msg = err?.name === 'AbortError'
+      ? 'Timed out waiting for the model (3 min). A smaller/faster model may work better.'
+      : /fetch failed|ECONNREFUSED|ENOTFOUND/i.test(String(err))
+        ? `Could not reach ${base} — is ${aiProviderLabel(settings)} running?`
+        : String(err?.message || err);
+    return { ok: false, error: msg };
+  } finally {
+    clearTimeout(timer);
+  }
 });
 
 ipcMain.handle('get-notebook-tree', async (event, rootPath, filterTag) => {

@@ -279,6 +279,10 @@ contextBridge.exposeInMainWorld('api', {
   },
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   getAppVersion: () => ipcRenderer.invoke('app-version'),
+
+  // Local AI (Ollama / LM Studio) — optional, disabled by default
+  aiListModels: () => ipcRenderer.invoke('ai-list-models'),
+  aiPolish: (text: string) => ipcRenderer.invoke('ai-polish', text),
   
   // Inline actions in renderer
   toggleTaskAtLine: (filePath: string, line: number) => ipcRenderer.invoke('toggle-task-at-line', filePath, line),

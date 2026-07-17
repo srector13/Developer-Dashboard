@@ -2616,6 +2616,16 @@ function showSettingsModal() {
   document.getElementById('settings-ignore-folders').value = appSettings.ignoreFolders.join(', ');
   document.getElementById('settings-autosave').checked = autoSaveEnabled;
 
+  // Local AI (optional)
+  const ai = appSettings.ai || { enabled: false, provider: 'ollama', baseUrl: '', model: '' };
+  document.getElementById('settings-ai-enabled').checked = !!ai.enabled;
+  document.getElementById('settings-ai-provider').value = ai.provider || 'ollama';
+  document.getElementById('settings-ai-url').value = ai.baseUrl || '';
+  document.getElementById('settings-ai-model').value = ai.model || '';
+  document.getElementById('settings-ai-status').textContent = 'Test checks the server and lists the models it has installed.';
+  toggleAiSettingsFields();
+  updateAiProviderPlaceholder();
+
   // Populate the clipboard-capture target dropdown with every note (relPath)
   const targetSelect = document.getElementById('settings-clipboard-target');
   const pages = treeData ? gatherPagesRecursively(treeData) : [];
@@ -2644,6 +2654,12 @@ async function saveSettingsForm() {
   const clipboardTarget = document.getElementById('settings-clipboard-target').value;
   const ignore = document.getElementById('settings-ignore-folders').value.split(',').map(s => s.trim()).filter(s => s);
   const autosave = document.getElementById('settings-autosave').checked;
+  const ai = {
+    enabled: document.getElementById('settings-ai-enabled').checked,
+    provider: document.getElementById('settings-ai-provider').value,
+    baseUrl: document.getElementById('settings-ai-url').value.trim(),
+    model: document.getElementById('settings-ai-model').value.trim(),
+  };
 
   appSettings = await window.api.saveSettings({
     defaultPageWidth: width,
@@ -2658,6 +2674,7 @@ async function saveSettingsForm() {
     scratchpadFile: appSettings.scratchpadFile,
     ignoreFolders: ignore,
     autoSaveEnabled: autosave,
+    ai: ai,
   });
 
   applyTheme(theme);
@@ -2874,6 +2891,168 @@ function submitLinkModal() {
   hideLinkModal();
   textarea.focus();
   handleEditorInput();
+}
+
+// --- Local AI (Ollama / LM Studio) ------------------------------------------
+// All optional and off by default; every entry point checks appSettings.ai.
+
+function toggleAiSettingsFields() {
+  const on = document.getElementById('settings-ai-enabled').checked;
+  document.getElementById('settings-ai-fields').style.display = on ? 'block' : 'none';
+}
+
+function updateAiProviderPlaceholder() {
+  const provider = document.getElementById('settings-ai-provider').value;
+  const urlInput = document.getElementById('settings-ai-url');
+  const modelInput = document.getElementById('settings-ai-model');
+  if (provider === 'lmstudio') {
+    urlInput.placeholder = 'http://localhost:1234';
+    modelInput.placeholder = 'e.g. the model id shown by Test';
+  } else {
+    urlInput.placeholder = 'http://localhost:11434';
+    modelInput.placeholder = 'e.g. llama3.1:8b';
+  }
+}
+
+async function testAiConnection() {
+  const status = document.getElementById('settings-ai-status');
+  status.textContent = 'Checking…';
+  // Persist the in-form AI values first so main tests what the user typed,
+  // not what was last saved. Only the ai key is sent — nothing else changes.
+  const ai = {
+    enabled: document.getElementById('settings-ai-enabled').checked,
+    provider: document.getElementById('settings-ai-provider').value,
+    baseUrl: document.getElementById('settings-ai-url').value.trim(),
+    model: document.getElementById('settings-ai-model').value.trim(),
+  };
+  try {
+    appSettings = await window.api.saveSettings({ ai });
+    const result = await window.api.aiListModels();
+    if (!result.ok) {
+      status.textContent = result.error;
+      return;
+    }
+    if (!result.models.length) {
+      status.textContent = 'Connected, but no models are installed on the server yet.';
+      return;
+    }
+    status.textContent = `Connected ✓ — available models: ${result.models.join(', ')}`;
+    // Convenience: fill an empty model box with the first available model
+    const modelInput = document.getElementById('settings-ai-model');
+    if (!modelInput.value.trim()) modelInput.value = result.models[0];
+  } catch (err) {
+    status.textContent = 'Connection test failed: ' + err;
+  }
+}
+
+// Split the app's custom header off the raw note so the model NEVER receives
+// it: YAML frontmatter, plus the H1 title line and its "**Related:**" line
+// when they directly follow. Re-attached verbatim on apply.
+function splitNoteHeader(content) {
+  let header = '';
+  let rest = content;
+  const fm = rest.match(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/);
+  if (fm) {
+    header += fm[0];
+    rest = rest.slice(fm[0].length);
+  }
+  const h1 = rest.match(/^(\s*)(# [^\n]*\n?)/);
+  if (h1) {
+    header += h1[0];
+    rest = rest.slice(h1[0].length);
+    const related = rest.match(/^(\s*)(\*\*Related:\*\*[^\n]*\n?)/);
+    if (related) {
+      header += related[0];
+      rest = rest.slice(related[0].length);
+    }
+  }
+  return { header, body: rest };
+}
+
+let aiPolishPending = null; // { header } while a result is showing
+
+function openAiPolishModal() {
+  if (!appSettings.ai || !appSettings.ai.enabled) {
+    showToast('Local AI is off — enable it in Settings first.');
+    showSettingsModal();
+    return;
+  }
+  if (!activeNote) {
+    showToast('Open a note first.');
+    return;
+  }
+  aiPolishPending = null;
+  document.getElementById('ai-polish-model-label').textContent =
+    appSettings.ai.model || '(no model set)';
+  document.getElementById('ai-polish-intro').style.display = 'block';
+  document.getElementById('ai-polish-running').style.display = 'none';
+  document.getElementById('ai-polish-result').style.display = 'none';
+  document.getElementById('ai-polish-error').style.display = 'none';
+  document.getElementById('ai-polish-run-btn').style.display = '';
+  document.getElementById('ai-polish-apply-btn').style.display = 'none';
+  document.getElementById('ai-polish-modal').classList.add('active');
+}
+
+function hideAiPolishModal() {
+  document.getElementById('ai-polish-modal').classList.remove('active');
+  aiPolishPending = null;
+}
+
+async function runAiPolish() {
+  const editor = document.getElementById('note-editor');
+  const { header, body } = splitNoteHeader(editor.value);
+  if (!body.trim()) {
+    document.getElementById('ai-polish-error').textContent = 'This note has no body text to polish yet.';
+    document.getElementById('ai-polish-error').style.display = 'block';
+    return;
+  }
+
+  document.getElementById('ai-polish-intro').style.display = 'none';
+  document.getElementById('ai-polish-error').style.display = 'none';
+  document.getElementById('ai-polish-run-btn').style.display = 'none';
+  document.getElementById('ai-polish-running').style.display = 'block';
+  document.getElementById('ai-polish-running-label').textContent =
+    `Asking ${appSettings.ai.model || 'the model'}…`;
+
+  let result;
+  try {
+    result = await window.api.aiPolish(body);
+  } catch (err) {
+    result = { ok: false, error: String(err) };
+  }
+
+  document.getElementById('ai-polish-running').style.display = 'none';
+  if (!result || !result.ok) {
+    document.getElementById('ai-polish-intro').style.display = 'block';
+    document.getElementById('ai-polish-run-btn').style.display = '';
+    const errEl = document.getElementById('ai-polish-error');
+    errEl.textContent = (result && result.error) || 'The AI request failed.';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  aiPolishPending = { header };
+  document.getElementById('ai-polish-output').value = result.text;
+  document.getElementById('ai-polish-result').style.display = 'block';
+  document.getElementById('ai-polish-apply-btn').style.display = '';
+}
+
+function applyAiPolish() {
+  if (!aiPolishPending) return;
+  const editor = document.getElementById('note-editor');
+  const polished = document.getElementById('ai-polish-output').value;
+  // Reattach the untouched header exactly as it was, with one blank line
+  // between it and the polished body
+  let glue = '';
+  if (aiPolishPending.header) {
+    if (!aiPolishPending.header.endsWith('\n')) glue += '\n';
+    if (!polished.startsWith('\n')) glue += '\n';
+  }
+  editor.value = aiPolishPending.header + glue + polished;
+  hideAiPolishModal();
+  editor.focus();
+  handleEditorInput();
+  showToast('AI polish applied — review, then save.');
 }
 
 // Manual update check from the palette; auto-checks also run on launch.
