@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+  <title>Scratchpad</title>
+  <style>
+    :root {
+      --sp-bg: #1c1e26; --sp-head: #22252f; --sp-text: #eef0f4; --sp-dim: #9aa0ae;
+      --sp-border: rgba(255,255,255,0.10); --sp-accent: #6ea8ff;
+    }
+    body.light { --sp-bg: #fbfbfd; --sp-head: #f0f0f4; --sp-text: #1a1c22; --sp-dim: #6a7080; --sp-border: rgba(0,0,0,0.10); }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--sp-bg); color: var(--sp-text); overflow: hidden; }
+    #head {
+      -webkit-app-region: drag;
+      display: flex; align-items: center; gap: 8px;
+      height: 38px; padding: 0 10px;
+      background: var(--sp-head); border-bottom: 1px solid var(--sp-border);
+    }
+    #title { font-size: 12.5px; font-weight: 600; flex: 1; letter-spacing: 0.2px; }
+    #save-state { font-size: 11px; color: var(--sp-dim); }
+    .hbtn {
+      -webkit-app-region: no-drag;
+      width: 26px; height: 26px; border: none; border-radius: 6px;
+      background: transparent; color: var(--sp-dim); cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .hbtn:hover { background: var(--sp-border); color: var(--sp-text); }
+    .hbtn.on { color: var(--sp-accent); }
+    .hbtn svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2; }
+    #pad {
+      width: 100%; height: calc(100% - 38px);
+      border: none; outline: none; resize: none;
+      background: var(--sp-bg); color: var(--sp-text);
+      font-family: "SFMono-Regular", Consolas, monospace; font-size: 13px; line-height: 1.5;
+      padding: 12px 14px;
+    }
+    #pad::placeholder { color: var(--sp-dim); }
+  </style>
+</head>
+<body>
+  <div id="head">
+    <span id="title">Scratchpad</span>
+    <span id="save-state">Saved</span>
+    <button class="hbtn on" id="pin" title="Keep on top">
+      <svg viewBox="0 0 24 24"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14l-1.4-4.2a2 2 0 0 1 .4-2L20 8V3H4v5l2 2.8a2 2 0 0 1 .4 2z"/></svg>
+    </button>
+    <button class="hbtn" id="close" title="Close (Esc)">
+      <svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+  </div>
+  <textarea id="pad" spellcheck="true" placeholder="Anything you want to keep in reach… saved to your notebook's scratchpad."></textarea>
+
+  <script>
+    const api = window.scratchApi;
+    const pad = document.getElementById('pad');
+    const saveState = document.getElementById('save-state');
+    let saveTimer = null;
+    let pinned = true;
+
+    async function init() {
+      try {
+        const ctx = await api.context();
+        if (ctx && (ctx.theme === 'light' || ctx.theme === 'sepia')) document.body.classList.add('light');
+      } catch {}
+      try { pad.value = await api.read(); } catch {}
+      pad.focus();
+      pad.setSelectionRange(pad.value.length, pad.value.length);
+    }
+
+    function scheduleSave() {
+      saveState.textContent = 'Saving…';
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(async () => {
+        try { await api.write(pad.value); saveState.textContent = 'Saved'; }
+        catch { saveState.textContent = 'Save failed'; }
+      }, 500);
+    }
+    pad.addEventListener('input', scheduleSave);
+    // Flush on hide/blur so nothing is lost
+    window.addEventListener('blur', async () => { try { await api.write(pad.value); saveState.textContent = 'Saved'; } catch {} });
+
+    document.getElementById('close').addEventListener('click', () => api.hide());
+    document.getElementById('pin').addEventListener('click', () => {
+      pinned = !pinned;
+      api.setPin(pinned);
+      document.getElementById('pin').classList.toggle('on', pinned);
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); api.hide(); }
+    });
+    init();
+  </script>
+</body>
+</html>

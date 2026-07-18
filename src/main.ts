@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, globalShortcut, Menu, MenuItemConstructorOptions, nativeTheme } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, globalShortcut, Menu, MenuItemConstructorOptions, nativeTheme, Tray, nativeImage, desktopCapturer, screen } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
@@ -18,6 +18,11 @@ function logStartup(label: string) {
 }
 
 let mainWindow: BrowserWindow | null = null;
+// Whether closing the main window keeps the app resident in the tray; mirrored
+// from settings so the synchronous window 'close' handler can read it.
+let keepInTraySetting = true;
+// Set once a real quit is underway so close-to-tray doesn't veto it.
+let isQuitting = false;
 
 // Portable mode: keep ALL app state (settings, window state, caches) next to
 // the executable instead of %APPDATA%/~Library. Active when either
@@ -91,6 +96,9 @@ interface AppSettings {
   ai: AiSettings;
   /** Browser spell-check squiggles in the note editor. */
   spellcheckEnabled: boolean;
+  /** Keep running in the tray (global shortcut + tools stay live) when the
+   *  main window is closed, instead of quitting. */
+  keepInTray: boolean;
 }
 
 const defaultSettings: AppSettings = {
@@ -110,6 +118,7 @@ const defaultSettings: AppSettings = {
   clipboardCaptureTarget: '',
   ai: { enabled: false, provider: 'ollama', baseUrl: '', model: '', autocomplete: false },
   spellcheckEnabled: true,
+  keepInTray: true,
 };
 
 // Migrate settings written by older versions to the current shape
@@ -287,15 +296,27 @@ function createWindow() {
   // Fallback in case ready-to-show is slow or doesn't fire
   setTimeout(reveal, 8000);
 
+  // Close-to-tray: when keepInTray is on and we're not actually quitting,
+  // hide the window instead of destroying it so the tray + global launcher
+  // stay live. The single-instance lock still prevents stacked processes.
+  mainWindow.on('close', (e) => {
+    if (isQuitting) return;
+    if (keepInTraySetting && tray) {
+      e.preventDefault();
+      if (mainWindow) mainWindow.hide();
+    }
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
-    // The hidden quick-capture window is still a live BrowserWindow, so
+    // The hidden helper windows are still live BrowserWindows, so
     // window-all-closed never fires on its own — without this the process
     // (and its global shortcuts / the portable launcher stub) lingers,
-    // stacking a new zombie session on every launch. Tear it down and quit.
+    // stacking a new zombie session on every launch. Tear them down and quit
+    // — UNLESS we're intentionally staying resident in the tray.
     if (captureWindow && !captureWindow.isDestroyed()) captureWindow.destroy();
     captureWindow = null;
-    if (process.platform !== 'darwin') app.quit();
+    if (process.platform !== 'darwin' && !(keepInTraySetting && tray)) app.quit();
   });
 
   updateWatcher();
@@ -367,11 +388,7 @@ if (!gotSingleInstanceLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      if (!mainWindow.isVisible()) mainWindow.show();
-      mainWindow.focus();
-    }
+    revealMainWindow();
   });
 }
 
@@ -382,6 +399,7 @@ app.whenReady().then(async () => {
   // Register after the renderer loads so a registration failure (shortcut
   // taken by another app) can surface as a toast instead of vanishing.
   const settings = await readSettings();
+  keepInTraySetting = settings.keepInTray !== false;
   // Seed the per-user pointer for installs that predate it
   writeNotebookPointer(settings.notebookRoot);
   if (mainWindow) {
@@ -397,6 +415,7 @@ app.whenReady().then(async () => {
     }
   });
 
+  createTray();
   setupAutoUpdater();
 });
 
@@ -454,6 +473,10 @@ ipcMain.handle('check-for-updates', async () => {
 ipcMain.handle('app-version', () => app.getVersion());
 
 app.on('window-all-closed', () => {
+  // Resident-in-tray mode: keep the process alive with no windows so the
+  // global launcher and tray tools stay available. (Helper windows are
+  // hidden, not counted here once destroyed.)
+  if (keepInTraySetting && tray) return;
   if (process.platform !== 'darwin') {
     app.quit();
   }
@@ -461,6 +484,7 @@ app.on('window-all-closed', () => {
 
 // Make sure the hidden capture window can't hold up a quit
 app.on('before-quit', () => {
+  isQuitting = true; // let the main window actually close (bypass close-to-tray)
   if (captureWindow && !captureWindow.isDestroyed()) captureWindow.destroy();
   captureWindow = null;
   // Don't lose a pending debounced write of the startup meta cache
@@ -859,6 +883,7 @@ ipcMain.handle('save-settings', async (event, settings) => {
   if (updated.clipboardCaptureShortcut !== before.clipboardCaptureShortcut) {
     registerClipboardCaptureShortcut(updated.clipboardCaptureShortcut);
   }
+  keepInTraySetting = updated.keepInTray !== false;
   return updated;
 });
 
@@ -2713,7 +2738,9 @@ function registerQuickCaptureShortcut(accelerator: string): boolean {
   const shortcut = (accelerator || '').trim();
   if (!shortcut) return true;
   try {
-    if (globalShortcut.register(shortcut, toggleCaptureWindow)) {
+    // Repurposed in v1.4.0: this shortcut now opens the Golden-Gate launcher
+    // (quick capture is one of its tools) instead of the bare capture window.
+    if (globalShortcut.register(shortcut, toggleLauncherWindow)) {
       registeredCaptureShortcut = shortcut;
       return true;
     }
@@ -2754,6 +2781,52 @@ ipcMain.handle('list-capture-targets', async () => {
 //    (anywhere-by-basename lookup, else at the root) when missing.
 //  - explicit target: appended at the end of the file — the natural shape
 //    for "add this snippet to my Code Snippets doc".
+// Find today's daily note anywhere in the tree, creating it (at the root)
+// when missing. Shared by quick capture, task capture, and "open daily note".
+async function resolveOrCreateDailyNote(settings: AppSettings): Promise<string> {
+  const root = settings.notebookRoot;
+  const today = localDateString();
+  const dailyName = `${today}.md`;
+  const ignore = new Set(settings.ignoreFolders.map(s => s.toLowerCase()));
+  const allFiles = await listMarkdownFiles(root, ignore, root);
+  let notePath = allFiles.find(f => path.basename(f).toLowerCase() === dailyName) || '';
+  if (!notePath) {
+    const fm: string[] = ['---', `title: ${yamlValue(today)}`, `created: ${today}`];
+    if (settings.author) fm.push(`author: ${yamlValue(settings.author)}`);
+    fm.push(tagsYamlLine([]), '---', '', `# ${today}`, '');
+    notePath = path.join(root, await uniqueMd(root, today));
+    await fsp.writeFile(notePath, fm.join('\n'), 'utf8');
+    const ord = await readOrderFile(root);
+    ord.push(path.basename(notePath));
+    await writeOrderFile(root, ord);
+  }
+  return notePath;
+}
+
+// Insert entryLines under a "## <heading>" section, creating the section at
+// the end when absent. Fence-aware so ``` lines inside the section aren't
+// mistaken for the section boundary. Returns the new file text.
+function appendLinesUnderHeading(content: string, heading: string, entryLines: string[]): string {
+  const lines = content.split(/\r?\n/);
+  const headingRe = new RegExp(`^##\\s+${heading.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\s*$`, 'i');
+  const headingIdx = lines.findIndex(l => headingRe.test(l));
+  if (headingIdx === -1) {
+    while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
+    lines.push('', `## ${heading}`, '', ...entryLines, '');
+  } else {
+    let end = lines.length;
+    let inFence = false;
+    for (let i = headingIdx + 1; i < lines.length; i++) {
+      if (/^\s*```/.test(lines[i])) inFence = !inFence;
+      else if (!inFence && /^#{1,6}\s/.test(lines[i])) { end = i; break; }
+    }
+    let insertAt = end;
+    while (insertAt > headingIdx + 1 && lines[insertAt - 1].trim() === '') insertAt--;
+    lines.splice(insertAt, 0, '', ...entryLines);
+  }
+  return lines.join('\n');
+}
+
 async function appendCapture(text: string, targetFsPath?: string): Promise<{ success: boolean; notePath?: string; reason?: string }> {
   const settings = await readSettings();
   const root = settings.notebookRoot;
@@ -2778,56 +2851,10 @@ async function appendCapture(text: string, targetFsPath?: string): Promise<{ suc
     return { success: true, notePath };
   }
 
-  const today = localDateString();
-  const dailyName = `${today}.md`;
-
-  // Find today's note anywhere in the tree
-  const ignore = new Set(settings.ignoreFolders.map(s => s.toLowerCase()));
-  const allFiles = await listMarkdownFiles(root, ignore, root);
-  notePath = allFiles.find(f => path.basename(f).toLowerCase() === dailyName) || '';
-
-  if (!notePath) {
-    // Same skeleton as create-page, title = the date
-    const fm: string[] = ['---', `title: ${yamlValue(today)}`, `created: ${today}`];
-    if (settings.author) fm.push(`author: ${yamlValue(settings.author)}`);
-    fm.push(tagsYamlLine([]), '---', '', `# ${today}`, '');
-    notePath = path.join(root, await uniqueMd(root, today));
-    await fsp.writeFile(notePath, fm.join('\n'), 'utf8');
-    const ord = await readOrderFile(root);
-    ord.push(path.basename(notePath));
-    await writeOrderFile(root, ord);
-  }
-
+  notePath = await resolveOrCreateDailyNote(settings);
   // Verbatim: keep the user's own markdown intact (tasks, lists, etc.)
-  const entryLines = raw.split('\n');
-
   const content = await fsp.readFile(notePath, 'utf8');
-  const lines = content.split(/\r?\n/);
-  const headingIdx = lines.findIndex(l => /^##\s+Quick Capture\s*$/i.test(l));
-
-  if (headingIdx === -1) {
-    while (lines.length && lines[lines.length - 1].trim() === '') lines.pop();
-    // Blank after the heading already separates; no extra leading blank
-    lines.push('', '## Quick Capture', '', ...entryLines, '');
-  } else {
-    // End of the section: the next heading of any level, else EOF.
-    // Fenced code inside the section must not have its ``` lines mistaken
-    // for content when scanning — but headings can't legally appear inside
-    // a fence, so track fence state while scanning.
-    let end = lines.length;
-    let inFence = false;
-    for (let i = headingIdx + 1; i < lines.length; i++) {
-      if (/^\s*```/.test(lines[i])) inFence = !inFence;
-      else if (!inFence && /^#{1,6}\s/.test(lines[i])) { end = i; break; }
-    }
-    let insertAt = end;
-    while (insertAt > headingIdx + 1 && lines[insertAt - 1].trim() === '') insertAt--;
-    // Separate this capture from the previous one so plain-text notes don't
-    // merge into a single paragraph (a blank between list items is harmless)
-    lines.splice(insertAt, 0, '', ...entryLines);
-  }
-
-  await writeNoteFile(notePath, lines.join('\n'), { snapshot: true });
+  await writeNoteFile(notePath, appendLinesUnderHeading(content, 'Quick Capture', raw.split('\n')), { snapshot: true });
   notifyFilesChanged();
   return { success: true, notePath };
 }
@@ -2885,6 +2912,345 @@ function registerClipboardCaptureShortcut(accelerator: string): boolean {
   } catch { /* invalid accelerator */ }
   if (mainWindow) mainWindow.webContents.send('capture-shortcut-failed', shortcut);
   return false;
+}
+
+// ===========================================================================
+// DESKTOP TOOLING: tray, the Golden-Gate launcher, floating scratchpad, and
+// screenshot-to-note. All summonable without the main window; they share the
+// capture plumbing above.
+// ===========================================================================
+
+// Reveal + focus the main window (recreating it on macOS after all windows
+// closed), optionally telling the renderer to open a specific note.
+function revealMainWindow(openNoteFsPath?: string) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+  }
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  if (!mainWindow.isVisible()) mainWindow.show();
+  mainWindow.focus();
+  if (openNoteFsPath) {
+    const send = () => mainWindow && mainWindow.webContents.send('open-note', openNoteFsPath);
+    // If the window was just created its renderer may not be ready yet
+    if (mainWindow.webContents.isLoading()) mainWindow.webContents.once('did-finish-load', send);
+    else send();
+  }
+}
+
+// --- Golden-Gate launcher --------------------------------------------------
+let launcherWindow: BrowserWindow | null = null;
+
+function createLauncherWindow(): BrowserWindow {
+  const win = new BrowserWindow({
+    width: 720,
+    height: 500,
+    show: false,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    hasShadow: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'launcher-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+  win.loadFile(path.join(__dirname, '../renderer/launcher.html'));
+  win.on('blur', () => { if (!win.isDestroyed()) win.hide(); });
+  win.on('closed', () => { if (launcherWindow === win) launcherWindow = null; });
+  return win;
+}
+
+function toggleLauncherWindow() {
+  if (!launcherWindow || launcherWindow.isDestroyed()) {
+    launcherWindow = createLauncherWindow();
+  }
+  if (launcherWindow.isVisible()) {
+    launcherWindow.hide();
+    return;
+  }
+  // Position near the top third of the display under the cursor (Spotlight-like)
+  const cursor = screen.getCursorScreenPoint();
+  const display = screen.getDisplayNearestPoint(cursor);
+  const [w, h] = launcherWindow.getSize();
+  const x = Math.round(display.workArea.x + (display.workArea.width - w) / 2);
+  const y = Math.round(display.workArea.y + display.workArea.height * 0.18);
+  launcherWindow.setPosition(x, y);
+  launcherWindow.webContents.send('launcher-reset'); // fresh state each open
+  launcherWindow.show();
+  launcherWindow.focus();
+}
+
+ipcMain.on('launcher-hide', () => { if (launcherWindow && !launcherWindow.isDestroyed()) launcherWindow.hide(); });
+
+// The launcher grows/shrinks as search results appear; keep it anchored
+ipcMain.on('launcher-resize', (event, height: number) => {
+  if (!launcherWindow || launcherWindow.isDestroyed()) return;
+  const h = Math.max(120, Math.min(700, Math.round(height)));
+  const [w] = launcherWindow.getSize();
+  const [x, y] = launcherWindow.getPosition();
+  launcherWindow.setBounds({ x, y, width: w, height: h });
+});
+
+ipcMain.handle('launcher-context', async () => {
+  const settings = await readSettings();
+  return { theme: settings.theme, hasNotebook: !!settings.notebookRoot };
+});
+
+// Fast, launcher-scoped note search: title match first, then a light content
+// scan. Reuses the in-memory search index built by the main window.
+ipcMain.handle('launcher-search', async (event, query: string) => {
+  const q = String(query || '').trim().toLowerCase();
+  if (q.length < 1) return [];
+  await indexBuildQueue; // ensure the background doc build is done
+  const terms = q.split(/\s+/).filter(t => t);
+  const scored: Array<{ fsPath: string; relPath: string; title: string; snippet: string; score: number }> = [];
+  for (const doc of searchIndex.values()) {
+    const titleLower = doc.title.toLowerCase();
+    const titleHit = terms.every(t => titleLower.includes(t));
+    let bodyLine = '';
+    let bodyHit = false;
+    if (!titleHit) {
+      for (const line of doc.lines) {
+        const ll = line.toLowerCase();
+        if (terms.every(t => ll.includes(t))) { bodyHit = true; bodyLine = line.trim(); break; }
+      }
+    }
+    if (!titleHit && !bodyHit) continue;
+    const score = (titleHit ? 100 : 0) + (titleLower.startsWith(q) ? 50 : 0) - doc.relPath.length * 0.01;
+    scored.push({ fsPath: doc.fsPath, relPath: doc.relPath, title: doc.title, snippet: titleHit ? '' : bodyLine.slice(0, 120), score });
+  }
+  scored.sort((a, b) => b.score - a.score || a.title.localeCompare(b.title));
+  return scored.slice(0, 8).map(({ score, ...rest }) => rest);
+});
+
+ipcMain.on('launcher-open-note', (event, fsPath: string) => {
+  if (launcherWindow && !launcherWindow.isDestroyed()) launcherWindow.hide();
+  revealMainWindow(fsPath);
+});
+
+ipcMain.handle('launcher-open-daily', async () => {
+  const settings = await readSettings();
+  if (!settings.notebookRoot) { revealMainWindow(); return { success: false }; }
+  const notePath = await resolveOrCreateDailyNote(settings);
+  notifyFilesChanged();
+  if (launcherWindow && !launcherWindow.isDestroyed()) launcherWindow.hide();
+  revealMainWindow(notePath);
+  return { success: true, notePath };
+});
+
+// Task capture: files "- [ ] <text>" under a "## Tasks" section of the daily
+// note (create it if needed). Multi-line input becomes multiple tasks.
+ipcMain.handle('launcher-append-task', async (event, text: string) => {
+  const settings = await readSettings();
+  if (!settings.notebookRoot || !fs.existsSync(settings.notebookRoot)) {
+    return { success: false, reason: 'No notebook folder is set.' };
+  }
+  const raw = String(text || '').replace(/\r\n/g, '\n').trim();
+  if (!raw) return { success: false, reason: 'Nothing to capture.' };
+  const taskLines = raw.split('\n').map(l => l.trim()).filter(l => l)
+    .map(l => /^[-*+]\s*\[[ xX]\]/.test(l) ? l.replace(/^[*+]/, '-') : `- [ ] ${l.replace(/^[-*+]\s*/, '')}`);
+  const notePath = await resolveOrCreateDailyNote(settings);
+  const content = await fsp.readFile(notePath, 'utf8');
+  await writeNoteFile(notePath, appendLinesUnderHeading(content, 'Tasks', taskLines), { snapshot: true });
+  notifyFilesChanged();
+  return { success: true, notePath, count: taskLines.length };
+});
+
+// --- Floating scratchpad ---------------------------------------------------
+let scratchpadWindow: BrowserWindow | null = null;
+
+function createScratchpadWindow(): BrowserWindow {
+  const win = new BrowserWindow({
+    width: 380,
+    height: 480,
+    minWidth: 260,
+    minHeight: 200,
+    show: false,
+    frame: false,
+    resizable: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'scratchpad-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+  win.loadFile(path.join(__dirname, '../renderer/scratchpad.html'));
+  wireSpellcheckMenu(win);
+  win.on('closed', () => { if (scratchpadWindow === win) scratchpadWindow = null; });
+  return win;
+}
+
+function showScratchpadWindow() {
+  if (!scratchpadWindow || scratchpadWindow.isDestroyed()) {
+    scratchpadWindow = createScratchpadWindow();
+  }
+  if (scratchpadWindow.isVisible()) { scratchpadWindow.focus(); return; }
+  scratchpadWindow.show();
+  scratchpadWindow.focus();
+}
+
+ipcMain.handle('launcher-open-scratchpad', () => {
+  if (launcherWindow && !launcherWindow.isDestroyed()) launcherWindow.hide();
+  showScratchpadWindow();
+  return { success: true };
+});
+ipcMain.handle('launcher-screenshot', () => { startScreenshotCapture(); return { success: true }; });
+
+ipcMain.on('scratchpad-hide', () => { if (scratchpadWindow && !scratchpadWindow.isDestroyed()) scratchpadWindow.hide(); });
+ipcMain.on('scratchpad-pin', (event, pinned: boolean) => {
+  if (scratchpadWindow && !scratchpadWindow.isDestroyed()) scratchpadWindow.setAlwaysOnTop(!!pinned);
+});
+
+// Whole-document save (the floating pad edits the entire scratchpad file).
+ipcMain.handle('write-scratchpad', async (event, text: string) => {
+  const settings = await readSettings();
+  if (!settings.notebookRoot) return false;
+  const scratchPath = path.join(settings.notebookRoot, settings.scratchpadFile);
+  await fsp.writeFile(scratchPath, String(text ?? ''), 'utf8');
+  notifyFilesChanged();
+  return true;
+});
+
+// --- Screenshot-to-note ----------------------------------------------------
+let regionWindow: BrowserWindow | null = null;
+let pendingShot: { dataUrl: string; scaleFactor: number; width: number; height: number } | null = null;
+
+async function startScreenshotCapture() {
+  try {
+    if (launcherWindow && launcherWindow.isVisible()) launcherWindow.hide();
+    const settings = await readSettings();
+    if (!settings.notebookRoot) {
+      notifyDesktop('Screenshot', 'Set a notebook folder first.');
+      return;
+    }
+    const cursor = screen.getCursorScreenPoint();
+    const display = screen.getDisplayNearestPoint(cursor);
+    const sf = display.scaleFactor || 1;
+    // Capture at true pixel resolution so the crop is sharp
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: Math.round(display.size.width * sf), height: Math.round(display.size.height * sf) },
+    });
+    // Match the source to the display by id when possible; else first
+    const source = sources.find(s => String(s.display_id) === String(display.id)) || sources[0];
+    if (!source || source.thumbnail.isEmpty()) {
+      notifyDesktop('Screenshot', 'Could not capture the screen. On macOS, grant Screen Recording permission and retry.');
+      return;
+    }
+    pendingShot = {
+      dataUrl: source.thumbnail.toDataURL(),
+      scaleFactor: sf,
+      width: display.size.width,
+      height: display.size.height,
+    };
+    regionWindow = new BrowserWindow({
+      x: display.bounds.x, y: display.bounds.y,
+      width: display.size.width, height: display.size.height,
+      frame: false, transparent: true, resizable: false, movable: false,
+      alwaysOnTop: true, skipTaskbar: true, hasShadow: false, fullscreenable: false,
+      enableLargerThanScreen: true,
+      webPreferences: {
+        preload: path.join(__dirname, 'region-preload.js'),
+        contextIsolation: true, nodeIntegration: false, sandbox: false,
+      },
+    });
+    regionWindow.setAlwaysOnTop(true, 'screen-saver');
+    regionWindow.loadFile(path.join(__dirname, '../renderer/region-select.html'));
+    regionWindow.on('closed', () => { regionWindow = null; });
+  } catch (err) {
+    console.error('Screenshot capture failed:', err);
+    notifyDesktop('Screenshot', 'Screen capture failed.');
+  }
+}
+
+ipcMain.handle('region-get-shot', () => pendingShot);
+ipcMain.on('region-cancel', () => { if (regionWindow && !regionWindow.isDestroyed()) regionWindow.close(); pendingShot = null; });
+ipcMain.handle('region-commit', async (event, rect: { x: number; y: number; width: number; height: number }) => {
+  const shot = pendingShot;
+  if (regionWindow && !regionWindow.isDestroyed()) regionWindow.close();
+  pendingShot = null;
+  if (!shot || !rect || rect.width < 3 || rect.height < 3) return { success: false };
+  try {
+    const full = nativeImage.createFromDataURL(shot.dataUrl);
+    const sf = shot.scaleFactor;
+    // Rect comes in CSS px (display points); scale to the thumbnail's pixels
+    const crop = full.crop({
+      x: Math.round(rect.x * sf),
+      y: Math.round(rect.y * sf),
+      width: Math.round(rect.width * sf),
+      height: Math.round(rect.height * sf),
+    });
+    const settings = await readSettings();
+    const notePath = await resolveOrCreateDailyNote(settings);
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const result = await storeAttachment(Buffer.from(crop.toPNG()), `screenshot-${stamp}.png`, 'png', notePath);
+    if (!result.success) return { success: false, reason: result.reason };
+    const md = `![screenshot](${result.relPath})`;
+    const content = await fsp.readFile(notePath, 'utf8');
+    await writeNoteFile(notePath, appendLinesUnderHeading(content, 'Screenshots', [md]), { snapshot: true });
+    notifyFilesChanged();
+    notifyDesktop('Screenshot saved', `Filed to ${path.basename(notePath)}`);
+    return { success: true, notePath };
+  } catch (err) {
+    console.error('Screenshot crop/save failed:', err);
+    return { success: false };
+  }
+});
+
+function notifyDesktop(title: string, body: string) {
+  try {
+    const { Notification } = require('electron');
+    if (Notification.isSupported()) new Notification({ title, body, silent: true }).show();
+  } catch { /* notifications unsupported */ }
+}
+
+// --- Tray / menu-bar icon --------------------------------------------------
+let tray: Tray | null = null;
+
+function buildTrayMenu(): Menu {
+  return Menu.buildFromTemplate([
+    { label: 'Open Markdown Notebook', click: () => revealMainWindow() },
+    { type: 'separator' },
+    { label: 'Launcher…', click: () => toggleLauncherWindow() },
+    { label: 'New Quick Capture', click: () => toggleCaptureWindow() },
+    { label: "Open Today's Daily Note", click: async () => {
+        const settings = await readSettings();
+        if (settings.notebookRoot) revealMainWindow(await resolveOrCreateDailyNote(settings));
+        else revealMainWindow();
+      } },
+    { label: 'Screenshot to Note', click: () => startScreenshotCapture() },
+    { label: 'Floating Scratchpad', click: () => showScratchpadWindow() },
+    { type: 'separator' },
+    { label: 'Quit', click: () => { app.quit(); } },
+  ]);
+}
+
+function createTray() {
+  if (tray) return;
+  try {
+    const iconPath = path.join(__dirname, '../build/icon.png');
+    let img = nativeImage.createFromPath(iconPath);
+    if (!img.isEmpty()) {
+      img = img.resize({ width: 18, height: 18 });
+      if (process.platform === 'darwin') img.setTemplateImage(true);
+    }
+    tray = new Tray(img.isEmpty() ? nativeImage.createEmpty() : img);
+    tray.setToolTip('Markdown Notebook');
+    tray.setContextMenu(buildTrayMenu());
+    // Left-click opens the app on Windows/Linux (macOS shows the menu)
+    tray.on('click', () => { if (process.platform !== 'darwin') revealMainWindow(); });
+  } catch (err) {
+    console.error('Tray creation failed:', err);
+  }
 }
 
 // Inline helper: toggle checkboxes inside markdown file text

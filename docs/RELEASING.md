@@ -22,6 +22,19 @@ The portable target keeps **all app state next to the executable** instead of `%
 
 The zip distribution can opt in to the same behavior: create a folder named `MarkdownNotebookData` next to the executable once, and the app becomes self-contained from then on. Without that folder, zip builds use the normal per-user location.
 
+## Desktop tooling (tray, launcher, scratchpad, screenshot)
+
+Beyond the main window, the app runs a set of always-available tools (v1.4.0):
+
+- **Tray / menu-bar icon** — created at startup. Menu: open the app, launcher, quick capture, today's daily note, screenshot-to-note, floating scratchpad, quit.
+- **Golden-Gate launcher** — a frameless, transparent, always-on-top pop-up bound to the system-wide **Launcher Shortcut** (the old quick-capture shortcut, repurposed; default `CommandOrControl+Shift+N`). Tool "orbs" (Search, Note, Task, Daily, Screenshot, Scratchpad) cycle with **Tab** / **⌘⌃+1–6**; typing runs the active tool. Search reuses the in-memory search index and opens results in the main window via the `open-note` IPC.
+- **Floating scratchpad** — an always-on-top window backed by the notebook's `scratchpad.md` (whole-file autosave).
+- **Screenshot-to-note** — captures the display under the cursor via `desktopCapturer` at true pixel resolution, shows a region-select overlay, crops (scaling the CSS-pixel rect by the display `scaleFactor`), and files the PNG as an attachment under a `## Screenshots` section of the daily note. **macOS requires Screen Recording permission** — the first attempt triggers the OS prompt and returns black until granted.
+
+**Close-to-tray:** the `keepInTray` setting (default **on**) keeps the process resident in the tray when the main window is closed, so the launcher and tools stay live. The single-instance lock prevents stacked processes. Turn it off (Settings) to make closing the window quit the app entirely; **Quit** is always available from the tray menu. The tray/global tools are gated behind having launched the app at least once — they do not survive a full quit.
+
+Main-process behavior is covered by `tests/main/desktop-tools.spec.cjs` (loads the real `out/main.js` with a stubbed electron module) and the launcher UI by `tests/renderer/launcher.spec.mjs`.
+
 ## Startup performance
 
 Where launch time goes, and which build to use:

@@ -115,7 +115,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   // another app) — tell the user so the feature doesn't silently not work
   if (window.api.onCaptureShortcutFailed) {
     window.api.onCaptureShortcutFailed((shortcut) => {
-      showToast(`Could not register quick capture shortcut "${shortcut}". Change it in Settings.`, 'error');
+      showToast(`Could not register launcher shortcut "${shortcut}". Change it in Settings.`, 'error');
+    });
+  }
+
+  // The launcher / tray can ask us to open a specific note in the main window
+  if (window.api.onOpenNote) {
+    window.api.onOpenNote((fsPath) => {
+      if (fsPath) openNote(fsPath);
     });
   }
 
@@ -2680,6 +2687,7 @@ function showSettingsModal() {
   document.getElementById('settings-ai-autocomplete').checked = !!ai.autocomplete;
   document.getElementById('settings-ai-status').textContent = 'Test checks the server and lists the models it has installed.';
   document.getElementById('settings-spellcheck').checked = appSettings.spellcheckEnabled !== false;
+  document.getElementById('settings-keep-in-tray').checked = appSettings.keepInTray !== false;
   toggleAiSettingsFields();
   updateAiProviderPlaceholder();
 
@@ -2719,6 +2727,7 @@ async function saveSettingsForm() {
     autocomplete: document.getElementById('settings-ai-autocomplete').checked,
   };
   const spellcheck = document.getElementById('settings-spellcheck').checked;
+  const keepInTray = document.getElementById('settings-keep-in-tray').checked;
 
   appSettings = await window.api.saveSettings({
     defaultPageWidth: width,
@@ -2735,6 +2744,7 @@ async function saveSettingsForm() {
     autoSaveEnabled: autosave,
     ai: ai,
     spellcheckEnabled: spellcheck,
+    keepInTray: keepInTray,
   });
 
   applyTheme(theme);

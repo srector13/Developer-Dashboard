@@ -322,6 +322,10 @@ contextBridge.exposeInMainWorld('api', {
   onCaptureShortcutFailed: (callback: (shortcut: string) => void) => {
     ipcRenderer.on('capture-shortcut-failed', (_event, shortcut: string) => callback(shortcut));
   },
+  // The launcher / tray asks the main window to open a specific note
+  onOpenNote: (callback: (fsPath: string) => void) => {
+    ipcRenderer.on('open-note', (_event, fsPath: string) => callback(fsPath));
+  },
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   getAppVersion: () => ipcRenderer.invoke('app-version'),
 

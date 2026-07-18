@@ -1,6 +1,6 @@
 {
   "name": "markdown-notebook",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "description": "A modern minimalistic Markdown note-taking desktop application.",
   "main": "./out/main.js",
   "author": "Stephen Rector",
@@ -12,7 +12,8 @@
     "pack": "tsc && electron-builder",
     "pretest:e2e": "tsc",
     "test:e2e": "playwright test",
-    "test:renderer": "node tests/renderer/smoke.spec.mjs darwin && node tests/renderer/smoke.spec.mjs win32",
+    "test:renderer": "node tests/renderer/smoke.spec.mjs darwin && node tests/renderer/smoke.spec.mjs win32 && node tests/renderer/launcher.spec.mjs",
+    "test:main": "tsc && node tests/main/scan-cache.spec.cjs cold /tmp/mdnb-scan-test && node tests/main/scan-cache.spec.cjs warm /tmp/mdnb-scan-test && node tests/main/desktop-tools.spec.cjs /tmp/mdnb-desktop-test",
     "test:ui-audit": "node tests/renderer/ui-audit.mjs",
     "fonts:sync": "node scripts/sync-fonts.mjs",
     "pack:win": "tsc && electron-builder --win",
