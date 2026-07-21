@@ -2727,6 +2727,17 @@ function toggleCaptureWindow() {
   }
 }
 
+// Always show (used by the launcher's Note tool, which hands off to the
+// full quick-capture overlay rather than filing inline).
+function showCaptureWindow() {
+  if (!captureWindow || captureWindow.isDestroyed()) {
+    captureWindow = createCaptureWindow();
+  }
+  captureWindow.center();
+  captureWindow.show();
+  captureWindow.focus();
+}
+
 // (Re-)register the system-wide shortcut. Returns true when the accelerator
 // is active, false when it's invalid or taken by another app; empty string
 // just unregisters (feature off).
@@ -2943,8 +2954,10 @@ let launcherWindow: BrowserWindow | null = null;
 
 function createLauncherWindow(): BrowserWindow {
   const win = new BrowserWindow({
-    width: 720,
-    height: 500,
+    // Sized generously so the feathered drop-shadow lives inside the window's
+    // own transparent margin instead of being clipped at the edge.
+    width: 804,
+    height: 560,
     show: false,
     frame: false,
     transparent: true,
@@ -2952,7 +2965,7 @@ function createLauncherWindow(): BrowserWindow {
     movable: true,
     alwaysOnTop: true,
     skipTaskbar: true,
-    hasShadow: true,
+    hasShadow: false,
     webPreferences: {
       preload: path.join(__dirname, 'launcher-preload.js'),
       contextIsolation: true,
@@ -2991,7 +3004,7 @@ ipcMain.on('launcher-hide', () => { if (launcherWindow && !launcherWindow.isDest
 // The launcher grows/shrinks as search results appear; keep it anchored
 ipcMain.on('launcher-resize', (event, height: number) => {
   if (!launcherWindow || launcherWindow.isDestroyed()) return;
-  const h = Math.max(120, Math.min(700, Math.round(height)));
+  const h = Math.max(180, Math.min(820, Math.round(height)));
   const [w] = launcherWindow.getSize();
   const [x, y] = launcherWindow.getPosition();
   launcherWindow.setBounds({ x, y, width: w, height: h });
@@ -3032,6 +3045,23 @@ ipcMain.handle('launcher-search', async (event, query: string) => {
 ipcMain.on('launcher-open-note', (event, fsPath: string) => {
   if (launcherWindow && !launcherWindow.isDestroyed()) launcherWindow.hide();
   revealMainWindow(fsPath);
+});
+
+// Open a note in the main window AND open its PDF export dialog
+ipcMain.on('launcher-export-note', (event, fsPath: string) => {
+  if (launcherWindow && !launcherWindow.isDestroyed()) launcherWindow.hide();
+  revealMainWindow();
+  if (!mainWindow) return;
+  const send = () => mainWindow && mainWindow.webContents.send('open-note-export', fsPath);
+  if (mainWindow.webContents.isLoading()) mainWindow.webContents.once('did-finish-load', send);
+  else send();
+});
+
+// The launcher Note tool hands off to the full quick-capture overlay
+ipcMain.handle('launcher-open-capture', () => {
+  if (launcherWindow && !launcherWindow.isDestroyed()) launcherWindow.hide();
+  showCaptureWindow();
+  return { success: true };
 });
 
 ipcMain.handle('launcher-open-daily', async () => {

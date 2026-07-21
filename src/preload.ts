@@ -326,6 +326,10 @@ contextBridge.exposeInMainWorld('api', {
   onOpenNote: (callback: (fsPath: string) => void) => {
     ipcRenderer.on('open-note', (_event, fsPath: string) => callback(fsPath));
   },
+  // Launcher "Export" button: open the note, then its PDF export dialog
+  onOpenNoteExport: (callback: (fsPath: string) => void) => {
+    ipcRenderer.on('open-note-export', (_event, fsPath: string) => callback(fsPath));
+  },
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   getAppVersion: () => ipcRenderer.invoke('app-version'),
 

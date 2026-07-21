@@ -125,6 +125,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (fsPath) openNote(fsPath);
     });
   }
+  // Launcher "Export" button: open the note, then its PDF export dialog
+  if (window.api.onOpenNoteExport) {
+    window.api.onOpenNoteExport(async (fsPath) => {
+      if (!fsPath) return;
+      await openNote(fsPath);
+      exportToPdf('note');
+    });
+  }
 
   // Split view: preview scrolls drive the editor (the editor side is wired
   // through the textarea's inline onscroll)

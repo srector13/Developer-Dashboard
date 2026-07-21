@@ -30,9 +30,10 @@ await page.addInitScript(() => {
     context: async () => ({ theme: 'dark', hasNotebook: true }),
     search: async (q) => { window.__calls.push(['search', q]); return window.__searchRows; },
     openNote: (fsPath) => window.__calls.push(['openNote', fsPath]),
+    exportNote: (fsPath) => window.__calls.push(['exportNote', fsPath]),
     openDaily: async () => { window.__calls.push(['openDaily']); return { success: true }; },
-    capture: async (text) => { window.__calls.push(['capture', text]); return window.__captureResult || { success: true }; },
-    captureTask: async (text) => { window.__calls.push(['captureTask', text]); return { success: true }; },
+    openCapture: async () => { window.__calls.push(['openCapture']); return { success: true }; },
+    captureTask: async (text) => { window.__calls.push(['captureTask', text]); return window.__captureResult || { success: true }; },
     screenshot: async () => { window.__calls.push(['screenshot']); return { success: true }; },
     openScratchpad: async () => { window.__calls.push(['openScratchpad']); return { success: true }; },
     resize: (h) => { window.__lastResize = h; },
@@ -70,20 +71,39 @@ await page.keyboard.press('Enter');
 check('Enter opens the selected note', await page.evaluate(() =>
   window.__calls.some(c => c[0] === 'openNote' && c[1] === '/nb/beta.md')));
 
-// --- Tab cycles to Note tool ---
+// --- No emoji glyphs anywhere ---
+check('no emoji glyphs in the launcher (SVG icons only)', await page.evaluate(() => {
+  const txt = document.getElementById('orbs').textContent + document.getElementById('mode-glyph').textContent;
+  return !/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(txt);
+}));
+check('mode glyph renders an SVG, not text', await page.evaluate(() =>
+  !!document.querySelector('#mode-glyph svg') && document.getElementById('mode-glyph').textContent.trim() === ''));
+
+// --- Search result action buttons: Open + Export ---
+check('each result has Open + Export buttons', await page.evaluate(() =>
+  document.querySelectorAll('#results .result')[0].querySelectorAll('.r-btn').length === 2));
+await page.click('#results .result[data-idx="1"] .r-btn[data-act="export"]');
+check('Export button calls exportNote for that row', await page.evaluate(() =>
+  window.__calls.some(c => c[0] === 'exportNote' && c[1] === '/nb/beta.md')));
+// Re-run the search (export hid the launcher / cleared in real use)
+await page.evaluate(() => { window.__calls = []; });
+await page.click('#q');
+await page.type('#q', 'beta');
+await page.waitForTimeout(220);
+await page.click('#results .result[data-idx="0"] .r-btn[data-act="open"]');
+check('Open button calls openNote for that row', await page.evaluate(() =>
+  window.__calls.some(c => c[0] === 'openNote' && c[1] === '/nb/alpha.md')));
+
+// --- Tab cycles to Note tool → opens the quick-capture overlay ---
+await page.evaluate(() => { window.__calls = []; });
 await page.keyboard.press('Tab');
 check('Tab activates the Note tool', await page.evaluate(() =>
   document.querySelectorAll('.orb')[1].classList.contains('active') &&
-  document.getElementById('q').placeholder.toLowerCase().includes('note')));
-
-// Note capture: type + Enter files and hides
-await page.type('#q', 'remember the milk');
+  document.getElementById('q').style.display === 'none'));
 await page.keyboard.press('Enter');
-await page.waitForTimeout(100);
-check('Note tool Enter files a quick capture', await page.evaluate(() =>
-  window.__calls.some(c => c[0] === 'capture' && c[1] === 'remember the milk')));
-check('successful capture hides the launcher', await page.evaluate(() =>
-  window.__calls.some(c => c[0] === 'hide')));
+await page.waitForTimeout(80);
+check('Note tool opens the quick-capture overlay', await page.evaluate(() =>
+  window.__calls.some(c => c[0] === 'openCapture')));
 
 // --- Cmd/Ctrl+3 jumps to Task tool ---
 await page.keyboard.press('Control+3');
@@ -133,15 +153,16 @@ await page.evaluate(() => { document.getElementById('q').value = 'stale'; window
 check('reset returns to Search tool with a cleared field', await page.evaluate(() =>
   document.querySelectorAll('.orb')[0].classList.contains('active') && document.getElementById('q').value === ''));
 
-// --- Failed capture keeps the launcher open and shows status ---
-await page.keyboard.press('Tab'); // to Note
+// --- Failed task capture keeps the launcher open and shows status ---
+await page.evaluate(() => { window.__resetCb && window.__resetCb(); window.setActiveForTest && 0; });
 await page.evaluate(() => { window.__captureResult = { success: false, reason: 'No notebook folder is set.' }; });
-await page.type('#q', 'orphan note');
+await page.keyboard.press('Control+3'); // Task tool
+await page.type('#q', 'orphan task');
 await page.keyboard.press('Enter');
 await page.waitForTimeout(120);
-check('failed capture surfaces the reason and does not clear', await page.evaluate(() =>
+check('failed task capture surfaces the reason and does not clear', await page.evaluate(() =>
   document.getElementById('status').textContent.includes('No notebook folder') &&
-  document.getElementById('q').value === 'orphan note'));
+  document.getElementById('q').value === 'orphan task'));
 
 await browser.close();
 console.log(`\n${failed === 0 ? 'ALL' : failed + '/' + (passed + failed)} ${passed + failed} LAUNCHER CHECKS ${failed === 0 ? 'PASSED' : 'FAILED'}`);
