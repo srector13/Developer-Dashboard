@@ -154,11 +154,13 @@ jobs:
             FLAGS+=(--draft)
           fi
           TAG="v${{ steps.version.outputs.value }}"
-          # Re-running a release should update it, not fail on the existing tag.
+          # --target pins the tag to the commit that was built. Without it a
+          # manual run would tag the default branch instead of this ref.
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "${{ steps.artifact.outputs.path }}" --clobber
             gh release edit "$TAG" --notes-file release-notes.md "${FLAGS[@]}"
           else
             gh release create "$TAG" "${{ steps.artifact.outputs.path }}" \
+              --target "$GITHUB_SHA" \
               --title "$TAG" --notes-file release-notes.md "${FLAGS[@]}"
           fi
