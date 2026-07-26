@@ -1320,7 +1320,15 @@
 
   <!-- Scripts -->
   <!-- mermaid (3+MB) is lazy-loaded by ensureMermaid() on first diagram use;
-       a synchronous tag here blocked first paint on every launch -->
+       a synchronous tag here blocked first paint on every launch.
+       markdown-it + highlight.js (~250KB) used to load in the Electron
+       preload; they sit here now and are cheap enough to parse up front. -->
+  <script src="vendor/markdown-it.min.js"></script>
+  <script src="vendor/highlight.min.js"></script>
+  <script src="vendor/hljs-dart.min.js"></script>
+  <script src="vendor/hljs-scala.min.js"></script>
+  <script src="markdown.js"></script>
+  <script src="api-tauri.js"></script>
   <script src="app.js?v=3"></script>
 </body>
 </html>

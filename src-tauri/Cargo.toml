@@ -1,0 +1,72 @@
+[package]
+name = "markdown-notebook"
+version = "1.4.1"
+description = "A modern minimalistic Markdown note-taking desktop application."
+authors = ["Stephen Rector"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.77"
+
+# One binary, no installer. `windows_subsystem` in main.rs keeps the console
+# window from flashing on launch.
+[[bin]]
+name = "markdown-notebook"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png", "protocol-asset"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Notebook scanning, watching and text work
+walkdir = "2"
+notify = "6"
+notify-debouncer-mini = "0.4"
+regex = "1"
+once_cell = "1"
+
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+sha1 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+urlencoding = "2"
+
+# Local AI servers only ever listen on localhost, but a user may point the
+# base URL at an https host, so keep TLS (schannel on Windows — no C toolchain).
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+tokio = { version = "1", features = ["time", "macros", "rt-multi-thread", "sync"] }
+
+# Screenshot-to-note
+xcap = "0.0.14"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[target.'cfg(windows)'.dependencies]
+# Clipboard HTML (CF_HTML) — Electron's clipboard.readHTML/write equivalent
+clipboard-win = "5"
+# WebView2 PrintToPdf — Electron's webContents.printToPDF equivalent.
+# Pinned to the versions wry 0.55 links against, so the COM interfaces
+# returned by tauri's with_webview() are the same types.
+webview2-com = "0.38"
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_Com",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+# A portable exe gets copied around by hand (USB stick, email to self), so
+# size matters more here than the last few percent of speed.
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

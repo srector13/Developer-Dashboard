@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data: http://asset.localhost; connect-src 'self' ipc: http://ipc.localhost">
   <title>Scratchpad</title>
   <style>
     :root {
@@ -52,6 +52,7 @@
   </div>
   <textarea id="pad" spellcheck="true" placeholder="Anything you want to keep in reach… saved to your notebook's scratchpad."></textarea>
 
+  <script src="api-tauri.js"></script>
   <script>
     const api = window.scratchApi;
     const pad = document.getElementById('pad');

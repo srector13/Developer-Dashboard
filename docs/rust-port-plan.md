@@ -1,87 +1,101 @@
-# Rust (Tauri) port — comparison & side-by-side plan
+# Rust (Tauri) port — plan and outcome
 
-Goal: keep the current Electron app working while standing up a Tauri (Rust)
-version of the same app in the same repo, so the two can be compared feature
-by feature before committing to either.
+**Status: done.** This branch *is* the Rust build. The Electron main process
+(`src/*.ts`) and the electron-builder packaging have been removed; the UI in
+`renderer/` is unchanged and now talks to a Rust backend. The Electron version
+still lives on `main`.
 
-## Why Tauri specifically
+## What actually changed
 
-A "Rust rewrite" does not mean rewriting the UI. Tauri keeps the entire
-`renderer/` (HTML/CSS/JS) as-is and only replaces the Electron **main
-process** with a small Rust binary. The UI renders in the OS WebView
-(WebView2 on Windows, WKWebView on macOS) instead of a bundled Chromium —
-that is where the ~90 MB savings comes from.
-
-| | Electron (current) | Tauri |
+| | Electron (on `main`) | This branch |
 |---|---|---|
-| Windows portable exe | ~85–100 MB | ~5–15 MB |
-| Runtime | bundled Chromium + Node | OS WebView + Rust binary |
-| Renderer code | `renderer/` unchanged | `renderer/` unchanged (~95%) |
-| Backend code | `src/main.ts` (~1,050 lines) | rewritten in Rust |
-| Rendering consistency | identical everywhere | WebView2 ≈ Chromium on Windows; WKWebView (Safari engine) on macOS — minor CSS differences possible |
+| Windows portable exe | ~85–100 MB | a few MB |
+| Runtime | bundled Chromium + Node | WebView2 (an OS component) + one Rust binary |
+| Renderer code | `renderer/` | `renderer/`, unchanged except three added script tags and a relaxed CSP |
+| Backend code | `src/main.ts` (~3,300 lines TS) | `src-tauri/src/` (~4,000 lines Rust, 104 unit tests) |
+| Targets | mac dmg/zip, win nsis/portable/zip, linux AppImage | **Windows portable exe only** |
+| Auto-update | installer builds only | none (portable can't self-update) |
 
-## Feature-by-feature: what carries over, what needs care
+The `window.api` surface defined by the old preload is the contract that made
+this possible. `renderer/api-tauri.js` re-implements all 74 of its methods over
+`invoke()`, so `renderer/app.js` — 6,600 lines — needed no changes at all.
 
-| Feature | Electron implementation | Tauri equivalent | Risk |
-|---|---|---|---|
-| File tree scan, read/write, order files | `fs` in main.ts | Rust `std::fs` / `walkdir` | ✅ trivial |
-| Settings JSON | `app.getPath('userData')` | `tauri-plugin-store` or `dirs` crate | ✅ trivial |
-| Folder picker dialog | `dialog.showOpenDialog` | `tauri-plugin-dialog` | ✅ trivial |
-| File watching (auto-refresh) | `fs.watch` recursive | `notify` crate (better than fs.watch) | ✅ improvement |
-| Markdown rendering | markdown-it in **preload** | stays in the renderer — bundle markdown-it as a plain JS file, or render with `pulldown-cmark` in Rust | ✅ small refactor |
-| Task checkbox toggling | line edit in main.ts | same logic in Rust | ✅ trivial |
-| Rename + wiki-link rewriting | regex pass over all files | same regex logic in Rust | ⚠️ medium effort, port carefully with tests |
-| Pandoc import (clipboard/doc) | `execFile('pandoc')` | `tauri-plugin-shell` Command (same: shells out to pandoc) | ✅ same behavior |
-| Clipboard **HTML** read | `clipboard.readHTML()` | `tauri-plugin-clipboard-manager` reads text; **HTML read needs the community `tauri-plugin-clipboard`** | ⚠️ check early — this powers "Paste Note" |
-| PDF export | `webContents.printToPDF` (headless, silent) | **no direct equivalent** — options: `window.print()` (shows OS dialog), or shell out to pandoc/chrome headless | ⚠️ biggest gap; decide before porting |
-| Frameless titlebar (`hiddenInset`) | BrowserWindow option | `titleBarStyle: "Overlay"` in tauri.conf | ✅ supported |
-| `alert()` / `confirm()` dialogs | work in Electron | **not implemented in WKWebView on macOS** — must swap to `tauri-plugin-dialog` calls | ⚠️ renderer touch-ups needed |
-
-Bottom line: nothing is impossible, but **PDF export** and **clipboard HTML
-read** are the two things to prototype first, because they're the only
-features without a drop-in equivalent.
-
-## Repo layout for side-by-side versions
+## Layout
 
 ```
 markdown-notebook/
-├── renderer/            # shared UI — used by BOTH shells
-│   └── api-adapter.js   # picks window.api impl: Electron preload vs Tauri invoke()
-├── src/                 # Electron main process (unchanged)
-├── src-tauri/           # Tauri shell
-│   ├── tauri.conf.json  # points frontendDist at ../renderer
-│   ├── Cargo.toml
-│   └── src/main.rs      # Rust commands mirroring the IPC surface 1:1
-└── package.json
+├── renderer/                 # the UI, shared and unmodified
+│   ├── api-tauri.js          # window.api / captureApi / launcherApi / …
+│   └── markdown.js           # the markdown-it pipeline, moved out of the preload
+├── src-tauri/
+│   ├── src/
+│   │   ├── main.rs           # builder, tray wiring, close-to-tray
+│   │   ├── commands.rs       # the 65 #[tauri::command]s (1 per old IPC channel)
+│   │   ├── desktop.rs        # helper windows, tray, shortcuts, watcher, screenshots
+│   │   ├── platform.rs       # WebView2 PrintToPdf + CF_HTML clipboard (Windows)
+│   │   ├── notebook.rs       # scan, frontmatter, ordering, caches
+│   │   ├── notes.rs          # history, trash, rename + wiki-link rewriting
+│   │   ├── search.rs         # full-text index, launcher search, backlinks
+│   │   └── …                 # settings, capture, exports, pandoc, ai, attachments
+│   └── tauri.conf.json
+└── package.json              # renderer tests + icon generation only
 ```
 
-The trick that makes comparison honest: keep the `window.api` surface
-(defined in `src/preload.ts`) as the single contract. In Tauri, a small
-`api-adapter.js` implements the same ~20 functions via `invoke('read_note')`
-etc. The renderer never knows which shell it's running in, so any behavior
-difference you spot is genuinely a shell difference.
+## The two risk items, resolved
 
-## Migration order (each step leaves both apps working)
+The original plan flagged these as the only features without a drop-in
+equivalent. Both are now implemented natively in `src-tauri/src/platform.rs`.
 
-1. `npm create tauri-app` scaffold in `src-tauri/`, pointed at `renderer/`.
-2. Move markdown-it rendering out of preload into a renderer-side script
-   (both shells benefit; removes the preload dependency).
-3. Implement read-only commands in Rust: settings, tree scan, read note.
-   → app opens and browses notes. First size comparison possible here.
-4. Write commands: save, create (with the metadata modal), delete, order.
-5. The two risk items: clipboard HTML import, PDF export. Prototype, decide.
-6. Rename/wiki-link rewriting last (most intricate logic).
+**PDF export.** Electron used `webContents.printToPDF` — silent, no dialog.
+Tauri exposes no equivalent, but WebView2 does: `ICoreWebView2_7::PrintToPdf`.
+`with_webview()` hands us the real `ICoreWebView2Controller`, so an offscreen
+window loads the styled HTML from a temp file and prints straight to the chosen
+path. Page size, margins and `ShouldPrintBackgrounds` (needed for the dark and
+tinted PDF themes) map one-to-one onto the old options. This is strictly better
+than the plan's fallbacks — `window.print()` would have shown the OS dialog, and
+shelling out to headless Chrome would have added a dependency.
 
-Estimated Rust surface: ~600–800 lines for parity, mostly mechanical.
+**Clipboard HTML.** `clipboard-win` reads and writes the `CF_HTML` format,
+unwrapping and generating its header. `clipboard.readHTML()` becomes
+`formats::Html.read_clipboard()` and `clipboard.write({html, text})` becomes a
+paired `CF_HTML` + `CF_UNICODETEXT` write, so "Paste as note" and "Copy as rich
+text" behave as before.
 
-## Build & transfer notes
+## Other deltas worth knowing
 
-- Tauri Windows builds must be produced on Windows (or via GitHub Actions
-  `windows-latest` runner). The output is a single portable `.exe`.
-- A ~10 MB exe is small enough for transfer routes that a 90 MB one isn't
-  (email to self, OneDrive/SharePoint, USB — whatever the workplace allows).
-- If the workplace blocks *running* unsigned executables entirely (AppLocker /
-  SmartScreen policy), no framework helps — the fallback is the browser
-  version of this app using the File System Access API in Edge, which needs
-  no executable at all. The shared-renderer structure above is also the
-  first step toward that.
+- **Markdown rendering** moved from the preload into `renderer/markdown.js`,
+  with markdown-it and highlight.js vendored as plain browser bundles in
+  `renderer/vendor/`. It stays synchronous, so the renderer's
+  `innerHTML = renderMarkdown(...)` call sites are untouched. All six custom
+  rules (`==mark==`, mermaid fences, `[[wiki-links]]`, image resolution/width/
+  figcaption, external link targets, task checkboxes) came across verbatim.
+- **Image URLs.** The page can't load `file://` from its own origin, so relative
+  image paths now resolve to Tauri asset URLs. `exports.rs` decodes those back
+  to real paths for HTML inlining, and rewrites them to `file://` for the print
+  pass. Legacy `file://` URLs still decode, so previously exported HTML is
+  unaffected.
+- **Drag-and-drop attachments.** Electron exposed a dropped file's path via the
+  non-standard `webUtils.getPathForFile`. WebView2 has no equivalent, so
+  `getPathForFile()` returns `''` and `app.js` takes its existing byte-copy
+  branch — the same attachment lands in the same place, copied rather than read
+  from its original path.
+- **`alert()` / `confirm()`** work in WebView2 (they don't in WKWebView), so the
+  renderer's 16 call sites needed no change. This is a Windows-only build; that
+  shortcut would not survive a macOS port.
+- **Spell check** is WebView2's own, including the suggestions context menu, so
+  the hand-rolled Electron context-menu handler is gone.
+- **CSP.** `launcher.html`, `scratchpad.html` and `region-select.html` declared
+  `script-src 'unsafe-inline'`, which blocked the new bridge script. They now
+  allow `'self'` and the Tauri IPC endpoint.
+
+## Verification
+
+- `cargo test` — 104 unit tests over the ported logic: frontmatter parsing,
+  wiki-link rewriting (including the ambiguity rules), ordering, trash, history,
+  search ranking and snippet offsets, template variables, capture, export URL
+  handling, accelerator translation, screenshot cropping.
+- `npm run test:renderer` — the markdown pipeline check plus the pre-existing
+  333-check UI suite and 24-check launcher suite, unchanged and passing against
+  the shared renderer.
+- `cargo clippy -- -D warnings` and a `--target x86_64-pc-windows-msvc` check
+  run in CI on a Windows runner, which is also where the release exe is built.
