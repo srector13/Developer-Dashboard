@@ -97,12 +97,20 @@ npm version minor            # bumps package.json, creates the vX.Y.Z tag
 git push --follow-tags
 ```
 
-Keep `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json` in step with
-`package.json` — the release workflow reads the version from `package.json`, but
-the version compiled into the exe comes from `Cargo.toml`.
+The pushed tag names the release, so keep `src-tauri/Cargo.toml` and
+`src-tauri/tauri.conf.json` in step with `package.json` — the version compiled
+into the exe (and shown in the About dialog) comes from `Cargo.toml`.
 
-Then review the draft GitHub Release the workflow created, edit the notes, and
-publish.
+The tag decides how the release is published:
+
+| Tag | Result |
+|---|---|
+| `v1.5.0` | **Draft** release — review the notes, then publish by hand |
+| `v1.5.0-beta.1` | **Pre-release**, published immediately and flagged as a beta |
+
+Anything with a semver prerelease suffix (a `-` in the version) takes the second
+row, and its notes gain a "this is a beta" paragraph. Re-pushing the same tag
+updates the existing release rather than failing.
 
 ## Locked-down work machines
 

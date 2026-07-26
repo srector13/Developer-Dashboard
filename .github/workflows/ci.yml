@@ -38,12 +38,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo registry and build output
+        uses: actions/cache@v4
         with:
-          components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-test-
       - name: Install Linux WebView dependencies
         run: |
           sudo apt-get update
@@ -58,12 +61,15 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo registry and build output
+        uses: actions/cache@v4
         with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-build-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-build-
       - name: Clippy (warnings are errors)
         run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
       - name: Unit tests
