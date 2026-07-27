@@ -94,6 +94,13 @@
     // Imports / Exports
     importClipboard: (destDir, meta) => invoke('import_clipboard', { destDir, meta: meta || null }),
     importDocument: (destDir) => invoke('import_document', { destDir }),
+
+    // OneNote desktop import
+    oneNoteProbe: () => invoke('onenote_probe'),
+    oneNoteNotebooks: () => invoke('onenote_notebooks'),
+    oneNoteImport: (items, destDir) => invoke('onenote_import', { items, destDir }),
+    onOneNoteImportProgress: (callback) => on('onenote-import-progress', (e) => callback(e.payload)),
+
     exportToPdf: (filePath, htmlContent, options) => invoke('export_to_pdf', { filePath, htmlContent, options: options || null }),
     exportToHtml: (filePath, htmlContent, options) => invoke('export_to_html', { filePath, htmlContent, options: options || null }),
     exportToDocx: (filePath) => invoke('export_to_docx', { filePath }),

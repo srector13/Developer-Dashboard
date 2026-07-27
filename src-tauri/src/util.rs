@@ -219,6 +219,45 @@ pub fn parent_of(p: &Path) -> PathBuf {
     p.parent().map(|d| d.to_path_buf()).unwrap_or_default()
 }
 
+/// Turn an arbitrary name — a OneNote section or notebook title, say — into
+/// something Windows will accept as a single folder name.
+///
+/// OneNote happily allows `\ / : * ? " < > |` and trailing dots in names;
+/// Windows allows none of those, reserves a handful of device names, and
+/// silently strips trailing dots and spaces. Getting this wrong produces
+/// folders that cannot be opened or deleted, so it is handled up front.
+pub fn sanitize_folder_name(raw: &str) -> String {
+    const RESERVED: [&str; 22] = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+        "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+
+    let replaced: String = raw
+        .chars()
+        .map(|c| match c {
+            '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
+            c if (c as u32) < 0x20 => '-',
+            c => c,
+        })
+        .collect();
+
+    // Windows drops trailing dots and spaces, so a name ending in one would
+    // not round-trip.
+    let trimmed = replaced.trim().trim_end_matches(['.', ' ']).trim();
+    let capped: String = trimmed.chars().take(120).collect();
+    let capped = capped.trim_end().to_string();
+
+    if capped.is_empty() {
+        return "Untitled".to_string();
+    }
+    // A reserved device name is only reserved as the whole stem.
+    let stem = capped.split('.').next().unwrap_or("").to_uppercase();
+    if RESERVED.contains(&stem.as_str()) {
+        return format!("{capped}-");
+    }
+    capped
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,6 +332,43 @@ mod tests {
         // A value containing $1 must not be treated as a capture reference.
         let vars = vec![("cost".to_string(), "$1 each".to_string())];
         assert_eq!(apply_template_vars("{{cost}}", &vars), "$1 each");
+    }
+
+    #[test]
+    fn folder_names_lose_characters_windows_rejects() {
+        assert_eq!(sanitize_folder_name("Q3: Planning"), "Q3- Planning");
+        assert_eq!(sanitize_folder_name(r"Notes\2026/Q1"), "Notes-2026-Q1");
+        assert_eq!(sanitize_folder_name("What? <Really>"), "What- -Really-");
+    }
+
+    #[test]
+    fn folder_names_lose_trailing_dots_and_spaces() {
+        // Windows strips these silently, so a name ending in one wouldn't
+        // round-trip through the filesystem.
+        assert_eq!(sanitize_folder_name("Meeting notes..."), "Meeting notes");
+        assert_eq!(sanitize_folder_name("  Spaced  "), "Spaced");
+    }
+
+    #[test]
+    fn reserved_device_names_are_escaped() {
+        assert_eq!(sanitize_folder_name("CON"), "CON-");
+        assert_eq!(sanitize_folder_name("com1"), "com1-");
+        assert_eq!(sanitize_folder_name("NUL.txt"), "NUL.txt-");
+        // Only the whole stem is reserved; a longer name is fine.
+        assert_eq!(sanitize_folder_name("Console"), "Console");
+    }
+
+    #[test]
+    fn empty_or_all_invalid_names_get_a_fallback() {
+        assert_eq!(sanitize_folder_name(""), "Untitled");
+        assert_eq!(sanitize_folder_name("   "), "Untitled");
+        assert_eq!(sanitize_folder_name("..."), "Untitled");
+    }
+
+    #[test]
+    fn very_long_names_are_capped() {
+        let name = sanitize_folder_name(&"a".repeat(400));
+        assert_eq!(name.chars().count(), 120);
     }
 
     #[test]

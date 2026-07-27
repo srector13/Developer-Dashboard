@@ -309,7 +309,8 @@
             </button>
             <div id="dropdown-file-actions" class="dropdown-menu glass-card" style="right: 0; left: auto;">
               <div class="dropdown-item" onclick="importFromClipboard()" title="Import Rich Text or HTML from Clipboard as a note">Paste Note from Clipboard</div>
-              <div class="dropdown-item" onclick="importDocFile()" title="Import DOCX/PPTX/XLSX file via Pandoc">Import Doc via Pandoc</div>
+              <div class="dropdown-item" onclick="importDocFile()" title="Import a Word, PowerPoint, Excel or OneNote .mht file via Pandoc">Import Doc via Pandoc</div>
+              <div class="dropdown-item" onclick="openOneNoteImport()" title="Bring pages across from OneNote desktop, keeping their sections">Import from OneNote…</div>
               <div class="dropdown-item" onclick="exportToPdf()" title="Export current note to PDF">Export to PDF</div>
               <div class="dropdown-item" onclick="exportAsHtml()" title="Export current note as a standalone HTML file (images inlined)">Export to HTML</div>
               <div class="dropdown-item" onclick="exportAsDocx()" title="Export current note to Word via Pandoc">Export to Word (DOCX)</div>
@@ -995,6 +996,40 @@
       <div class="modal-footer" style="justify-content: space-between;">
         <button class="btn btn-outline" onclick="confirmEmptyTrash()" title="Permanently delete everything in the trash">Empty Trash</button>
         <button class="btn btn-primary" onclick="hideTrashModal()">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- OneNote Import Modal -->
+  <div id="onenote-modal" class="modal-overlay">
+    <div class="glass-card modal-card builder-card">
+      <div class="modal-header">
+        <h3>Import from OneNote</h3>
+        <button class="close-btn" onclick="hideOneNoteModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="templates-help">
+          Each OneNote page becomes its own note, and OneNote sections become
+          sections here. Pages already imported are not detected, so importing
+          twice creates duplicates.
+        </p>
+        <div id="onenote-status" class="builder-preview-placeholder" style="display: none;"></div>
+        <div id="onenote-tree" class="template-list" style="max-height: 46vh; overflow: auto;">
+          <!-- Notebook / section / page checkboxes injected here -->
+        </div>
+        <div id="onenote-progress" style="display: none; margin-top: 12px;">
+          <div class="app-loading-sub" id="onenote-progress-label">Importing…</div>
+        </div>
+      </div>
+      <div class="modal-footer" style="justify-content: space-between;">
+        <label class="templates-help" style="margin: 0;">
+          Into:
+          <select id="onenote-dest" style="margin-left: 6px;"></select>
+        </label>
+        <div>
+          <button class="btn btn-outline" onclick="hideOneNoteModal()">Cancel</button>
+          <button class="btn btn-primary" id="onenote-import-btn" onclick="runOneNoteImport()">Import selected</button>
+        </div>
       </div>
     </div>
   </div>

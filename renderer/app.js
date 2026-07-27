@@ -3987,6 +3987,225 @@ function importFromClipboard() {
   setTimeout(() => document.getElementById('create-modal-name').focus(), 100);
 }
 
+// ==========================================
+// OneNote import
+// ==========================================
+
+// The hierarchy fetched from OneNote, kept while the modal is open.
+let oneNoteBooks = [];
+
+function fillOneNoteDestinations(destDir) {
+  const select = document.getElementById('onenote-dest');
+  select.innerHTML = '';
+  const rootOpt = document.createElement('option');
+  rootOpt.value = notebookRoot;
+  rootOpt.innerText = 'Notebook Root';
+  select.appendChild(rootOpt);
+
+  const addFolders = (node, depth = 0) => {
+    if (!node || !node.sections) return;
+    node.sections.forEach(sec => {
+      const opt = document.createElement('option');
+      opt.value = sec.fsPath;
+      opt.innerText = ' '.repeat((depth + 1) * 2) + '↳ ' + sec.name;
+      select.appendChild(opt);
+      addFolders(sec, depth + 1);
+    });
+  };
+  if (treeData) addFolders(treeData);
+  select.value = destDir || notebookRoot;
+}
+
+async function openOneNoteImport() {
+  if (!notebookRoot) {
+    alert('Open a notebook first.');
+    return;
+  }
+  const modal = document.getElementById('onenote-modal');
+  const status = document.getElementById('onenote-status');
+  const tree = document.getElementById('onenote-tree');
+  const importBtn = document.getElementById('onenote-import-btn');
+
+  oneNoteBooks = [];
+  tree.innerHTML = '';
+  document.getElementById('onenote-progress').style.display = 'none';
+  status.style.display = 'block';
+  status.innerText = 'Looking for OneNote…';
+  importBtn.disabled = true;
+  fillOneNoteDestinations(activeNote ? pathDirname(activeNote) : notebookRoot);
+  modal.classList.add('active');
+
+  const probe = await window.api.oneNoteProbe();
+  if (!probe.available) {
+    status.innerText = probe.reason ||
+      'OneNote desktop was not found. This needs OneNote 2016 or the Microsoft 365 desktop app — the Store version has no automation interface.';
+    return;
+  }
+
+  try {
+    status.innerText = 'Reading your notebooks…';
+    oneNoteBooks = await window.api.oneNoteNotebooks();
+  } catch (err) {
+    status.innerText = String(err);
+    return;
+  }
+
+  if (!oneNoteBooks.length) {
+    status.innerText = 'OneNote has no notebooks open.';
+    return;
+  }
+  status.style.display = 'none';
+  importBtn.disabled = false;
+  renderOneNoteTree();
+}
+
+// A flat list of rows (notebook / section / page) with checkboxes. Ticking a
+// notebook or section ticks everything beneath it.
+function renderOneNoteTree() {
+  const tree = document.getElementById('onenote-tree');
+  tree.innerHTML = '';
+
+  oneNoteBooks.forEach((book, bookIndex) => {
+    tree.appendChild(oneNoteRow({
+      label: book.name,
+      depth: 0,
+      bold: true,
+      dataset: { book: String(bookIndex) },
+    }));
+
+    book.sections.forEach((section, sectionIndex) => {
+      const path = [section.name];
+      const label = section.groupPath.length
+        ? `${section.groupPath.join(' / ')} / ${section.name}`
+        : section.name;
+      tree.appendChild(oneNoteRow({
+        label: `${label}  (${section.pages.length})`,
+        depth: 1,
+        dataset: { book: String(bookIndex), section: String(sectionIndex) },
+      }));
+
+      section.pages.forEach((page, pageIndex) => {
+        tree.appendChild(oneNoteRow({
+          // OneNote sub-pages are indented one further, as they are in OneNote
+          label: page.name,
+          depth: 1 + Math.min(page.level, 3),
+          dataset: {
+            book: String(bookIndex),
+            section: String(sectionIndex),
+            page: String(pageIndex),
+          },
+        }));
+        void path;
+      });
+    });
+  });
+}
+
+function oneNoteRow({ label, depth, bold, dataset }) {
+  const row = document.createElement('label');
+  row.className = 'template-row';
+  row.style.paddingLeft = `${8 + depth * 18}px`;
+  row.style.display = 'flex';
+  row.style.alignItems = 'center';
+  row.style.gap = '8px';
+  row.style.cursor = 'pointer';
+
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  box.className = 'onenote-check';
+  Object.entries(dataset).forEach(([key, value]) => { box.dataset[key] = value; });
+  box.addEventListener('change', () => cascadeOneNoteCheck(box));
+
+  const text = document.createElement('span');
+  text.innerText = label;
+  if (bold) text.style.fontWeight = '600';
+
+  row.appendChild(box);
+  row.appendChild(text);
+  return row;
+}
+
+// Ticking a parent ticks its descendants; the parent is a pure convenience
+// control, so only page rows are read back when importing.
+function cascadeOneNoteCheck(source) {
+  const { book, section, page } = source.dataset;
+  if (page !== undefined) return;
+  document.querySelectorAll('.onenote-check').forEach(box => {
+    if (box === source) return;
+    if (box.dataset.book !== book) return;
+    if (section !== undefined && box.dataset.section !== section) return;
+    box.checked = source.checked;
+  });
+}
+
+function selectedOneNotePages() {
+  const items = [];
+  document.querySelectorAll('.onenote-check').forEach(box => {
+    if (!box.checked || box.dataset.page === undefined) return;
+    const book = oneNoteBooks[Number(box.dataset.book)];
+    const section = book && book.sections[Number(box.dataset.section)];
+    const page = section && section.pages[Number(box.dataset.page)];
+    if (!page) return;
+    items.push({
+      id: page.id,
+      name: page.name,
+      // Notebook → any section groups → section, mirrored as real folders
+      sectionPath: [book.name, ...section.groupPath, section.name],
+    });
+  });
+  return items;
+}
+
+async function runOneNoteImport() {
+  const items = selectedOneNotePages();
+  if (!items.length) {
+    alert('Tick at least one page to import.');
+    return;
+  }
+
+  const dest = document.getElementById('onenote-dest').value || notebookRoot;
+  const importBtn = document.getElementById('onenote-import-btn');
+  const progress = document.getElementById('onenote-progress');
+  const label = document.getElementById('onenote-progress-label');
+
+  importBtn.disabled = true;
+  progress.style.display = 'block';
+  label.innerText = `Importing 0 of ${items.length}…`;
+
+  const stopProgress = window.api.onOneNoteImportProgress(({ done, total, name }) => {
+    label.innerText = name
+      ? `Importing ${done + 1} of ${total} — ${name}`
+      : `Finishing ${total} page${total === 1 ? '' : 's'}…`;
+  });
+
+  try {
+    const result = await window.api.oneNoteImport(items, dest);
+    await refreshNotebook();
+    if (result.firstPath) await openNote(result.firstPath);
+
+    const failed = result.failures || [];
+    if (failed.length) {
+      const detail = failed.slice(0, 5).map(f => `• ${f.name}: ${f.reason}`).join('\n');
+      const more = failed.length > 5 ? `\n…and ${failed.length - 5} more.` : '';
+      alert(`Imported ${result.imported} page${result.imported === 1 ? '' : 's'}.\n\n${failed.length} could not be imported:\n${detail}${more}`);
+    } else {
+      showToast(`Imported ${result.imported} page${result.imported === 1 ? '' : 's'} from OneNote.`);
+    }
+    hideOneNoteModal();
+  } catch (err) {
+    alert(`OneNote import failed: ${err}`);
+  } finally {
+    stopProgress();
+    progress.style.display = 'none';
+    importBtn.disabled = false;
+  }
+}
+
+function hideOneNoteModal() {
+  document.getElementById('onenote-modal').classList.remove('active');
+  oneNoteBooks = [];
+}
+
 async function importDocFile() {
   const dest = activeNote ? pathDirname(activeNote) : notebookRoot;
   const result = await window.api.importDocument(dest);

@@ -942,6 +942,53 @@ pub async fn import_clipboard(
     })
 }
 
+/// Convert a OneNote-style MHTML document into markdown.
+///
+/// The images it carries inline are saved into the attachments folder first
+/// and the HTML repointed at them, so the note keeps its pictures instead of
+/// losing them the way a plain pandoc conversion would. `note_dir` is the
+/// folder the note itself will live in, which is what the returned relative
+/// links are resolved against.
+fn mhtml_to_markdown(settings: &AppSettings, bytes: &[u8], note_dir: &Path) -> Res<String> {
+    let parsed = crate::mhtml::parse(bytes)?;
+
+    // The note's filename isn't chosen yet, but only its directory affects the
+    // relative path, so a placeholder is enough to compute the links.
+    let placeholder = note_dir.join("imported.md");
+    let mut replacements: HashMap<String, String> = HashMap::new();
+
+    for (index, resource) in parsed.resources.iter().enumerate() {
+        if !resource.mime.starts_with("image/") {
+            continue;
+        }
+        let stored = store_attachment(
+            settings,
+            &resource.bytes,
+            &resource.suggested_name(index),
+            "png",
+            &placeholder,
+        );
+        let Some(rel) = stored.rel_path.filter(|_| stored.success) else {
+            continue; // an unsaveable image just keeps its original src
+        };
+        // The HTML may name the image by URL, by bare filename, or by cid.
+        if !resource.location.is_empty() {
+            replacements.insert(resource.location.clone(), rel.clone());
+            if let Some(tail) = resource.location.rsplit(['/', '\\']).next() {
+                replacements.entry(tail.to_string()).or_insert(rel.clone());
+            }
+        }
+        if !resource.content_id.is_empty() {
+            replacements.insert(resource.content_id.clone(), rel.clone());
+        }
+    }
+
+    let html = crate::mhtml::rewrite_sources(&parsed.html, &replacements);
+    Ok(pandoc::run_stdin(settings, &html, "html", "gfm")?
+        .trim()
+        .to_string())
+}
+
 #[tauri::command]
 pub async fn import_document(
     app: AppHandle,
@@ -953,6 +1000,7 @@ pub async fn import_document(
         .dialog()
         .file()
         .add_filter("Word Documents", &["docx", "odt", "rtf"])
+        .add_filter("OneNote Web Page Export", &["mht", "mhtml"])
         .add_filter("Powerpoint Presentations", &["pptx"])
         .add_filter("Excel Sheets", &["xlsx"])
         .add_filter("EPUB Books", &["epub"])
@@ -966,17 +1014,27 @@ pub async fn import_document(
     let doc_path = path(&picked.to_string());
     let ext = doc_path
         .extension()
-        .map(|e| e.to_string_lossy().into_owned())
+        .map(|e| e.to_string_lossy().to_lowercase())
         .unwrap_or_default();
-    let reader = pandoc::reader_for_extension(&ext);
 
-    let body = match pandoc::run_file(&settings, &doc_path, reader, "gfm") {
-        Ok(out) => out.trim().to_string(),
+    // MHTML has no pandoc reader, so it is unwrapped here into HTML plus
+    // attachments before conversion.
+    let converted = if ext == "mht" || ext == "mhtml" {
+        std::fs::read(&doc_path)
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| mhtml_to_markdown(&settings, &bytes, &path(&dest_dir)))
+    } else {
+        let reader = pandoc::reader_for_extension(&ext);
+        pandoc::run_file(&settings, &doc_path, reader, "gfm").map(|out| out.trim().to_string())
+    };
+
+    let body = match converted {
+        Ok(body) => body,
         Err(err) => {
             return Ok(Some(ImportResult {
                 success: false,
                 file_path: None,
-                reason: Some(format!("Pandoc file conversion failed: {err}")),
+                reason: Some(format!("Could not convert that file: {err}")),
             }))
         }
     };
@@ -1001,6 +1059,172 @@ pub async fn import_document(
         file_path: Some(full_path.to_string_lossy().into_owned()),
         reason: None,
     }))
+}
+
+// ===========================================================================
+// OneNote import
+// ===========================================================================
+
+/// Is OneNote desktop present and driveable? The UI asks before offering the
+/// import, so an unavailable OneNote is explained rather than hit as an error.
+#[tauri::command]
+pub async fn onenote_probe() -> Res<crate::onenote::OneNoteStatus> {
+    Ok(crate::onenote::probe())
+}
+
+#[tauri::command]
+pub async fn onenote_notebooks() -> Res<Vec<crate::onenote::OneNotebook>> {
+    crate::onenote::notebooks()
+}
+
+/// One page the user asked to bring across, and where it should land.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OneNoteImportItem {
+    pub id: String,
+    pub name: String,
+    /// Folder names from the notebook down to the section, outermost first.
+    #[serde(default)]
+    pub section_path: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OneNoteImportFailure {
+    pub name: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OneNoteImportResult {
+    pub imported: usize,
+    pub failures: Vec<OneNoteImportFailure>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_path: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct OneNoteProgress {
+    done: usize,
+    total: usize,
+    name: String,
+}
+
+/// Import the selected OneNote pages, one markdown page each.
+///
+/// Section paths become real folders, so a notebook keeps its shape. A page
+/// that fails is recorded and the run continues — one unreadable page
+/// shouldn't cost the user the other two hundred.
+#[tauri::command]
+pub async fn onenote_import(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    items: Vec<OneNoteImportItem>,
+    dest_dir: String,
+) -> Res<OneNoteImportResult> {
+    use tauri::Emitter;
+
+    let settings = state.settings();
+    let root = path(&dest_dir);
+    if !root.exists() {
+        return Err("The destination section no longer exists.".into());
+    }
+
+    let total = items.len();
+    let mut imported = 0usize;
+    let mut failures: Vec<OneNoteImportFailure> = Vec::new();
+    let mut first_path: Option<String> = None;
+    let temp = std::env::temp_dir();
+
+    for (index, item) in items.iter().enumerate() {
+        if let Some(main) = app.get_webview_window(desktop::MAIN) {
+            let _ = main.emit(
+                "onenote-import-progress",
+                OneNoteProgress {
+                    done: index,
+                    total,
+                    name: item.name.clone(),
+                },
+            );
+        }
+
+        let mut dir = root.clone();
+        for segment in &item.section_path {
+            dir = dir.join(crate::util::sanitize_folder_name(segment));
+        }
+        if let Err(err) = std::fs::create_dir_all(&dir) {
+            failures.push(OneNoteImportFailure {
+                name: item.name.clone(),
+                reason: format!("Could not create its section folder: {err}"),
+            });
+            continue;
+        }
+
+        let export = temp.join(format!("mdnb-onenote-{}.mht", crate::notebook::now_ms() + index as i64));
+        let outcome = crate::onenote::publish_page(&item.id, &export)
+            .and_then(|_| std::fs::read(&export).map_err(|e| e.to_string()))
+            .and_then(|bytes| mhtml_to_markdown(&settings, &bytes, &dir));
+        let _ = std::fs::remove_file(&export);
+
+        match outcome {
+            Ok(body) => {
+                let title = if item.name.trim().is_empty() {
+                    "Untitled page".to_string()
+                } else {
+                    item.name.trim().to_string()
+                };
+                let content = notes::compose_page(
+                    &settings,
+                    &title,
+                    &local_date_string(),
+                    &["onenote".to_string()],
+                    &body,
+                );
+                let base = {
+                    let s = slug(&title);
+                    if s.is_empty() {
+                        "onenote-page".to_string()
+                    } else {
+                        s
+                    }
+                };
+                match notes::create_page_file(&dir, &base, &content) {
+                    Ok(written) => {
+                        imported += 1;
+                        first_path.get_or_insert_with(|| written.to_string_lossy().into_owned());
+                    }
+                    Err(err) => failures.push(OneNoteImportFailure {
+                        name: item.name.clone(),
+                        reason: err,
+                    }),
+                }
+            }
+            Err(reason) => failures.push(OneNoteImportFailure {
+                name: item.name.clone(),
+                reason,
+            }),
+        }
+    }
+
+    if let Some(main) = app.get_webview_window(desktop::MAIN) {
+        let _ = main.emit(
+            "onenote-import-progress",
+            OneNoteProgress {
+                done: total,
+                total,
+                name: String::new(),
+            },
+        );
+    }
+    notify_files_changed(&app);
+
+    Ok(OneNoteImportResult {
+        imported,
+        failures,
+        first_path,
+    })
 }
 
 // ===========================================================================

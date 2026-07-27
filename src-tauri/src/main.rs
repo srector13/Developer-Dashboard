@@ -8,7 +8,9 @@ mod capture;
 mod commands;
 mod desktop;
 mod exports;
+mod mhtml;
 mod notebook;
+mod onenote;
 mod notes;
 mod pandoc;
 mod platform;
@@ -96,6 +98,10 @@ fn main() {
             // imports + exports
             commands::import_clipboard,
             commands::import_document,
+            // OneNote
+            commands::onenote_probe,
+            commands::onenote_notebooks,
+            commands::onenote_import,
             commands::export_to_pdf,
             commands::export_to_html,
             commands::export_to_docx,

@@ -48,6 +48,7 @@ flowchart LR
 - **HTML** — a single self-contained file (images included) you can email or drop on a shared drive.
 - **Copy as rich text** — paste a fully formatted note directly into an email, Slack, or a wiki.
 - **Import, too.** Paste a copied email or web page as a clean new note, or import Word / PowerPoint / Excel files into the section of your choice.
+- **Bring your OneNote across.** Point the app at OneNote desktop and pick whole notebooks, sections, or individual pages: each OneNote page becomes its own note, and OneNote's sections (and section groups) become sections here. Images come with it. See [`docs/onenote-import.md`](docs/onenote-import.md).
 
 ## Little comforts
 
