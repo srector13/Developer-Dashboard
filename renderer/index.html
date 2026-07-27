@@ -44,8 +44,9 @@
     <div class="app-loading-spinner" aria-hidden="true"></div>
   </div>
 
-  <!-- Frameless titlebar padding for macOS -->
-  <div id="titlebar"></div>
+  <!-- No titlebar spacer: this build uses the native Windows title bar, so
+       the app content starts directly beneath it. The 32px band that used to
+       sit here existed to make room for macOS's inset traffic lights. -->
 
   <!-- Onboarding On Screen Overlay -->
   <div id="onboarding" class="overlay active">

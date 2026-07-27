@@ -99,12 +99,10 @@ body {
 }
 
 /* Frameless Titlebar (macOS drag handle support) */
-#titlebar {
-  height: 32px;
-  background-color: var(--bg-primary);
-  -webkit-app-region: drag;
-  flex-shrink: 0;
-}
+/* #titlebar is gone: it padded the top of the window for macOS's inset
+   traffic lights, and against the native Windows title bar it just read as a
+   dead 32px band. The export/print stylesheets still list the selector
+   defensively, which costs nothing. */
 
 /* Onboarding Screen Overlay */
 .overlay {
