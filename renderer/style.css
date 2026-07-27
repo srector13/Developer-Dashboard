@@ -286,10 +286,14 @@ body.sidebar-collapsed #btn-expand-sidebar {
   padding: 10px 16px;
   border-top: 1px solid var(--border-color);
   flex-shrink: 0;
+  display: flex;
+  gap: 6px;
 }
 
+/* Notebook-wide tools sit side by side; each takes half the footer. */
 .sidebar-footer .btn {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   gap: 6px;
 }
 
@@ -412,13 +416,30 @@ body.sidebar-collapsed #btn-expand-sidebar {
   padding: 4px 16px;
   display: flex;
   gap: 6px;
+  /* Four controls don't fit a 260px sidebar in one row, so they wrap to a
+     2x2 grid instead of squashing their labels into nothing. Widen the
+     sidebar and they flow back onto one line. */
+  flex-wrap: wrap;
   border-bottom: 1px solid var(--border-color);
   padding-bottom: 8px;
 }
 
-.tree-controls .btn {
-  flex: 1;
+.tree-controls .btn,
+.tree-controls .editor-dropdown {
+  flex: 1 1 auto;
+  min-width: 76px;
   gap: 4px;
+}
+
+/* The Import control is a dropdown wrapper, so its button has to fill it for
+   the row to stay visually even. */
+.tree-controls .editor-dropdown .btn {
+  width: 100%;
+}
+
+.tree-controls .editor-dropdown .chevron {
+  margin-left: auto;
+  opacity: 0.7;
 }
 
 .file-tree {

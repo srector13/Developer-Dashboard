@@ -268,6 +268,47 @@ check('XSS tree title renders literally in sidebar', await page.evaluate(() => {
     document.querySelectorAll('#notebook-tree img').length === 0;
 }));
 
+// --- 1b. Toolbar layout: importing lives in the sidebar with the other
+// "add to the notebook" actions; exporting acts on the open note. These are
+// assertions about the static markup, so they run before the suite starts
+// opening modals and swapping views. ---
+check('Export menu lists the sharing entries', await page.evaluate(() => {
+  const items = Array.from(document.querySelectorAll('#dropdown-export .dropdown-item'))
+    .map(d => d.textContent.replace(/\s+/g, ' ').trim());
+  return ['PDF', 'HTML', 'Word (.docx)', 'Copy as Rich Text']
+    .every(t => items.some(i => i.startsWith(t)));
+}));
+check('Import menu lives in the sidebar and lists its sources', await page.evaluate(() => {
+  const menu = document.querySelector('#dropdown-import');
+  if (!menu || !menu.closest('#sidebar')) return false;
+  const items = Array.from(menu.querySelectorAll('.dropdown-item'))
+    .map(d => d.textContent.replace(/\s+/g, ' ').trim());
+  return ['From Clipboard', 'From a File…', 'From OneNote…']
+    .every(t => items.some(i => i.startsWith(t)));
+}));
+check('the import file types are discoverable on hover', await page.evaluate(() => {
+  const item = Array.from(document.querySelectorAll('#dropdown-import .dropdown-item'))
+    .find(d => d.textContent.includes('From a File'));
+  // The app moves title into data-tooltip and removes title, so it can draw
+  // its own tooltip rather than the OS one.
+  const hint = item && (item.dataset.tooltip || item.getAttribute('title'));
+  return !!hint && ['Word', 'PowerPoint', 'Excel', 'OneNote', 'EPUB'].every(f => hint.includes(f));
+}));
+check('no Pandoc jargon in the UI outside settings', await page.evaluate(() => {
+  const toolbarAndSidebar = [
+    ...document.querySelectorAll('#sidebar, .toolbar'),
+  ].map(el => `${el.innerHTML}`).join(' ');
+  return !/pandoc/i.test(toolbarAndSidebar);
+}));
+check('Trash and Note History moved out of the old menu', await page.evaluate(() => {
+  const gone = !document.querySelector('#dropdown-file-actions');
+  const trashInSidebar = Array.from(document.querySelectorAll('#sidebar button'))
+    .some(b => b.textContent.trim() === 'Trash');
+  const historyInToolbar = Array.from(document.querySelectorAll('.toolbar button'))
+    .some(b => (b.dataset.tooltip || b.getAttribute('title') || '').startsWith('Note History'));
+  return gone && trashInSidebar && historyInToolbar;
+}));
+
 // --- 2. Sidebar collapse / expand ---
 await page.locator('[data-tooltip="Collapse Sidebar"]').click();
 check('sidebar collapses', await page.evaluate(() => document.getElementById('sidebar').classList.contains('collapsed') && document.body.classList.contains('sidebar-collapsed')));
@@ -489,7 +530,7 @@ await page.locator('[data-tooltip="Zoom In Preview"]').click();
 check('preview zoom label updates', (await page.locator('#label-preview-zoom').innerText()) === '110%');
 
 // --- 9. Templates modal ---
-await page.locator('.sidebar-footer .btn').click();
+await page.locator('.sidebar-footer .btn[onclick*="showTemplatesModal"]').click();
 await page.waitForTimeout(300);
 check('templates modal opens', await page.evaluate(() => document.getElementById('templates-modal').classList.contains('active')));
 check('templates listed', await page.locator('#templates-list .template-item').count() === 2);
@@ -1363,10 +1404,6 @@ check('copyRichText gets html + raw markdown text', await page.evaluate(() =>
   typeof window.__richCopy.text === 'string' && window.__richCopy.text.includes('```mermaid')));
 check('copy toast confirms', await page.evaluate(() =>
   document.getElementById('app-toast').textContent.includes('rich text')));
-check('File Actions lists sharing entries', await page.evaluate(() => {
-  const items = Array.from(document.querySelectorAll('#dropdown-file-actions .dropdown-item')).map(d => d.textContent.trim());
-  return ['Export to HTML', 'Export to Word (DOCX)', 'Copy as Rich Text'].every(t => items.includes(t));
-}));
 await page.keyboard.press(`${MOD}+k`);
 await page.waitForTimeout(200);
 await page.locator('#palette-search-input').fill('/docx');

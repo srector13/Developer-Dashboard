@@ -3939,7 +3939,7 @@ async function deleteNode(fsPath) {
         closeNoteCanvas();
       }
       await refreshNotebook();
-      showToast('Moved to Trash — restore it any time from File Actions → Trash.');
+      showToast('Moved to Trash — restore it any time from the Trash button below the notebook tree.');
     }
   }
 }
