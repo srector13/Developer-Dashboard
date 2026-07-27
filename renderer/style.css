@@ -412,34 +412,19 @@ body.sidebar-collapsed #btn-expand-sidebar {
   overflow: hidden;
 }
 
+/* Icon-only, so all four fit one row at any sidebar width. The labels live in
+   the tooltips. */
 .tree-controls {
-  padding: 4px 16px;
+  padding: 4px 16px 8px 16px;
   display: flex;
-  gap: 6px;
-  /* Four controls don't fit a 260px sidebar in one row, so they wrap to a
-     2x2 grid instead of squashing their labels into nothing. Widen the
-     sidebar and they flow back onto one line. */
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
   border-bottom: 1px solid var(--border-color);
-  padding-bottom: 8px;
 }
 
-.tree-controls .btn,
-.tree-controls .editor-dropdown {
-  flex: 1 1 auto;
-  min-width: 76px;
-  gap: 4px;
-}
-
-/* The Import control is a dropdown wrapper, so its button has to fill it for
-   the row to stay visually even. */
-.tree-controls .editor-dropdown .btn {
-  width: 100%;
-}
-
-.tree-controls .editor-dropdown .chevron {
+/* Tags filters rather than adds, so it sits apart from the other three. */
+.tree-controls-filter {
   margin-left: auto;
-  opacity: 0.7;
 }
 
 .file-tree {
@@ -578,12 +563,17 @@ body.sidebar-collapsed #btn-expand-sidebar {
 
 /* CANVAS TOOLBAR */
 .toolbar {
-  height: 48px;
+  /* Wraps rather than clips. Twenty-odd controls plus a 260px sidebar do not
+     fit 1280px, which silently cut the right-hand group off the screen; the
+     row now flows onto a second line instead. At 1366 and up it stays on one. */
+  min-height: 48px;
+  flex-wrap: wrap;
+  row-gap: 4px;
+  padding: 6px 16px;
   border-bottom: 1px solid var(--border-color);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
   background-color: var(--bg-secondary);
   backdrop-filter: var(--glass-blur);
   z-index: 5;
@@ -595,8 +585,45 @@ body.sidebar-collapsed #btn-expand-sidebar {
 .toolbar-group {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
   flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+/* A hairline between the editing controls and the document controls, so a row
+   of twenty icons reads as two groups rather than one undifferentiated strip. */
+.toolbar-group + .toolbar-group::before {
+  content: '';
+  width: 1px;
+  height: 18px;
+  margin-right: 4px;
+  background-color: var(--border-color);
+  flex-shrink: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Icon scale
+   ---------------------------------------------------------------------------
+   Set here rather than on each <svg width=…>, which had drifted to seven
+   different sizes (10–18px) for controls sitting side by side. One rule per
+   button class keeps a row visually even and means new icons inherit the
+   right size instead of guessing. Chevrons stay small on purpose — they are
+   punctuation attached to a control, not icons in their own right. */
+.icon-btn > svg,
+.toolbar-btn > svg:not(.chevron) {
+  width: 15px;
+  height: 15px;
+}
+
+.btn > svg {
+  width: 14px;
+  height: 14px;
+}
+
+.dropdown-toggle > svg.chevron {
+  width: 10px;
+  height: 10px;
+  opacity: 0.65;
 }
 
 .mode-toggles {
@@ -638,7 +665,7 @@ body.sidebar-collapsed #btn-expand-sidebar {
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
   height: 28px;
-  padding: 0 8px;
+  padding: 0 6px;
   display: inline-flex;
   align-items: center;
   justify-content: center;

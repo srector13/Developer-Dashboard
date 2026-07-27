@@ -2041,6 +2041,12 @@ function initCustomTooltips() {
     if (title && !el.dataset.tooltipBound) {
       el.dataset.tooltip = title;
       el.dataset.tooltipBound = 'true'; // this runs after every render; bind each element once
+      // `title` is what gives an icon-only button its accessible name, and
+      // removing it would leave a screen reader announcing "button". Hand the
+      // name to aria-label before taking the attribute away.
+      if (!el.hasAttribute('aria-label') && !el.textContent.trim()) {
+        el.setAttribute('aria-label', title);
+      }
       el.removeAttribute('title'); // hide default system tooltip
 
       el.addEventListener('mouseenter', () => {

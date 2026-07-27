@@ -97,19 +97,15 @@
            that container clips its overflow, which would cut off the Import
            menu. -->
       <div class="tree-controls">
-        <button class="btn btn-sm btn-outline" onclick="promptCreateSection('')" title="New Section">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
-          Section
+        <button class="icon-btn" onclick="promptCreateSection('')" title="New Section">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
         </button>
-        <button class="btn btn-sm btn-outline" onclick="promptCreatePage('')" title="New Page">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
-          Page
+        <button class="icon-btn" onclick="promptCreatePage('')" title="New Page">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
         </button>
         <div class="editor-dropdown">
-          <button class="btn btn-sm btn-outline dropdown-toggle" onclick="toggleEditorDropdown('dropdown-import', event)" title="Bring content into this notebook">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            Import
-            <svg class="chevron" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          <button class="icon-btn dropdown-toggle" onclick="toggleEditorDropdown('dropdown-import', event)" title="Import — clipboard, a file, or OneNote">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           </button>
           <div id="dropdown-import" class="dropdown-menu glass-card">
             <div class="dropdown-item" onclick="importFromClipboard()" title="Turn whatever you've copied — an email, a web page — into a new note">From Clipboard</div>
@@ -120,9 +116,9 @@
             <div class="dropdown-item" onclick="openOneNoteImport()" title="Pick notebooks, sections or pages from OneNote desktop — each page becomes its own note, and sections are kept">From OneNote…</div>
           </div>
         </div>
-        <button class="btn btn-sm btn-outline" onclick="showTagsPopover()" title="Filter by Tag">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
-          Tags
+        <!-- Pushed right: the others add content, this one filters it. -->
+        <button class="icon-btn tree-controls-filter" onclick="showTagsPopover()" title="Filter by Tag">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
         </button>
       </div>
 
@@ -328,10 +324,9 @@
                Importing lives in the sidebar, next to the notebook's other
                "add something" actions. -->
           <div class="editor-dropdown">
-            <button class="toolbar-btn dropdown-toggle" onclick="toggleEditorDropdown('dropdown-export', event)" title="Export or share this note">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-              <span style="margin-left: 6px; font-weight: 500; font-size: 13px;">Export</span>
-              <svg class="chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left: 4px;"><polyline points="6 9 12 15 18 9"/></svg>
+            <button class="toolbar-btn dropdown-toggle" onclick="toggleEditorDropdown('dropdown-export', event)" title="Export — PDF, HTML, Word, or copy as rich text">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              <svg class="chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
             </button>
             <div id="dropdown-export" class="dropdown-menu glass-card" style="right: 0; left: auto;">
               <div class="dropdown-item" onclick="exportToPdf()" title="One note, a whole section, or the entire notebook as a PDF">

@@ -300,6 +300,30 @@ check('no Pandoc jargon in the UI outside settings', await page.evaluate(() => {
   ].map(el => `${el.innerHTML}`).join(' ');
   return !/pandoc/i.test(toolbarAndSidebar);
 }));
+// Going icon-only removed the visible labels, so the tooltip text is now the
+// only accessible name these controls have — and the tooltip system *removes*
+// the title attribute it reads from. Without the aria-label handoff a screen
+// reader announces bare "button" for most of the toolbar.
+check('every icon-only control keeps an accessible name', await page.evaluate(() => {
+  const unnamed = Array.from(document.querySelectorAll('.icon-btn, .toolbar-btn, .dropdown-toggle'))
+    .filter(el => el.offsetParent !== null)
+    .filter(el => !el.textContent.trim()
+      && !el.getAttribute('aria-label')
+      && !el.getAttribute('title'));
+  return unnamed.length === 0;
+}));
+
+// The toolbar carries twenty-odd controls; at 1280 wide they used to run off
+// the edge of the screen, taking Settings and Search with them.
+check('the toolbar never clips its controls', await page.evaluate(() => {
+  const toolbar = document.querySelector('.toolbar');
+  const overflow = toolbar.scrollWidth - toolbar.clientWidth;
+  const offscreen = Array.from(toolbar.querySelectorAll('button'))
+    .filter(b => b.offsetParent !== null)
+    .some(b => b.getBoundingClientRect().right > window.innerWidth + 1);
+  return overflow <= 1 && !offscreen;
+}));
+
 check('Trash and Note History moved out of the old menu', await page.evaluate(() => {
   const gone = !document.querySelector('#dropdown-file-actions');
   const trashInSidebar = Array.from(document.querySelectorAll('#sidebar button'))
