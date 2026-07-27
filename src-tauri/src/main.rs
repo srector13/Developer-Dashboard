@@ -38,7 +38,7 @@ fn main() {
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
                     if event.state() == ShortcutState::Pressed {
-                        desktop::handle_shortcut(app, &shortcut.to_string());
+                        desktop::handle_shortcut(app, shortcut);
                     }
                 })
                 .build(),

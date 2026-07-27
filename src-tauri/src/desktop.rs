@@ -411,7 +411,7 @@ pub fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     )?;
 
     TrayIconBuilder::with_id("main-tray")
-        .icon(tauri::include_image!("icons/icon.png"))
+        .icon(tauri::include_image!("icons/tray.png"))
         .tooltip("Markdown Notebook")
         .menu(&menu)
         // Left-click opens the app; the menu is on right-click.
@@ -492,7 +492,8 @@ pub fn normalize_accelerator(accelerator: &str) -> String {
 /// another app surfaces as a toast in the main window rather than failing
 /// silently.
 pub fn apply_shortcuts(app: &AppHandle, settings: &AppSettings) {
-    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    use std::str::FromStr;
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
     let state = app.state::<AppState>();
     let mut registered = state.shortcuts.lock().unwrap();
@@ -504,17 +505,30 @@ pub fn apply_shortcuts(app: &AppHandle, settings: &AppSettings) {
     .into_iter()
     .flatten()
     {
-        let _ = app.global_shortcut().unregister(previous.as_str());
+        let _ = app.global_shortcut().unregister(previous);
     }
 
-    let register = |raw: &str| -> Option<String> {
+    // The parsed Shortcut — not the accelerator text — is what gets stored, so
+    // the handler can compare it by value. Comparing rendered strings does not
+    // work: `Shortcut`'s Display writes "shift+control+KeyN", which never
+    // equals the "CommandOrControl+Shift+N" that settings.json holds.
+    let register = |raw: &str| -> Option<Shortcut> {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
             return None; // feature switched off
         }
-        let normalized = normalize_accelerator(trimmed);
-        match app.global_shortcut().register(normalized.as_str()) {
-            Ok(_) => Some(normalized),
+        let parsed = match Shortcut::from_str(&normalize_accelerator(trimmed)) {
+            Ok(shortcut) => shortcut,
+            Err(err) => {
+                eprintln!("Could not parse the shortcut {trimmed}: {err}");
+                if let Some(main) = app.get_webview_window(MAIN) {
+                    let _ = main.emit("capture-shortcut-failed", trimmed);
+                }
+                return None;
+            }
+        };
+        match app.global_shortcut().register(parsed) {
+            Ok(_) => Some(parsed),
             Err(err) => {
                 eprintln!("Could not register {trimmed}: {err}");
                 if let Some(main) = app.get_webview_window(MAIN) {
@@ -563,18 +577,15 @@ pub fn capture_clipboard_to_note(app: &AppHandle) {
 
 /// Route a fired shortcut to the right action. The quick-capture accelerator
 /// opens the launcher (quick capture is one of its tools), matching v1.4.0.
-pub fn handle_shortcut(app: &AppHandle, pressed: &str) {
+pub fn handle_shortcut(app: &AppHandle, pressed: &tauri_plugin_global_shortcut::Shortcut) {
     let state = app.state::<AppState>();
     let (quick, clipboard) = {
         let registered = state.shortcuts.lock().unwrap();
-        (
-            registered.quick_capture.clone(),
-            registered.clipboard_capture.clone(),
-        )
+        (registered.quick_capture, registered.clipboard_capture)
     };
-    if quick.as_deref() == Some(pressed) {
+    if quick.as_ref() == Some(pressed) {
         toggle_launcher_window(app);
-    } else if clipboard.as_deref() == Some(pressed) {
+    } else if clipboard.as_ref() == Some(pressed) {
         capture_clipboard_to_note(app);
     }
 }
@@ -658,6 +669,42 @@ mod tests {
     fn unknown_key_names_are_passed_through_untouched() {
         assert_eq!(normalize_accelerator("Super+F12"), "Super+F12");
         assert_eq!(normalize_accelerator("  Shift + N "), "Shift+N");
+    }
+
+    /// The shipped defaults must survive normalisation *and* parsing. In
+    /// v1.5.0-beta.1 they registered but never fired, because the handler
+    /// compared `Shortcut`'s Display output against the accelerator text.
+    #[test]
+    fn the_default_accelerators_parse_into_the_expected_shortcuts() {
+        use std::str::FromStr;
+        use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
+
+        let settings = AppSettings::default();
+        for (accelerator, expected_code) in [
+            (settings.quick_capture_shortcut.as_str(), Code::KeyN),
+            (settings.clipboard_capture_shortcut.as_str(), Code::KeyG),
+        ] {
+            let parsed = Shortcut::from_str(&normalize_accelerator(accelerator))
+                .unwrap_or_else(|e| panic!("{accelerator} did not parse: {e}"));
+            assert_eq!(parsed.key, expected_code, "{accelerator}");
+            assert!(parsed.mods.contains(Modifiers::CONTROL), "{accelerator}");
+            assert!(parsed.mods.contains(Modifiers::SHIFT), "{accelerator}");
+        }
+    }
+
+    /// Guards the actual defect: a round-tripped Display string is NOT the
+    /// accelerator, so anything comparing those two is broken by construction.
+    #[test]
+    fn shortcut_display_does_not_round_trip_to_the_accelerator() {
+        use std::str::FromStr;
+        use tauri_plugin_global_shortcut::Shortcut;
+
+        let accelerator = normalize_accelerator("CommandOrControl+Shift+N");
+        let parsed = Shortcut::from_str(&accelerator).unwrap();
+        assert_ne!(parsed.to_string(), accelerator);
+        // …but parsing either spelling yields the same value, which is why the
+        // handler matches on the parsed Shortcut instead.
+        assert_eq!(Shortcut::from_str(&parsed.to_string()).unwrap(), parsed);
     }
 
     #[test]

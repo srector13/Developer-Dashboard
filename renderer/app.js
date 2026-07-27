@@ -57,12 +57,23 @@ let autoSaveTimeout = null;
 let previewZoomLevel = 100;
 let popoutZoomLevel = 100;
  
-// Fade out and remove the startup loading overlay
+// Fade out and remove the startup loading overlay.
+//
+// The native build starts fast enough that the overlay would otherwise appear
+// for a single frame and read as a flicker rather than a splash, so it is held
+// for a short floor before fading. The floor runs concurrently with the
+// notebook load — it only ever delays the *fade*, never the work.
+const APP_LOADING_MIN_MS = 450;
+const appLoadingStartedAt = Date.now();
+
 function hideAppLoading() {
   const el = document.getElementById('app-loading');
   if (!el) return;
-  el.classList.add('hiding');
-  setTimeout(() => el.classList.add('gone'), 300);
+  const remaining = Math.max(0, APP_LOADING_MIN_MS - (Date.now() - appLoadingStartedAt));
+  setTimeout(() => {
+    el.classList.add('hiding');
+    setTimeout(() => el.classList.add('gone'), 300);
+  }, remaining);
 }
 
 // Initialize App

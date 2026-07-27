@@ -1,25 +1,33 @@
-// Generates the Windows icon set for the Rust/Tauri shell from build/icon.png:
-//   src-tauri/icons/icon.ico          (16/32/48/64/128/256, PNG-compressed)
-//   src-tauri/icons/32x32.png
-//   src-tauri/icons/128x128.png
-//   src-tauri/icons/128x128@2x.png
-//   src-tauri/icons/icon.png          (256x256, used for the tray)
+// Generates every raster the Windows build needs:
 //
-// Deliberately dependency-free: it decodes the source PNG with node's own
-// zlib, box-filters it down, and re-encodes. `npm install` is not needed, so
-// the icons can be regenerated on any machine with node.
+//   src-tauri/icons/icon.ico     16/20/24/32/40/48/64/128/256 — taskbar, Explorer, alt-tab
+//   src-tauri/icons/icon.png     256 — the window icon
+//   src-tauri/icons/tray.png      32 — the tray icon (embedded via include_image!)
+//   src-tauri/icons/32x32.png    \
+//   src-tauri/icons/128x128.png   } sizes tauri.conf.json's bundle.icon lists
+//   src-tauri/icons/128x128@2x.png/
+//   renderer/app-icon.png        256 — the startup splash logo
+//
+// The app icons come from build/icon-windows.svg (the glyph with no rounded
+// plate — see that file for why). The splash logo comes from the plated
+// build/icon.png, because it's drawn inside the app on the app's own dark
+// background, where the plate belongs.
+//
 // Run: node scripts/render-win-icons.mjs
 
 import * as fs from 'fs';
 import * as path from 'path';
 import * as zlib from 'zlib';
+import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SRC = path.join(ROOT, 'build', 'icon.png');
+const WIN_SVG = path.join(ROOT, 'build', 'icon-windows.svg');
+const PLATED_PNG = path.join(ROOT, 'build', 'icon.png');
 const OUT_DIR = path.join(ROOT, 'src-tauri', 'icons');
+const RENDERER_DIR = path.join(ROOT, 'renderer');
 
-// --- PNG decode (8-bit RGB/RGBA, non-interlaced — what render-icon.mjs emits)
+// --- PNG decode (8-bit RGB/RGBA, non-interlaced)
 
 function decodePng(buf) {
   if (buf.readUInt32BE(0) !== 0x89504e47) throw new Error('not a PNG');
@@ -33,10 +41,9 @@ function decodePng(buf) {
     if (type === 'IHDR') {
       width = data.readUInt32BE(0);
       height = data.readUInt32BE(4);
-      const depth = data[8];
-      const colorType = data[9];
-      if (depth !== 8) throw new Error(`unsupported bit depth ${depth}`);
+      if (data[8] !== 8) throw new Error(`unsupported bit depth ${data[8]}`);
       if (data[12] !== 0) throw new Error('interlaced PNGs are not supported');
+      const colorType = data[9];
       channels = colorType === 6 ? 4 : colorType === 2 ? 3 : 0;
       if (!channels) throw new Error(`unsupported color type ${colorType}`);
     } else if (type === 'IDAT') {
@@ -86,8 +93,25 @@ function decodePng(buf) {
   return { width, height, data: out };
 }
 
-// --- Box-filter downscale, premultiplying alpha so transparent edge pixels
-// don't bleed their (undefined) color into the average.
+// --- Downscale
+//
+// Averaging sRGB bytes directly is the classic cause of "fuzzy, slightly
+// muddy" icons: sRGB is a gamma curve, so the mean of two encoded values is
+// darker than the mean of the light they represent. Everything below averages
+// in LINEAR light and converts back at the end, which keeps thin bright
+// strokes on a transparent background crisp instead of grey and washed out.
+// Alpha is premultiplied so transparent pixels can't bleed their colour in.
+
+const SRGB_TO_LINEAR = new Float32Array(256);
+for (let i = 0; i < 256; i++) {
+  const c = i / 255;
+  SRGB_TO_LINEAR[i] = c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
+
+function linearToSrgb(v) {
+  const c = v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055;
+  return Math.max(0, Math.min(255, Math.round(c * 255)));
+}
 
 function resize(img, size) {
   const out = Buffer.alloc(size * size * 4);
@@ -101,20 +125,21 @@ function resize(img, size) {
         for (let sx = x0; sx < x1; sx++) {
           const i = (sy * img.width + sx) * 4;
           const alpha = img.data[i + 3] / 255;
-          r += img.data[i] * alpha;
-          g += img.data[i + 1] * alpha;
-          b += img.data[i + 2] * alpha;
-          a += img.data[i + 3];
+          r += SRGB_TO_LINEAR[img.data[i]] * alpha;
+          g += SRGB_TO_LINEAR[img.data[i + 1]] * alpha;
+          b += SRGB_TO_LINEAR[img.data[i + 2]] * alpha;
+          a += alpha;
           n++;
         }
       }
       const d = (y * size + x) * 4;
       const avgA = a / n;
-      const un = avgA > 0 ? 255 / avgA : 0;
-      out[d] = Math.min(255, Math.round((r / n) * un));
-      out[d + 1] = Math.min(255, Math.round((g / n) * un));
-      out[d + 2] = Math.min(255, Math.round((b / n) * un));
-      out[d + 3] = Math.round(avgA);
+      // Un-premultiply before the curve, or the colour comes back too dark
+      const un = avgA > 0 ? 1 / avgA : 0;
+      out[d] = linearToSrgb((r / n) * un);
+      out[d + 1] = linearToSrgb((g / n) * un);
+      out[d + 2] = linearToSrgb((b / n) * un);
+      out[d + 3] = Math.round(avgA * 255);
     }
   }
   return { width: size, height: size, data: out };
@@ -187,17 +212,58 @@ function encodeIco(entries) {
   return Buffer.concat([header, dir, ...entries.map(e => e.png)]);
 }
 
+// --- SVG rasterisation, via the Chromium Playwright already provides
+
+async function renderSvg(svgPath, size) {
+  const require = createRequire(path.join(ROOT, 'package.json'));
+  const { chromium } = require('@playwright/test');
+  const launchOpts = process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {};
+  const browser = await chromium.launch(launchOpts);
+  try {
+    const page = await browser.newPage({
+      viewport: { width: size, height: size },
+      deviceScaleFactor: 1,
+    });
+    const svg = fs.readFileSync(svgPath, 'utf8');
+    await page.setContent(
+      `<!doctype html><body style="margin:0;background:transparent">${svg}</body>`,
+    );
+    await page.waitForTimeout(200);
+    return await page.screenshot({ omitBackground: true });
+  } finally {
+    await browser.close();
+  }
+}
+
 // --- main
 
-const source = decodePng(fs.readFileSync(SRC));
+// Windows asks for far more sizes than the four a bundler usually emits: 16
+// and 20 for list views, 24 for the small taskbar, 32/40/48 for the normal
+// taskbar and alt-tab, 64+ for large tiles. Leaving gaps is what makes an icon
+// look blurry — Windows rescales whatever it finds nearest.
+const ICO_SIZES = [16, 20, 24, 32, 40, 48, 64, 128, 256];
+
+const source = decodePng(await renderSvg(WIN_SVG, 1024));
 fs.mkdirSync(OUT_DIR, { recursive: true });
 
-const icoSizes = [16, 32, 48, 64, 128, 256];
-const ico = encodeIco(icoSizes.map(size => ({ size, png: encodePng(resize(source, size)) })));
+const ico = encodeIco(ICO_SIZES.map(size => ({ size, png: encodePng(resize(source, size)) })));
 fs.writeFileSync(path.join(OUT_DIR, 'icon.ico'), ico);
 
 for (const [name, size] of [['32x32.png', 32], ['128x128.png', 128], ['128x128@2x.png', 256], ['icon.png', 256]]) {
   fs.writeFileSync(path.join(OUT_DIR, name), encodePng(resize(source, size)));
 }
 
-console.log(`Wrote ${OUT_DIR}: icon.ico (${icoSizes.join('/')}) + 4 PNGs`);
+// The tray gets its own 32px raster rather than reusing icon.png. The
+// notification area draws at 16px (24 or 32 on a scaled display), and handing
+// Windows a 256px source to shrink is a second, avoidable source of blur.
+fs.writeFileSync(path.join(OUT_DIR, 'tray.png'), encodePng(resize(source, 32)));
+
+// The splash logo keeps the plate: it renders inside the app, on the app's own
+// background, at 88px — the context the plated artwork was designed for. It
+// lives in renderer/ because that directory is the whole frontend root at
+// runtime; anything above it is not addressable from the page.
+const plated = decodePng(fs.readFileSync(PLATED_PNG));
+fs.writeFileSync(path.join(RENDERER_DIR, 'app-icon.png'), encodePng(resize(plated, 256)));
+
+console.log(`Wrote ${OUT_DIR}: icon.ico (${ICO_SIZES.join('/')}) + 5 PNGs`);
+console.log(`Wrote ${path.join(RENDERER_DIR, 'app-icon.png')} (splash logo, plated)`);

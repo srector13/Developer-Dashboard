@@ -22,10 +22,14 @@ pub struct PendingShot {
     pub png: Vec<u8>,
 }
 
+/// The parsed shortcuts currently registered with the OS. Stored as
+/// `Shortcut` rather than the accelerator text so the global-shortcut handler
+/// can match by value — its `Display` format ("shift+control+KeyN") does not
+/// round-trip to the accelerator strings settings.json holds.
 #[derive(Default)]
 pub struct RegisteredShortcuts {
-    pub quick_capture: Option<String>,
-    pub clipboard_capture: Option<String>,
+    pub quick_capture: Option<tauri_plugin_global_shortcut::Shortcut>,
+    pub clipboard_capture: Option<tauri_plugin_global_shortcut::Shortcut>,
 }
 
 pub struct AppState {

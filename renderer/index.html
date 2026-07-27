@@ -36,7 +36,9 @@
        so the window has a real taskbar entry and a branded screen the whole
        time it's loading. Hidden by the renderer once the first render lands. -->
   <div id="app-loading">
-    <img class="app-loading-logo" src="../build/icon.png" alt="">
+    <!-- Must live inside renderer/: that directory is the entire frontend
+         root at runtime, so "../build/…" resolves above it and 404s. -->
+    <img class="app-loading-logo" src="app-icon.png" alt="">
     <div class="app-loading-title">Markdown Notebook</div>
     <div class="app-loading-sub">Opening your notebook…</div>
     <div class="app-loading-spinner" aria-hidden="true"></div>
