@@ -77,12 +77,32 @@ pub fn reveal_main_window_for_export(app: &AppHandle, fs_path: String) {
 // Helper windows
 // ---------------------------------------------------------------------------
 
+/// Dismiss a helper window when the user clicks away from it.
+///
+/// A blur only counts once the window has actually held focus. Without that
+/// condition the launcher's Note tool never opened the capture window on the
+/// first try: the window is built lazily, so that first run creates it, hides
+/// the launcher, and shows the new window all at once. Hiding the focused
+/// launcher hands focus back to whatever was behind it, and the resulting
+/// `Focused(false)` reached a capture window that had not been focused yet —
+/// so it hid itself immediately. Trying again appeared to work only because
+/// the window already existed by then, taking the creation out of the race.
+///
+/// Latching on `Focused(true)` also self-resets: hiding clears the latch, so
+/// the next time the window is shown it waits for real focus again.
 fn hide_on_blur(window: &WebviewWindow) {
     let handle = window.clone();
-    window.on_window_event(move |event| {
-        if let tauri::WindowEvent::Focused(false) = event {
-            let _ = handle.hide();
+    let had_focus = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    window.on_window_event(move |event| match event {
+        tauri::WindowEvent::Focused(true) => {
+            had_focus.store(true, Ordering::SeqCst);
         }
+        tauri::WindowEvent::Focused(false) => {
+            if had_focus.swap(false, Ordering::SeqCst) {
+                let _ = handle.hide();
+            }
+        }
+        _ => {}
     });
 }
 
