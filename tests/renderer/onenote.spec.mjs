@@ -31,12 +31,31 @@ const dialogs = [];
 page.on('dialog', (d) => { dialogs.push(d.message()); d.dismiss(); });
 
 await page.addInitScript(() => {
+  // Two sections called "Projects" under different parents — the case that
+  // makes a leaf-name-only destination list impossible to choose from.
   const tree = {
     kind: 'section', name: 'Root', fsPath: '/nb', relPath: '', pages: [],
-    sections: [{
-      kind: 'section', name: 'Imported', fsPath: '/nb/Imported', relPath: 'Imported',
-      pages: [], sections: [],
-    }],
+    sections: [
+      {
+        kind: 'section', name: 'Imported', fsPath: '/nb/Imported', relPath: 'Imported',
+        pages: [], sections: [],
+      },
+      {
+        kind: 'section', name: 'Claims', fsPath: '/nb/Claims', relPath: 'Claims', pages: [],
+        sections: [{
+          kind: 'section', name: 'Projects', fsPath: '/nb/Claims/Projects',
+          relPath: 'Claims/Projects', pages: [], sections: [],
+        }],
+      },
+      {
+        kind: 'section', name: 'Customer Service', fsPath: '/nb/Customer Service',
+        relPath: 'Customer Service', pages: [],
+        sections: [{
+          kind: 'section', name: 'Projects', fsPath: '/nb/Customer Service/Projects',
+          relPath: 'Customer Service/Projects', pages: [], sections: [],
+        }],
+      },
+    ],
   };
 
   // Mirrors what src-tauri/src/onenote.rs serialises.
@@ -156,6 +175,31 @@ check('an ungrouped section becomes notebook → section',
   JSON.stringify(standup && standup.sectionPath));
 check('page ids are carried through', standup.id === '{P1}', standup && standup.id);
 
+// --- destination list names the whole chain, not just the leaf -------------
+
+const destOptions = await page.evaluate(() =>
+  Array.from(document.getElementById('onenote-dest').options).map(o => [o.text, o.value]));
+check('the root is offered first', destOptions[0][0] === 'Notebook Root',
+  JSON.stringify(destOptions[0]));
+check('nested sections show their whole chain',
+  destOptions.some(([t, v]) => t === 'Claims › Projects' && v === '/nb/Claims/Projects') &&
+  destOptions.some(([t, v]) => t === 'Customer Service › Projects' && v === '/nb/Customer Service/Projects'),
+  JSON.stringify(destOptions));
+check('same-named sections are no longer identical rows',
+  new Set(destOptions.map(([t]) => t)).size === destOptions.length,
+  JSON.stringify(destOptions.map(([t]) => t)));
+check('every row carries its path as a tooltip too', await page.evaluate(() =>
+  Array.from(document.getElementById('onenote-dest').options)
+    .slice(1)
+    .every(o => o.title === o.text)));
+
+// A destination that has since disappeared must not silently become the root
+// option's value without the value actually being the root.
+check('an unknown destination falls back to the notebook root', await page.evaluate(() => {
+  window.fillOneNoteDestinations('/nb/Gone');
+  return document.getElementById('onenote-dest').value === '/nb';
+}));
+
 // --- import passes the chosen destination ----------------------------------
 
 await page.evaluate(() => { document.getElementById('onenote-dest').value = '/nb/Imported'; });
@@ -182,6 +226,8 @@ const statusText = await page.evaluate(() => document.getElementById('onenote-st
 check('an unavailable OneNote is explained', statusText.includes('not registered'), statusText);
 const disabled = await page.evaluate(() => document.getElementById('onenote-import-btn').disabled);
 check('import is disabled when OneNote is unavailable', disabled === true);
+check('the failure is styled as a failure, not as progress', await page.evaluate(() =>
+  document.getElementById('onenote-status').classList.contains('is-error')));
 
 await browser.close();
 console.log(`\n${failed ? `${failed} FAILED, ` : ''}${passed} passed`);

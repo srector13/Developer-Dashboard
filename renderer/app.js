@@ -2792,29 +2792,44 @@ function collectModalMeta() {
   return { created, tags };
 }
 
-function populateDestinationDropdown(destDir) {
-  const select = document.getElementById('create-modal-dest');
+// Fill a <select> with every section in the notebook.
+//
+// Each option carries its whole chain — "Claims › Projects", not "↳ Projects".
+// Two sections can share a name under different parents, and a bare leaf name
+// gives you no way to tell which one you are about to write into. Indentation
+// alone did not solve it either: a <select> collapses leading whitespace, and
+// even where it renders, the closed control shows one row with no ancestors.
+function fillSectionSelect(select, destDir) {
   select.innerHTML = '';
-  
+
   const rootOpt = document.createElement('option');
   rootOpt.value = notebookRoot;
   rootOpt.innerText = 'Notebook Root';
   select.appendChild(rootOpt);
 
-  const addFolders = (node, depth = 0) => {
+  const addFolders = (node, trail) => {
     if (!node || !node.sections) return;
     node.sections.forEach(sec => {
+      const chain = trail.concat(sec.name);
       const opt = document.createElement('option');
       opt.value = sec.fsPath;
-      opt.innerText = ' '.repeat((depth + 1) * 2) + '↳ ' + sec.name;
+      opt.innerText = chain.join(' › ');
+      opt.title = opt.innerText;
       select.appendChild(opt);
-      addFolders(sec, depth + 1);
+      addFolders(sec, chain);
     });
   };
 
-  if (treeData) addFolders(treeData);
-  
+  if (treeData) addFolders(treeData, []);
+
   select.value = destDir || notebookRoot;
+  // A path that is no longer in the tree would silently leave the first option
+  // selected, quietly retargeting the write at the notebook root.
+  if (!select.value) select.value = notebookRoot;
+}
+
+function populateDestinationDropdown(destDir) {
+  fillSectionSelect(document.getElementById('create-modal-dest'), destDir);
 }
 
 // New note popup creation
@@ -3994,25 +4009,7 @@ function importFromClipboard() {
 let oneNoteBooks = [];
 
 function fillOneNoteDestinations(destDir) {
-  const select = document.getElementById('onenote-dest');
-  select.innerHTML = '';
-  const rootOpt = document.createElement('option');
-  rootOpt.value = notebookRoot;
-  rootOpt.innerText = 'Notebook Root';
-  select.appendChild(rootOpt);
-
-  const addFolders = (node, depth = 0) => {
-    if (!node || !node.sections) return;
-    node.sections.forEach(sec => {
-      const opt = document.createElement('option');
-      opt.value = sec.fsPath;
-      opt.innerText = ' '.repeat((depth + 1) * 2) + '↳ ' + sec.name;
-      select.appendChild(opt);
-      addFolders(sec, depth + 1);
-    });
-  };
-  if (treeData) addFolders(treeData);
-  select.value = destDir || notebookRoot;
+  fillSectionSelect(document.getElementById('onenote-dest'), destDir);
 }
 
 async function openOneNoteImport() {
@@ -4025,32 +4022,39 @@ async function openOneNoteImport() {
   const tree = document.getElementById('onenote-tree');
   const importBtn = document.getElementById('onenote-import-btn');
 
+  // Failures here are prose, not a one-liner — mark them so they read as a
+  // problem rather than as another progress message.
+  const setStatus = (text, isError) => {
+    status.innerText = text;
+    status.classList.toggle('is-error', !!isError);
+  };
+
   oneNoteBooks = [];
   tree.innerHTML = '';
   document.getElementById('onenote-progress').style.display = 'none';
   status.style.display = 'block';
-  status.innerText = 'Looking for OneNote…';
+  setStatus('Looking for OneNote…', false);
   importBtn.disabled = true;
   fillOneNoteDestinations(activeNote ? pathDirname(activeNote) : notebookRoot);
   modal.classList.add('active');
 
   const probe = await window.api.oneNoteProbe();
   if (!probe.available) {
-    status.innerText = probe.reason ||
-      'OneNote desktop was not found. This needs OneNote 2016 or the Microsoft 365 desktop app — the Store version has no automation interface.';
+    setStatus(probe.reason ||
+      'OneNote desktop was not found. This needs OneNote 2016 or the Microsoft 365 desktop app — the Store version has no automation interface.', true);
     return;
   }
 
   try {
-    status.innerText = 'Reading your notebooks…';
+    setStatus('Reading your notebooks…', false);
     oneNoteBooks = await window.api.oneNoteNotebooks();
   } catch (err) {
-    status.innerText = String(err);
+    setStatus(String(err && err.message ? err.message : err), true);
     return;
   }
 
   if (!oneNoteBooks.length) {
-    status.innerText = 'OneNote has no notebooks open.';
+    setStatus('OneNote has no notebooks open.', false);
     return;
   }
   status.style.display = 'none';

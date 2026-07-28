@@ -247,6 +247,29 @@ pub fn parse_hierarchy(xml: &str) -> Result<Vec<OneNotebook>, String> {
 // COM automation
 // ---------------------------------------------------------------------------
 
+/// Pull the program path out of a `LocalServer32` command line.
+///
+/// The registry stores a command line, not a path: it is normally quoted and
+/// normally carries `-Embedding`, but neither is guaranteed, and the value read
+/// back from `RegGetValueW` still has its NUL terminator attached.
+#[allow(dead_code)]
+fn exe_from_command_line(raw: &str) -> Option<String> {
+    let raw = raw.trim_end_matches('\0').trim();
+    let path = if let Some(rest) = raw.strip_prefix('"') {
+        rest.split('"').next().unwrap_or("")
+    } else {
+        // Unquoted, so a space can only be the start of a switch — an unquoted
+        // path with a space in it would already be ambiguous to the shell.
+        raw.split(" -").next().unwrap_or(raw).split(" /").next().unwrap_or(raw)
+    }
+    .trim();
+    if path.is_empty() {
+        None
+    } else {
+        Some(path.to_string())
+    }
+}
+
 /// OneNote's `PublishFormat` enumeration; MHTML is the one that keeps images.
 #[allow(dead_code)]
 const PUBLISH_FORMAT_MHTML: i32 = 2;
@@ -257,14 +280,40 @@ const HIERARCHY_SCOPE_PAGES: i32 = 4;
 #[cfg(windows)]
 mod com {
     use super::*;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
     use windows::core::{BSTR, GUID, HSTRING, PCWSTR};
     use windows::Win32::System::Com::{
-        CLSIDFromProgID, CoCreateInstance, CoInitializeEx, IDispatch, CLSCTX_ALL, DISPATCH_METHOD,
-        DISPPARAMS, COINIT_APARTMENTTHREADED, EXCEPINFO,
+        CLSIDFromProgID, CoCreateInstance, CoInitializeEx, IDispatch, ITypeLib, CLSCTX_ALL,
+        DISPATCH_METHOD, DISPPARAMS, COINIT_APARTMENTTHREADED, EXCEPINFO,
     };
+    use windows::Win32::System::Ole::{LoadTypeLibEx, REGKIND_NONE};
     use windows::Win32::System::Variant::{VARIANT, VT_BSTR, VT_BYREF, VT_I4};
 
     const LOCALE_USER_DEFAULT: u32 = 0x0400;
+
+    /// TYPE_E_LIBNOTREGISTERED — "Library not registered".
+    const TYPE_E_LIBNOTREGISTERED: i32 = 0x8002_801Du32 as i32;
+
+    /// What to tell someone whose Office type library registration is broken.
+    /// Nothing this app can do fixes it, so the message has to be repairable
+    /// by hand — "Library not registered" on its own is not.
+    fn registration_advice(method: &str) -> String {
+        format!(
+            "OneNote is running but Windows cannot find its automation type library, so the \
+             '{method}' call could not be made (\"Library not registered\"). This is an Office \
+             installation problem, not a problem with your notes or this app. To fix it: close \
+             OneNote, open Settings › Apps › Installed apps, find your Microsoft Office or \
+             Microsoft 365 entry, choose Modify, and run a Quick Repair. Then try the import \
+             again."
+        )
+    }
+
+    /// Method name -> DISPID, once resolved. DISPIDs are fixed properties of
+    /// OneNote's type library, so they stay valid for the life of the process
+    /// even if OneNote itself is closed and reopened between imports.
+    static DISPIDS: once_cell::sync::Lazy<Mutex<HashMap<String, i32>>> =
+        once_cell::sync::Lazy::new(|| Mutex::new(HashMap::new()));
 
     /// COM has to be initialised on whichever thread makes the call. Tauri runs
     /// commands on a pool, so this is done per call; repeat calls on an
@@ -275,7 +324,9 @@ mod com {
         }
     }
 
-    fn connect() -> Result<IDispatch, String> {
+    /// The live OneNote object, plus the CLSID it came from — the DISPID
+    /// fallback needs the CLSID to find OneNote's program file.
+    fn connect() -> Result<(IDispatch, GUID), String> {
         ensure_com();
         unsafe {
             let progid = HSTRING::from("OneNote.Application");
@@ -285,21 +336,141 @@ mod com {
                      (the Store version of OneNote doesn't provide one). {e}"
                 )
             })?;
-            CoCreateInstance(&clsid, None, CLSCTX_ALL)
-                .map_err(|e| format!("Could not start OneNote: {e}"))
+            let dispatch: IDispatch = CoCreateInstance(&clsid, None, CLSCTX_ALL)
+                .map_err(|e| format!("Could not start OneNote: {e}"))?;
+            Ok((dispatch, clsid))
         }
     }
 
-    fn dispid(dispatch: &IDispatch, method: &str) -> Result<i32, String> {
-        unsafe {
-            let name = HSTRING::from(method);
-            let names = [PCWSTR(name.as_ptr())];
-            let mut id = 0i32;
-            dispatch
-                .GetIDsOfNames(&GUID::zeroed(), names.as_ptr(), 1, LOCALE_USER_DEFAULT, &mut id)
-                .map_err(|e| format!("OneNote has no '{method}' method: {e}"))?;
-            Ok(id)
+    /// Where OneNote's out-of-process server lives, from
+    /// `HKCR\CLSID\{clsid}\LocalServer32`. The value is a command line, so it
+    /// can be quoted and can carry switches (`"...\ONENOTE.EXE" -Embedding`).
+    fn local_server_path(clsid: &GUID) -> Option<std::path::PathBuf> {
+        use windows::Win32::System::Registry::{
+            RegGetValueW, HKEY_CLASSES_ROOT, RRF_RT_REG_SZ,
+        };
+
+        let key = HSTRING::from(format!(
+            "CLSID\\{{{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}\\LocalServer32",
+            clsid.data1,
+            clsid.data2,
+            clsid.data3,
+            clsid.data4[0], clsid.data4[1], clsid.data4[2], clsid.data4[3],
+            clsid.data4[4], clsid.data4[5], clsid.data4[6], clsid.data4[7],
+        ));
+
+        let mut buf = [0u16; 1024];
+        let mut size = (buf.len() * 2) as u32;
+        let status = unsafe {
+            RegGetValueW(
+                HKEY_CLASSES_ROOT,
+                &key,
+                PCWSTR::null(),
+                RRF_RT_REG_SZ,
+                None,
+                Some(buf.as_mut_ptr() as *mut _),
+                Some(&mut size),
+            )
+        };
+        if status.is_err() {
+            return None;
         }
+
+        let chars = (size as usize / 2).min(buf.len());
+        let raw = String::from_utf16_lossy(&buf[..chars]);
+        super::exe_from_command_line(&raw).map(std::path::PathBuf::from)
+    }
+
+    /// Ask OneNote's own type library for a DISPID, loading it straight off
+    /// OneNote's binary.
+    ///
+    /// This is the recovery path for "Library not registered": OneNote resolves
+    /// `GetIDsOfNames` against its registered type library, and when that
+    /// registration is missing or points at the wrong bitness the call fails
+    /// even though the object itself is live and usable. Reading the type
+    /// library out of the executable sidesteps the registry entirely; the
+    /// DISPIDs it yields drive `Invoke` exactly the same way.
+    fn dispid_from_typelib(clsid: &GUID, method: &str) -> Result<i32, String> {
+        let exe = local_server_path(clsid)
+            .ok_or_else(|| "could not find OneNote's program file in the registry".to_string())?;
+
+        // The type library is a resource inside ONENOTE.EXE on the installs
+        // that have one; older layouts ship it beside the exe instead.
+        let mut candidates = vec![exe.clone()];
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("ONENOTE.TLB"));
+        }
+
+        let mut last = String::from("no type library found");
+        for candidate in candidates {
+            let wide = HSTRING::from(candidate.as_os_str());
+            let lib: ITypeLib = match unsafe { LoadTypeLibEx(&wide, REGKIND_NONE) } {
+                Ok(lib) => lib,
+                Err(e) => {
+                    last = format!("{}: {e}", candidate.display());
+                    continue;
+                }
+            };
+
+            // Take the first interface in the library that knows the name.
+            // Matching on the interface name instead would tie this to a
+            // spelling that has changed across OneNote versions, and only
+            // OneNote's Application interface declares these methods anyway.
+            let count = unsafe { lib.GetTypeInfoCount() };
+            for index in 0..count {
+                let Ok(info) = (unsafe { lib.GetTypeInfo(index) }) else {
+                    continue;
+                };
+                let name = HSTRING::from(method);
+                let names = [PCWSTR(name.as_ptr())];
+                let mut id = 0i32;
+                if unsafe { info.GetIDsOfNames(names.as_ptr(), 1, &mut id) }.is_ok() {
+                    return Ok(id);
+                }
+            }
+            last = format!("{} has no '{method}'", candidate.display());
+        }
+        Err(last)
+    }
+
+    fn dispid(dispatch: &IDispatch, clsid: &GUID, method: &str) -> Result<i32, String> {
+        if let Some(id) = DISPIDS.lock().ok().and_then(|c| c.get(method).copied()) {
+            return Ok(id);
+        }
+
+        let name = HSTRING::from(method);
+        let names = [PCWSTR(name.as_ptr())];
+        let mut id = 0i32;
+        let direct = unsafe {
+            dispatch.GetIDsOfNames(&GUID::zeroed(), names.as_ptr(), 1, LOCALE_USER_DEFAULT, &mut id)
+        };
+
+        let resolved = match direct {
+            Ok(()) => id,
+            Err(e) => {
+                match dispid_from_typelib(clsid, method) {
+                    Ok(id) => id,
+                    Err(why) if e.code().0 == TYPE_E_LIBNOTREGISTERED => {
+                        return Err(format!(
+                            "{} (reading it out of OneNote's own program file did not work \
+                             either: {why})",
+                            registration_advice(method)
+                        ));
+                    }
+                    Err(why) => {
+                        return Err(format!(
+                            "OneNote has no '{method}' method: {e} (and its type library did \
+                             not provide one either: {why})"
+                        ));
+                    }
+                }
+            }
+        };
+
+        if let Ok(mut cache) = DISPIDS.lock() {
+            cache.insert(method.to_string(), resolved);
+        }
+        Ok(resolved)
     }
 
     fn variant_i32(value: i32) -> VARIANT {
@@ -334,8 +505,13 @@ mod com {
     }
 
     /// `args` is in declaration order; DISPPARAMS wants it reversed.
-    fn invoke(dispatch: &IDispatch, method: &str, args: Vec<VARIANT>) -> Result<(), String> {
-        let id = dispid(dispatch, method)?;
+    fn invoke(
+        dispatch: &IDispatch,
+        clsid: &GUID,
+        method: &str,
+        args: Vec<VARIANT>,
+    ) -> Result<(), String> {
+        let id = dispid(dispatch, clsid, method)?;
         let mut reversed: Vec<VARIANT> = args.into_iter().rev().collect();
         let params = DISPPARAMS {
             rgvarg: reversed.as_mut_ptr(),
@@ -358,6 +534,13 @@ mod com {
                     Some(&mut arg_error),
                 )
                 .map_err(|e| {
+                    // Resolving the DISPID out of the type library gets us past
+                    // a broken registration for the *name* lookup, but OneNote
+                    // may dispatch the call through that same type library. If
+                    // it does, say what to fix rather than repeating the code.
+                    if e.code().0 == TYPE_E_LIBNOTREGISTERED {
+                        return registration_advice(method);
+                    }
                     // EXCEPINFO's strings are ManuallyDrop<BSTR>; deref to read.
                     let description = &*excep.bstrDescription;
                     let detail = if description.is_empty() {
@@ -385,11 +568,12 @@ mod com {
     }
 
     pub fn hierarchy_xml() -> Result<String, String> {
-        let dispatch = connect()?;
+        let (dispatch, clsid) = connect()?;
         let mut out = BSTR::new();
         // GetHierarchy(startNodeId, scope, [out] xml)
         invoke(
             &dispatch,
+            &clsid,
             "GetHierarchy",
             vec![
                 variant_bstr(""),
@@ -405,11 +589,12 @@ mod com {
     }
 
     pub fn publish_page(page_id: &str, target: &std::path::Path) -> Result<(), String> {
-        let dispatch = connect()?;
+        let (dispatch, clsid) = connect()?;
         // Publish refuses to overwrite, so clear any leftover first.
         let _ = std::fs::remove_file(target);
         invoke(
             &dispatch,
+            &clsid,
             "Publish",
             vec![
                 variant_bstr(page_id),
@@ -573,5 +758,56 @@ mod tests {
     #[test]
     fn an_empty_document_yields_no_notebooks() {
         assert!(parse_hierarchy("<one:Notebooks/>").unwrap().is_empty());
+    }
+
+    // The LocalServer32 command line is what points the DISPID fallback at
+    // OneNote's type library, so its parsing is worth pinning down.
+
+    #[test]
+    fn a_quoted_server_command_line_yields_the_program_path() {
+        assert_eq!(
+            exe_from_command_line("\"C:\\Program Files\\Microsoft Office\\Office16\\ONENOTE.EXE\" -Embedding"),
+            Some("C:\\Program Files\\Microsoft Office\\Office16\\ONENOTE.EXE".to_string())
+        );
+    }
+
+    #[test]
+    fn an_unquoted_command_line_drops_its_switches() {
+        assert_eq!(
+            exe_from_command_line("C:\\Office\\ONENOTE.EXE -Embedding"),
+            Some("C:\\Office\\ONENOTE.EXE".to_string())
+        );
+        assert_eq!(
+            exe_from_command_line("C:\\Office\\ONENOTE.EXE /Automation"),
+            Some("C:\\Office\\ONENOTE.EXE".to_string())
+        );
+    }
+
+    #[test]
+    fn a_bare_path_survives_intact() {
+        assert_eq!(
+            exe_from_command_line("C:\\Office\\ONENOTE.EXE"),
+            Some("C:\\Office\\ONENOTE.EXE".to_string())
+        );
+    }
+
+    #[test]
+    fn the_registrys_nul_terminator_is_stripped() {
+        assert_eq!(
+            exe_from_command_line("\"C:\\Office\\ONENOTE.EXE\" -Embedding\0\0"),
+            Some("C:\\Office\\ONENOTE.EXE".to_string())
+        );
+        // A path with spaces must survive even when only the NUL marks the end.
+        assert_eq!(
+            exe_from_command_line("C:\\Program Files\\ONENOTE.EXE\0"),
+            Some("C:\\Program Files\\ONENOTE.EXE".to_string())
+        );
+    }
+
+    #[test]
+    fn a_missing_or_empty_value_yields_nothing() {
+        assert_eq!(exe_from_command_line(""), None);
+        assert_eq!(exe_from_command_line("\"\" -Embedding"), None);
+        assert_eq!(exe_from_command_line("\0\0"), None);
     }
 }

@@ -2543,6 +2543,19 @@ label.check-row {
   white-space: pre-wrap;
 }
 
+/* The OneNote status line carries real prose when something goes wrong — a
+   repair instruction runs to several sentences and has to stay readable. */
+#onenote-status {
+  line-height: 1.55;
+  padding: 4px 0;
+}
+
+#onenote-status.is-error {
+  color: var(--accent-red);
+  border-left: 2px solid var(--accent-red);
+  padding: 8px 0 8px 12px;
+}
+
 .dropdown-item-featured {
   color: var(--accent-teal);
   font-weight: 600;

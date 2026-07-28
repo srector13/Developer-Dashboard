@@ -54,6 +54,23 @@ not, and names like `CON` are reserved device names.
 A page that fails to import is reported and the run continues — one unreadable
 page shouldn't cost you the other two hundred.
 
+### "Library not registered"
+
+Late binding asks OneNote to translate a method name into a DISPID, and OneNote
+answers by consulting its own registered type library. On some Office installs
+that registration is missing or points at the wrong bitness, and the lookup
+fails with `TYPE_E_LIBNOTREGISTERED` — even though the OneNote object itself is
+live and perfectly usable.
+
+The import recovers on its own: it finds OneNote's program file via
+`HKCR\CLSID\{…}\LocalServer32`, loads the type library straight out of that
+binary with `LoadTypeLibEx(…, REGKIND_NONE)`, and reads the DISPIDs from there.
+The registry is never consulted for the type library, so a broken registration
+does not matter. Resolved DISPIDs are cached for the life of the process.
+
+If that recovery also fails, the picker says so and suggests an Office Quick
+Repair, which re-registers the type library.
+
 ### Caveats
 
 - **Importing twice creates duplicates.** Nothing tracks which OneNote pages
