@@ -77,27 +77,102 @@ pub fn reveal_main_window_for_export(app: &AppHandle, fs_path: String) {
 // Helper windows
 // ---------------------------------------------------------------------------
 
+/// How long after showing a helper window a blur is ignored.
+///
+/// Windows does not simply hand foreground to a window because it asked. A
+/// process that is not already in the foreground gets its `SetForegroundWindow`
+/// downgraded, and a window shown from a global hotkey can be focused and then
+/// have focus taken straight back by the app the user was actually in. The
+/// blur that follows is not the user clicking away — it is the window manager
+/// still settling — and dismissing on it is what made the launcher and the
+/// quick-note overlay flash up and vanish, needing a second try.
+const DISMISS_GRACE: std::time::Duration = std::time::Duration::from_millis(700);
+
+/// When each helper window was last shown, keyed by window label.
+static SHOWN_AT: once_cell::sync::Lazy<Mutex<std::collections::HashMap<String, std::time::Instant>>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
+
+fn mark_shown(label: &str) {
+    if let Ok(mut map) = SHOWN_AT.lock() {
+        map.insert(label.to_string(), std::time::Instant::now());
+    }
+}
+
+fn within_dismiss_grace(label: &str) -> bool {
+    SHOWN_AT
+        .lock()
+        .ok()
+        .and_then(|map| map.get(label).map(|t| t.elapsed() < DISMISS_GRACE))
+        .unwrap_or(false)
+}
+
+/// Show a helper window and actually take the foreground.
+///
+/// `set_focus` alone loses to Windows' foreground lock when the call comes from
+/// a background process — which is exactly the case here, since these windows
+/// are summoned by a global hotkey while another app is in front. Attaching to
+/// the current foreground thread's input queue first makes the request come
+/// from a thread Windows already considers foreground, so it is granted.
+fn present(window: &WebviewWindow, label: &str) {
+    mark_shown(label);
+    let _ = window.show();
+    let _ = window.set_focus();
+    #[cfg(windows)]
+    force_foreground(window);
+}
+
+#[cfg(windows)]
+fn force_foreground(window: &WebviewWindow) {
+    use windows::Win32::System::Threading::AttachThreadInput;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{SetActiveWindow, SetFocus};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow,
+    };
+
+    let Ok(handle) = window.hwnd() else {
+        return;
+    };
+    unsafe {
+        let foreground = GetForegroundWindow();
+        if foreground.0 == handle.0 {
+            return; // already ours
+        }
+        // The threads to join are the one owning the foreground window and the
+        // one owning *our* window — not whichever worker thread happens to be
+        // running this, which is where the call actually comes from.
+        let other = GetWindowThreadProcessId(foreground, None);
+        let ours = GetWindowThreadProcessId(handle, None);
+        // Attaching a thread to itself is both pointless and an error.
+        let attached =
+            other != 0 && ours != 0 && other != ours && AttachThreadInput(other, ours, true).as_bool();
+        let _ = SetForegroundWindow(handle);
+        let _ = SetActiveWindow(handle);
+        let _ = SetFocus(Some(handle));
+        if attached {
+            let _ = AttachThreadInput(other, ours, false);
+        }
+    }
+}
+
 /// Dismiss a helper window when the user clicks away from it.
 ///
-/// A blur only counts once the window has actually held focus. Without that
-/// condition the launcher's Note tool never opened the capture window on the
-/// first try: the window is built lazily, so that first run creates it, hides
-/// the launcher, and shows the new window all at once. Hiding the focused
-/// launcher hands focus back to whatever was behind it, and the resulting
-/// `Focused(false)` reached a capture window that had not been focused yet —
-/// so it hid itself immediately. Trying again appeared to work only because
-/// the window already existed by then, taking the creation out of the race.
-///
-/// Latching on `Focused(true)` also self-resets: hiding clears the latch, so
-/// the next time the window is shown it waits for real focus again.
+/// Two conditions guard the blur, and both exist because of bugs this caused:
+/// the window must have actually held focus (a window built lazily and shown in
+/// the same breath receives a blur before it was ever focused), and it must be
+/// past its settling grace period (Windows routinely takes foreground back from
+/// a window it just granted it to).
 fn hide_on_blur(window: &WebviewWindow) {
     let handle = window.clone();
+    let label = window.label().to_string();
     let had_focus = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     window.on_window_event(move |event| match event {
         tauri::WindowEvent::Focused(true) => {
             had_focus.store(true, Ordering::SeqCst);
         }
         tauri::WindowEvent::Focused(false) => {
+            if within_dismiss_grace(&label) {
+                return;
+            }
             if had_focus.swap(false, Ordering::SeqCst) {
                 let _ = handle.hide();
             }
@@ -140,8 +215,7 @@ pub fn toggle_capture_window(app: &AppHandle) {
         let _ = window.hide();
     } else {
         let _ = window.center();
-        let _ = window.show();
-        let _ = window.set_focus();
+        present(&window, CAPTURE);
     }
 }
 
@@ -152,8 +226,7 @@ pub fn show_capture_window(app: &AppHandle) {
         return;
     };
     let _ = window.center();
-    let _ = window.show();
-    let _ = window.set_focus();
+    present(&window, CAPTURE);
 }
 
 pub fn hide_capture_window(app: &AppHandle) {
@@ -198,8 +271,7 @@ pub fn toggle_launcher_window(app: &AppHandle) {
     }
     position_launcher(app, &window);
     let _ = window.emit("launcher-reset", ()); // fresh state each open
-    let _ = window.show();
-    let _ = window.set_focus();
+    present(&window, LAUNCHER);
 }
 
 /// Spotlight-like: horizontally centred, about a fifth down the display under

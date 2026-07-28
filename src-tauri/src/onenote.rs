@@ -295,18 +295,42 @@ mod com {
     /// TYPE_E_LIBNOTREGISTERED — "Library not registered".
     const TYPE_E_LIBNOTREGISTERED: i32 = 0x8002_801Du32 as i32;
 
-    /// What to tell someone whose Office type library registration is broken.
-    /// Nothing this app can do fixes it, so the message has to be repairable
-    /// by hand — "Library not registered" on its own is not.
-    fn registration_advice(method: &str) -> String {
+    /// The last resort message, once the automatic repair has also failed.
+    fn registration_advice(method: &str, repair: &str) -> String {
         format!(
-            "OneNote is running but Windows cannot find its automation type library, so the \
+            "OneNote is running, but Windows cannot find its automation type library, so the \
              '{method}' call could not be made (\"Library not registered\"). This is an Office \
-             installation problem, not a problem with your notes or this app. To fix it: close \
-             OneNote, open Settings › Apps › Installed apps, find your Microsoft Office or \
-             Microsoft 365 entry, choose Modify, and run a Quick Repair. Then try the import \
-             again."
+             installation problem rather than a problem with your notes.\n\n\
+             Registering the library for your account was tried automatically and did not \
+             work: {repair}\n\n\
+             The remaining fix needs Office itself repaired — close OneNote, open Settings › \
+             Apps › Installed apps, find Microsoft Office or Microsoft 365, choose Modify and \
+             run a Quick Repair. On a managed computer that may need your IT team."
         )
+    }
+
+    /// Register OneNote's type library for the current user.
+    ///
+    /// `RegisterTypeLibForUser` writes under `HKCU\Software\Classes`, so unlike
+    /// the machine-wide `RegisterTypeLib` it needs no administrator rights and
+    /// works on a locked-down computer. OneNote runs as the same user, so the
+    /// registration it could not find becomes visible to it as well.
+    ///
+    /// This is what makes the import work at all when Office's own registration
+    /// is missing: the type library is not just consulted to turn a name into a
+    /// DISPID — OneNote dispatches the call itself through it, so supplying our
+    /// own DISPID is not enough on its own.
+    fn register_typelib_for_user(clsid: &GUID) -> Result<(), String> {
+        use windows::Win32::System::Ole::RegisterTypeLibForUser;
+
+        let exe = local_server_path(clsid)
+            .ok_or_else(|| "OneNote's program file is not listed in the registry".to_string())?;
+        let wide = HSTRING::from(exe.as_os_str());
+        let lib: ITypeLib = unsafe { LoadTypeLibEx(&wide, REGKIND_NONE) }.map_err(|e| {
+            format!("no type library could be read from {}: {e}", exe.display())
+        })?;
+        unsafe { RegisterTypeLibForUser(&lib, &wide, PCWSTR::null()) }
+            .map_err(|e| format!("registering it for your account failed: {e}"))
     }
 
     /// Method name -> DISPID, once resolved. DISPIDs are fixed properties of
@@ -447,24 +471,44 @@ mod com {
 
         let resolved = match direct {
             Ok(()) => id,
-            Err(e) => {
-                match dispid_from_typelib(clsid, method) {
-                    Ok(id) => id,
-                    Err(why) if e.code().0 == TYPE_E_LIBNOTREGISTERED => {
-                        return Err(format!(
-                            "{} (reading it out of OneNote's own program file did not work \
-                             either: {why})",
-                            registration_advice(method)
-                        ));
-                    }
-                    Err(why) => {
-                        return Err(format!(
-                            "OneNote has no '{method}' method: {e} (and its type library did \
-                             not provide one either: {why})"
-                        ));
+            // Reading the library out of OneNote's own binary is tried first:
+            // it answers the same question without touching the registry.
+            Err(e) => match dispid_from_typelib(clsid, method) {
+                Ok(id) => id,
+                Err(_) if e.code().0 == TYPE_E_LIBNOTREGISTERED => {
+                    // Nothing local worked, so repair the registration itself
+                    // and ask OneNote again.
+                    let repair = register_typelib_for_user(clsid);
+                    let retried = unsafe {
+                        dispatch.GetIDsOfNames(
+                            &GUID::zeroed(),
+                            names.as_ptr(),
+                            1,
+                            LOCALE_USER_DEFAULT,
+                            &mut id,
+                        )
+                    };
+                    match (repair, retried) {
+                        (_, Ok(())) => id,
+                        (Err(why), _) => return Err(registration_advice(method, &why)),
+                        (Ok(()), Err(again)) => {
+                            return Err(registration_advice(
+                                method,
+                                &format!(
+                                    "the library registered successfully but the lookup still \
+                                     failed ({again})"
+                                ),
+                            ))
+                        }
                     }
                 }
-            }
+                Err(why) => {
+                    return Err(format!(
+                        "OneNote has no '{method}' method: {e} (and its type library did \
+                         not provide one either: {why})"
+                    ));
+                }
+            },
         };
 
         if let Ok(mut cache) = DISPIDS.lock() {
@@ -504,7 +548,51 @@ mod com {
         variant
     }
 
-    /// `args` is in declaration order; DISPPARAMS wants it reversed.
+    /// One `Invoke`, reporting the raw HRESULT so the caller can decide whether
+    /// it is worth retrying. `args` is in declaration order; DISPPARAMS wants
+    /// it reversed.
+    fn invoke_once(
+        dispatch: &IDispatch,
+        id: i32,
+        method: &str,
+        args: &mut [VARIANT],
+    ) -> Result<(), (i32, String)> {
+        args.reverse();
+        let params = DISPPARAMS {
+            rgvarg: args.as_mut_ptr(),
+            cArgs: args.len() as u32,
+            rgdispidNamedArgs: std::ptr::null_mut(),
+            cNamedArgs: 0,
+        };
+        let mut excep = EXCEPINFO::default();
+        let mut arg_error = 0u32;
+        let result = unsafe {
+            dispatch.Invoke(
+                id,
+                &GUID::zeroed(),
+                LOCALE_USER_DEFAULT,
+                DISPATCH_METHOD,
+                &params,
+                None,
+                Some(&mut excep),
+                Some(&mut arg_error),
+            )
+        };
+        // Put the arguments back the way the caller handed them over, so a
+        // retry starts from the same order rather than from the reversal.
+        args.reverse();
+        result.map_err(|e| {
+            // EXCEPINFO's strings are ManuallyDrop<BSTR>; deref to read.
+            let description = &*excep.bstrDescription;
+            let detail = if description.is_empty() {
+                String::new()
+            } else {
+                format!(" — {description}")
+            };
+            (e.code().0, format!("OneNote rejected {method}{detail} ({e})"))
+        })
+    }
+
     fn invoke(
         dispatch: &IDispatch,
         clsid: &GUID,
@@ -512,46 +600,31 @@ mod com {
         args: Vec<VARIANT>,
     ) -> Result<(), String> {
         let id = dispid(dispatch, clsid, method)?;
-        let mut reversed: Vec<VARIANT> = args.into_iter().rev().collect();
-        let params = DISPPARAMS {
-            rgvarg: reversed.as_mut_ptr(),
-            cArgs: reversed.len() as u32,
-            rgdispidNamedArgs: std::ptr::null_mut(),
-            cNamedArgs: 0,
-        };
-        let mut excep = EXCEPINFO::default();
-        let mut arg_error = 0u32;
-        unsafe {
-            dispatch
-                .Invoke(
-                    id,
-                    &GUID::zeroed(),
-                    LOCALE_USER_DEFAULT,
-                    DISPATCH_METHOD,
-                    &params,
-                    None,
-                    Some(&mut excep),
-                    Some(&mut arg_error),
-                )
-                .map_err(|e| {
-                    // Resolving the DISPID out of the type library gets us past
-                    // a broken registration for the *name* lookup, but OneNote
-                    // may dispatch the call through that same type library. If
-                    // it does, say what to fix rather than repeating the code.
-                    if e.code().0 == TYPE_E_LIBNOTREGISTERED {
-                        return registration_advice(method);
-                    }
-                    // EXCEPINFO's strings are ManuallyDrop<BSTR>; deref to read.
-                    let description = &*excep.bstrDescription;
-                    let detail = if description.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" — {description}")
-                    };
-                    format!("OneNote rejected {method}{detail} ({e})")
-                })?;
+        let mut args = args;
+        match invoke_once(dispatch, id, method, &mut args) {
+            Ok(()) => Ok(()),
+            // Supplying our own DISPID gets past a broken registration for the
+            // *name* lookup, but OneNote dispatches the call itself through the
+            // same type library. When that is what failed, register the library
+            // for this user — no administrator rights needed — and try again.
+            Err((code, _)) if code == TYPE_E_LIBNOTREGISTERED => {
+                match register_typelib_for_user(clsid) {
+                    Ok(()) => invoke_once(dispatch, id, method, &mut args).map_err(|(code, why)| {
+                        if code == TYPE_E_LIBNOTREGISTERED {
+                            registration_advice(
+                                method,
+                                "the library registered successfully but OneNote still could \
+                                 not load it",
+                            )
+                        } else {
+                            why
+                        }
+                    }),
+                    Err(why) => Err(registration_advice(method, &why)),
+                }
+            }
+            Err((_, why)) => Err(why),
         }
-        Ok(())
     }
 
     pub fn probe() -> OneNoteStatus {

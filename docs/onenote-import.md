@@ -56,20 +56,34 @@ page shouldn't cost you the other two hundred.
 
 ### "Library not registered"
 
-Late binding asks OneNote to translate a method name into a DISPID, and OneNote
-answers by consulting its own registered type library. On some Office installs
-that registration is missing or points at the wrong bitness, and the lookup
-fails with `TYPE_E_LIBNOTREGISTERED` — even though the OneNote object itself is
-live and perfectly usable.
+Automation goes through OneNote's type library twice: once to translate a
+method name into a DISPID, and again when OneNote dispatches the call itself.
+On some Office installs that library's registration is missing or points at the
+wrong bitness, so both fail with `TYPE_E_LIBNOTREGISTERED` — even though the
+OneNote object is live and perfectly usable.
 
-The import recovers on its own: it finds OneNote's program file via
-`HKCR\CLSID\{…}\LocalServer32`, loads the type library straight out of that
-binary with `LoadTypeLibEx(…, REGKIND_NONE)`, and reads the DISPIDs from there.
-The registry is never consulted for the type library, so a broken registration
-does not matter. Resolved DISPIDs are cached for the life of the process.
+The import recovers in two steps.
 
-If that recovery also fails, the picker says so and suggests an Office Quick
-Repair, which re-registers the type library.
+**Reading the library directly.** OneNote's program file is found via
+`HKCR\CLSID\{…}\LocalServer32`, and the type library is loaded straight out of
+that binary with `LoadTypeLibEx(…, REGKIND_NONE)`. That answers the name-to-
+DISPID question without consulting the registry at all. Resolved DISPIDs are
+cached for the life of the process.
+
+**Registering it for the current user.** Supplying our own DISPID is not enough
+when it is OneNote's own dispatch that cannot find the library, so on that
+failure the app calls `RegisterTypeLibForUser` and retries the call once.
+
+> **This writes to the registry.** `RegisterTypeLibForUser` adds type library
+> entries under `HKEY_CURRENT_USER\Software\Classes\TypeLib` — the current
+> user's hive only. It needs no administrator rights, which is what makes it
+> usable on a managed or locked-down computer, and it affects no other user
+> account. It is the same registration Office setup would normally have made.
+> To undo it, delete the OneNote entry under that key.
+
+If both steps fail, the picker explains what was tried and falls back to
+suggesting an Office Quick Repair, which may need an IT administrator on a
+managed machine.
 
 ### Caveats
 
