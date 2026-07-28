@@ -37,6 +37,10 @@ function normalizeShortcutTitles() {
       el.setAttribute('title', normalized);
     }
   });
+  // Menu entries spell their shortcut out in the row itself, not in a tooltip.
+  document.querySelectorAll('.shortcut-hint').forEach(el => {
+    el.textContent = normalizeShortcutText(el.textContent);
+  });
 }
 
 let notebookRoot = '';
@@ -81,7 +85,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Load settings
   appSettings = await window.api.getSettings();
   autoSaveEnabled = appSettings.autoSaveEnabled || false;
-  document.getElementById('header-autosave').checked = autoSaveEnabled;
 
   // Set theme from settings (also initializes Mermaid with the right theme)
   applyTheme(appSettings.theme);
@@ -514,6 +517,7 @@ function generateTreeHTML(node, depth) {
                ondragstart="handleDragStart(event, ${jsArg(node.fsPath)})"
                ondragover="handleDragOver(event)"
                ondragleave="handleDragLeave(event)"
+               oncontextmenu="showSectionMenu(event, ${jsArg(node.fsPath)}, ${jsArg(node.name)})"
                ondrop="handleDrop(event, ${jsArg(node.fsPath)})">
             <span class="tree-node-chevron ${isExpanded ? '' : 'collapsed'}" onclick="event.stopPropagation(); toggleFolderCollapse(${jsArg(node.relPath)})">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
@@ -526,14 +530,8 @@ function generateTreeHTML(node, depth) {
               <button class="tree-node-btn" onclick="event.stopPropagation(); promptCreatePage(${jsArg(node.fsPath)})" title="New Page">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
               </button>
-              <button class="tree-node-btn" onclick="event.stopPropagation(); promptCreateSection(${jsArg(node.fsPath)})" title="New Subsection">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
-              </button>
-              <button class="tree-node-btn" onclick="event.stopPropagation(); promptRenameNode(${jsArg(node.fsPath)}, ${jsArg(node.name)})" title="Rename">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-              </button>
-              <button class="tree-node-btn" onclick="event.stopPropagation(); deleteNode(${jsArg(node.fsPath)})" title="Delete">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              <button class="tree-node-btn" onclick="showSectionMenu(event, ${jsArg(node.fsPath)}, ${jsArg(node.name)})" title="More section actions">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>
               </button>
             </div>
           </div>
@@ -579,6 +577,7 @@ function generateTreeHTML(node, depth) {
              ondragstart="handleDragStart(event, ${jsArg(page.fsPath)})"
              ondragover="handlePageDragOver(event)"
              ondragleave="handlePageDragLeave(event)"
+             oncontextmenu="showPageMenu(event, ${jsArg(node.fsPath)}, ${jsArg(page.name)}, ${jsArg(page.fsPath)})"
              ondrop="handlePageDrop(event, ${jsArg(node.fsPath)}, ${jsArg(page.name)})">
           <div class="tree-node-content">
             ${iconHtml}
@@ -586,17 +585,8 @@ function generateTreeHTML(node, depth) {
             ${badgeHtml}
           </div>
           <div class="tree-node-actions">
-            <button class="tree-node-btn" onclick="event.stopPropagation(); moveNode(${jsArg(node.fsPath)}, ${jsArg(page.name)}, 'up')" title="Move Up">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>
-            </button>
-            <button class="tree-node-btn" onclick="event.stopPropagation(); moveNode(${jsArg(node.fsPath)}, ${jsArg(page.name)}, 'down')" title="Move Down">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-            </button>
-            <button class="tree-node-btn" onclick="event.stopPropagation(); showPageInfoModal(${jsArg(page.fsPath)})" title="Edit Page Info (title, date, tags)">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-            </button>
-            <button class="tree-node-btn" onclick="event.stopPropagation(); deleteNode(${jsArg(page.fsPath)})" title="Delete">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            <button class="tree-node-btn" onclick="showPageMenu(event, ${jsArg(node.fsPath)}, ${jsArg(page.name)}, ${jsArg(page.fsPath)})" title="Page actions">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>
             </button>
           </div>
         </div>
@@ -1972,11 +1962,14 @@ function toggleEditorDropdown(id, event) {
   const targetMenu = document.getElementById(id);
   const isActive = targetMenu.classList.contains('active');
   
-  // Close all other menus first
+  // Close all other menus first. stopPropagation() above means the document
+  // listener never gets to dismiss a floating context menu, so close that too —
+  // and note it has no .editor-dropdown wrapper to reach a toggle through.
+  hideTabContextMenu();
   const menus = document.querySelectorAll('.dropdown-menu');
   menus.forEach(menu => {
     menu.classList.remove('active');
-    const toggle = menu.closest('.editor-dropdown').querySelector('.dropdown-toggle');
+    const toggle = menu.closest('.editor-dropdown')?.querySelector('.dropdown-toggle');
     if (toggle) {
       const chev = toggle.querySelector('.chevron');
       if (chev) chev.style.transform = 'rotate(0deg)';
@@ -1985,8 +1978,8 @@ function toggleEditorDropdown(id, event) {
   
   if (!isActive) {
     targetMenu.classList.add('active');
-    const toggleBtn = event.currentTarget;
-    const chev = toggleBtn.querySelector('.chevron');
+    // Callers that open a menu programmatically pass no real click target.
+    const chev = event.currentTarget?.querySelector('.chevron');
     if (chev) chev.style.transform = 'rotate(180deg)';
 
     if (id === 'dropdown-date') {
@@ -2449,14 +2442,14 @@ function toggleRightDrawer() {
 }
 
 // The drawer hosts two views — the note outline and the search results —
-// switched by the segmented control in its header.
+// picked by the two toolbar icons. The header just labels the current one.
 let drawerTab = localStorage.getItem('mdnb-drawer-tab') === 'search' ? 'search' : 'outline';
 
 function setDrawerTab(name) {
   drawerTab = name === 'search' ? 'search' : 'outline';
   try { localStorage.setItem('mdnb-drawer-tab', drawerTab); } catch {}
-  document.getElementById('drawer-tab-outline').classList.toggle('active', drawerTab === 'outline');
-  document.getElementById('drawer-tab-search').classList.toggle('active', drawerTab === 'search');
+  const title = document.getElementById('drawer-title');
+  if (title) title.textContent = drawerTab === 'search' ? 'Search' : 'Outline';
   document.getElementById('drawer-outline-view').style.display = drawerTab === 'outline' ? 'block' : 'none';
   document.getElementById('drawer-search-view').style.display = drawerTab === 'search' ? 'block' : 'none';
   if (drawerTab === 'outline') updateOutlineAndBacklinks();
@@ -4959,9 +4952,11 @@ async function cyclePageWidth() {
 
 function toggleAutoSave(value) {
   autoSaveEnabled = value;
-  document.getElementById('header-autosave').checked = value;
-  document.getElementById('settings-autosave').checked = value;
-  
+  // Settings owns the visible control now, so keep its box in step for when the
+  // modal is next opened (the palette can flip this while the modal is closed).
+  const box = document.getElementById('settings-autosave');
+  if (box) box.checked = value;
+
   if (appSettings) {
     appSettings.autoSaveEnabled = value;
     window.api.saveSettings(appSettings);
@@ -5166,13 +5161,7 @@ function handlePaletteSearch() {
   const commands = [
     { label: 'Create New Page', subtitle: 'Action: /new', action: () => promptCreatePage(notebookRoot) },
     { label: 'Create New Section', subtitle: 'Action: /section', action: () => promptCreateSection(notebookRoot) },
-    { label: 'Toggle Auto-Save Mode', subtitle: 'Action: /autosave', action: () => {
-      const chk = document.getElementById('header-autosave');
-      if (chk) {
-        chk.checked = !chk.checked;
-        toggleAutoSave(chk.checked);
-      }
-    }},
+    { label: 'Toggle Auto-Save Mode', subtitle: 'Action: /autosave', action: () => toggleAutoSave(!autoSaveEnabled) },
     { label: 'Cycle Page Width Layout (Standard / Wide / Full)', subtitle: 'Action: /wide', action: () => cyclePageWidth() },
     { label: 'Toggle Rendered Preview Pane', subtitle: 'Action: /preview', action: () => setViewMode('preview') },
     { label: 'Toggle Raw Source Editor', subtitle: 'Action: /edit', action: () => setViewMode('edit') },
@@ -5443,33 +5432,32 @@ async function closeTabsWhere(predicate, keep) {
   persistTabs();
 }
 
-// Right-click menu on a tab: close / close others / close left / close right
+// One floating menu serves the tab strip and the notebook tree. Only one can be
+// open at a time, so it keeps the single id the dismissal listeners watch for.
 function hideTabContextMenu() {
   const menu = document.getElementById('tab-context-menu');
   if (menu) menu.remove();
 }
 
-function showTabContextMenu(e, fsPath) {
+// `items` are { label, enabled, action }; a falsy entry draws a separator.
+function showContextMenu(e, items) {
   e.preventDefault();
   e.stopPropagation();
   hideTabContextMenu();
-  const idx = openTabs.indexOf(fsPath);
-  if (idx === -1) return;
-
-  const items = [
-    { label: 'Close Tab', enabled: true, action: () => closeTab(fsPath) },
-    { label: 'Close Other Tabs', enabled: openTabs.length > 1, action: () => closeTabsWhere(p => p !== fsPath, fsPath) },
-    { label: 'Close Tabs to the Left', enabled: idx > 0, action: () => closeTabsWhere((p, i) => i < idx, fsPath) },
-    { label: 'Close Tabs to the Right', enabled: idx < openTabs.length - 1, action: () => closeTabsWhere((p, i) => i > idx, fsPath) },
-    { label: 'Close All Tabs', enabled: openTabs.length > 0, action: () => closeTabsWhere(() => true, null) },
-  ];
+  if (!items.some(Boolean)) return;
 
   const menu = document.createElement('div');
   menu.id = 'tab-context-menu';
   menu.className = 'dropdown-menu glass-card tab-context-menu';
   for (const item of items) {
+    if (!item) {
+      menu.appendChild(Object.assign(document.createElement('div'), { className: 'dropdown-divider' }));
+      continue;
+    }
     const el = document.createElement('div');
-    el.className = 'dropdown-item' + (item.enabled ? '' : ' disabled');
+    el.className = 'dropdown-item'
+      + (item.enabled ? '' : ' disabled')
+      + (item.danger ? ' danger' : '');
     el.textContent = item.label;
     if (item.enabled) {
       el.addEventListener('click', () => {
@@ -5485,6 +5473,43 @@ function showTabContextMenu(e, fsPath) {
   const rect = menu.getBoundingClientRect();
   menu.style.left = `${Math.max(4, Math.min(e.clientX, window.innerWidth - rect.width - 8))}px`;
   menu.style.top = `${Math.max(4, Math.min(e.clientY, window.innerHeight - rect.height - 8))}px`;
+}
+
+// Right-click menu on a tab: close / close others / close left / close right
+function showTabContextMenu(e, fsPath) {
+  const idx = openTabs.indexOf(fsPath);
+  if (idx === -1) return;
+  showContextMenu(e, [
+    { label: 'Close Tab', enabled: true, action: () => closeTab(fsPath) },
+    { label: 'Close Other Tabs', enabled: openTabs.length > 1, action: () => closeTabsWhere(p => p !== fsPath, fsPath) },
+    { label: 'Close Tabs to the Left', enabled: idx > 0, action: () => closeTabsWhere((p, i) => i < idx, fsPath) },
+    { label: 'Close Tabs to the Right', enabled: idx < openTabs.length - 1, action: () => closeTabsWhere((p, i) => i > idx, fsPath) },
+    { label: 'Close All Tabs', enabled: openTabs.length > 0, action: () => closeTabsWhere(() => true, null) },
+  ]);
+}
+
+// Tree rows used to carry four hover buttons each. The row now shows the one
+// action it is really for, and everything else lives here — reachable by
+// right-click anywhere on the row or from the row's "..." button.
+function showSectionMenu(e, fsPath, name) {
+  showContextMenu(e, [
+    { label: 'New Page', enabled: true, action: () => promptCreatePage(fsPath) },
+    { label: 'New Subsection', enabled: true, action: () => promptCreateSection(fsPath) },
+    null,
+    { label: 'Rename…', enabled: true, action: () => promptRenameNode(fsPath, name) },
+    { label: 'Delete Section', enabled: true, danger: true, action: () => deleteNode(fsPath) },
+  ]);
+}
+
+function showPageMenu(e, sectionPath, pageName, pageFsPath) {
+  showContextMenu(e, [
+    { label: 'Page Info…', enabled: true, action: () => showPageInfoModal(pageFsPath) },
+    null,
+    { label: 'Move Up', enabled: true, action: () => moveNode(sectionPath, pageName, 'up') },
+    { label: 'Move Down', enabled: true, action: () => moveNode(sectionPath, pageName, 'down') },
+    null,
+    { label: 'Delete Page', enabled: true, danger: true, action: () => deleteNode(pageFsPath) },
+  ]);
 }
 
 async function closeTab(fsPath) {

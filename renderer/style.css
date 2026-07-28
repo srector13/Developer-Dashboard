@@ -1298,6 +1298,9 @@ body.sidebar-collapsed #btn-expand-sidebar {
 }
 
 .drawer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   font-family: var(--font-display);
   font-size: 12px;
   text-transform: uppercase;
@@ -1472,6 +1475,34 @@ body.sidebar-collapsed #btn-expand-sidebar {
 .form-group textarea:focus,
 .form-group select:focus {
   border-color: var(--accent-blue);
+}
+
+/* One checkbox everywhere. This used to be repeated inline on every settings
+   and modal checkbox, at two different sizes; the markdown task-list boxes
+   opt out below because they sit in body copy and follow the text size. */
+input[type="checkbox"]:not(.markdown-body input),
+input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-blue);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* A checkbox with its label beside it — the row was written three different
+   ways inline, with two different gaps and a stray font-weight. */
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.check-row label,
+label.check-row {
+  margin-bottom: 0;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
 }
 
 /* Related-links picker in the New Page / Page Info modals */
@@ -2031,6 +2062,21 @@ body.sidebar-collapsed #btn-expand-sidebar {
   color: var(--text-muted);
   font-weight: 400;
   margin-left: auto;
+}
+
+/* Groups related entries in the longer menus (tree rows, tabs) */
+.dropdown-divider {
+  height: 1px;
+  background-color: var(--border-color);
+  margin: 4px 0;
+}
+
+/* Destructive entries read as destructive before they are clicked. Hover keeps
+   the red foreground rather than filling with it: white on --accent-red drops
+   under 3.5:1 in the dark themes, where the red is deliberately bright. */
+.dropdown-item.danger,
+.dropdown-item.danger:hover {
+  color: var(--accent-red);
 }
 
 /* TABLE GRID INSERT POPOVER SPECIALTIES */
@@ -2609,39 +2655,6 @@ body.sidebar-collapsed #btn-expand-sidebar {
 
 #drawer-search-view .search-icon {
   left: 10px;
-}
-
-/* Segmented Outline / Search switch in the drawer header */
-.drawer-tabs {
-  display: flex;
-  gap: 2px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  padding: 2px;
-}
-
-.drawer-tab {
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-family: var(--font-display);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  font-weight: 600;
-  padding: 4px 10px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-
-.drawer-tab:hover {
-  color: var(--text-primary);
-}
-
-.drawer-tab.active {
-  background: var(--surface-active);
-  color: var(--text-primary);
 }
 
 .drawer-empty-hint {

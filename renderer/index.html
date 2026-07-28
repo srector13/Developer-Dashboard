@@ -188,20 +188,31 @@
           <!-- 2. Basic Text Formatting Buttons -->
           <button class="toolbar-btn" onclick="insertFormatting('bold')" title="Bold text formatting (Cmd+B / Ctrl+B)"><strong>B</strong></button>
           <button class="toolbar-btn" onclick="insertFormatting('italic')" title="Italic text formatting (Cmd+I / Ctrl+I)"><em>I</em></button>
-          <button class="toolbar-btn" onclick="insertFormatting('list-bullet')" title="Bullet List item (Cmd+Alt+L)">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
-          </button>
-          <button class="toolbar-btn" onclick="insertFormatting('list-number')" title="Numbered List item">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></svg>
-          </button>
-          <button class="toolbar-btn" onclick="insertFormatting('list-check')" title="Task Checklist item (Cmd+Alt+C / Cmd+Alt+X)">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-          </button>
-          <button class="toolbar-btn" onclick="insertFormatting('separator')" title="Horizontal rule separator line (Cmd+Alt+-)">&mdash;</button>
-          <button class="toolbar-btn" onclick="insertFormatting('blockquote')" title="Blockquote text highlight">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-          </button>
-          <button class="toolbar-btn" onclick="insertFormatting('tldr')" title="Insert a > TL;DR summary callout">TL;DR</button>
+          <!-- Lists and block inserts are each one control with a menu, the same
+               shape as the heading picker. Eight separate buttons made the row
+               read as noise; the keyboard shortcuts are unchanged. -->
+          <div class="editor-dropdown">
+            <button class="toolbar-btn dropdown-toggle" onclick="toggleEditorDropdown('dropdown-list', event)" title="Lists — bullet, numbered or task">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+              <svg class="chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div id="dropdown-list" class="dropdown-menu glass-card">
+              <div class="dropdown-item" onclick="insertFormatting('list-bullet')">Bullet List &nbsp;<span class="item-desc shortcut-hint">Cmd+Alt+L</span></div>
+              <div class="dropdown-item" onclick="insertFormatting('list-number')">Numbered List</div>
+              <div class="dropdown-item" onclick="insertFormatting('list-check')">Task Checklist &nbsp;<span class="item-desc shortcut-hint">Cmd+Alt+C</span></div>
+            </div>
+          </div>
+          <div class="editor-dropdown">
+            <button class="toolbar-btn dropdown-toggle" onclick="toggleEditorDropdown('dropdown-block', event)" title="Blocks — quote, callout or divider">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              <svg class="chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div id="dropdown-block" class="dropdown-menu glass-card">
+              <div class="dropdown-item" onclick="insertFormatting('blockquote')">Blockquote</div>
+              <div class="dropdown-item" onclick="insertFormatting('tldr')">TL;DR Callout &nbsp;<span class="item-desc">Summary at the top</span></div>
+              <div class="dropdown-item" onclick="insertFormatting('separator')">Divider &nbsp;<span class="item-desc shortcut-hint">Cmd+Alt+-</span></div>
+            </div>
+          </div>
           <button class="toolbar-btn" onclick="openLinkModal()" title="Insert a hyperlink">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
           </button>
@@ -368,13 +379,10 @@
         <header id="note-header">
           <div class="title-row">
             <h1 id="note-title" onclick="promptRenameCurrent()">Note Title</h1>
+            <!-- Auto-save is a preference, not a per-note control: it lives in
+                 Settings (and the command palette). This pill reports the state
+                 that actually changes while you work. -->
             <span id="save-status-indicator" class="status-indicator"></span>
-            
-            <!-- Quick Auto Save Toggle inside note Header -->
-            <label class="autosave-toggle-label" style="display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-secondary); margin-left: auto; cursor: pointer; user-select: none;">
-              <input type="checkbox" id="header-autosave" onchange="toggleAutoSave(this.checked)" style="accent-color: var(--accent-blue); width: 14px; height: 14px; cursor: pointer;">
-              Auto-save
-            </label>
           </div>
           <div class="meta-row">
             <div class="meta-item">
@@ -547,11 +555,10 @@
     <!-- RIGHT DRAWER: Outline / Search results, toggled at the top -->
     <aside id="right-drawer" class="collapsed">
       <div class="drawer-section">
-        <div class="drawer-header" style="display: flex; justify-content: space-between; align-items: center;">
-          <div class="drawer-tabs" role="tablist">
-            <button id="drawer-tab-outline" class="drawer-tab active" onclick="setDrawerTab('outline')" title="Headings outline of the open note">Outline</button>
-            <button id="drawer-tab-search" class="drawer-tab" onclick="setDrawerTab('search')" title="Search results (titles, content, tags)">Search</button>
-          </div>
+        <div class="drawer-header">
+          <!-- Which view is showing is chosen by the toolbar icons; this only
+               names the one you are looking at. -->
+          <span id="drawer-title">Outline</span>
           <button class="icon-btn" onclick="toggleRightDrawer()" title="Close panel">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
@@ -658,9 +665,9 @@
         </div>
 
         <!-- Local AI (optional) -->
-        <div class="form-group" style="display: flex; align-items: center; gap: 10px; margin-top: 20px;">
-          <input type="checkbox" id="settings-ai-enabled" onchange="toggleAiSettingsFields()" style="width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent-blue);">
-          <label for="settings-ai-enabled" style="margin-bottom: 0; cursor: pointer; user-select: none;">Enable Local AI (Ollama / LM Studio)</label>
+        <div class="form-group check-row" style="margin-top: 20px;">
+          <input type="checkbox" id="settings-ai-enabled" onchange="toggleAiSettingsFields()">
+          <label for="settings-ai-enabled">Enable Local AI (Ollama / LM Studio)</label>
         </div>
         <div class="form-hint" style="margin-top: -8px;">Optional. Talks only to a model server running on your own machine — your notes never leave your computer.</div>
         <div id="settings-ai-fields" style="display: none;">
@@ -683,25 +690,25 @@
             </div>
             <div class="form-hint" id="settings-ai-status">Test checks the server and lists the models it has installed.</div>
           </div>
-          <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
-            <input type="checkbox" id="settings-ai-autocomplete" style="width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent-blue);">
-            <label for="settings-ai-autocomplete" style="margin-bottom: 0; cursor: pointer; user-select: none;">Smart autocomplete (ghost suggestions while typing — Tab accepts)</label>
+          <div class="form-group check-row">
+            <input type="checkbox" id="settings-ai-autocomplete">
+            <label for="settings-ai-autocomplete">Smart autocomplete (ghost suggestions while typing — Tab accepts)</label>
           </div>
           <div class="form-hint" style="margin-top: -8px;">Works best with a small, fast model. Suggestions appear after a short pause at the end of a line.</div>
         </div>
 
         <!-- Auto Save Checkbox in Settings Modal -->
-        <div class="form-group" style="display: flex; align-items: center; gap: 10px; margin-top: 20px;">
-          <input type="checkbox" id="settings-autosave" style="width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent-blue);">
-          <label for="settings-autosave" style="margin-bottom: 0; cursor: pointer; user-select: none;">Enable Auto-Save (automatically saves note 1 second after typing)</label>
+        <div class="form-group check-row" style="margin-top: 20px;">
+          <input type="checkbox" id="settings-autosave">
+          <label for="settings-autosave">Enable Auto-Save (automatically saves note 1 second after typing)</label>
         </div>
-        <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
-          <input type="checkbox" id="settings-spellcheck" style="width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent-blue);">
-          <label for="settings-spellcheck" style="margin-bottom: 0; cursor: pointer; user-select: none;">Spell-check in the editor (red squiggles under misspelled words)</label>
+        <div class="form-group check-row">
+          <input type="checkbox" id="settings-spellcheck">
+          <label for="settings-spellcheck">Spell-check in the editor (red squiggles under misspelled words)</label>
         </div>
-        <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
-          <input type="checkbox" id="settings-keep-in-tray" style="width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent-blue);">
-          <label for="settings-keep-in-tray" style="margin-bottom: 0; cursor: pointer; user-select: none;">Keep running in the tray when the window is closed (keeps the launcher &amp; tools available)</label>
+        <div class="form-group check-row">
+          <input type="checkbox" id="settings-keep-in-tray">
+          <label for="settings-keep-in-tray">Keep running in the tray when the window is closed (keeps the launcher &amp; tools available)</label>
         </div>
         <div class="form-hint" style="margin-top: -8px;">With this off, closing the window quits the app entirely — the global launcher shortcut and tray tools stop working until you reopen it. Quit any time from the tray menu.</div>
       </div>
@@ -785,10 +792,10 @@
         <div class="form-group">
           <label>Link Type</label>
           <div class="link-type-toggle" style="display:flex; gap:8px;">
-            <label style="display:flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+            <label class="check-row">
               <input type="radio" name="link-kind" value="web" checked onchange="updateLinkModalHint()"> Web hyperlink
             </label>
-            <label style="display:flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+            <label class="check-row">
               <input type="radio" name="link-kind" value="file" onchange="updateLinkModalHint()"> File link
             </label>
           </div>
@@ -802,7 +809,7 @@
           <input type="text" id="link-modal-title" placeholder="e.g. Project spec" onkeydown="handleLinkModalEnter(event)">
         </div>
         <div class="form-group">
-          <label style="display:flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+          <label class="check-row">
             <input type="checkbox" id="link-modal-hover" onchange="toggleLinkHoverField()"> Add hover tooltip
           </label>
         </div>
@@ -968,9 +975,9 @@
           </div>
           <div id="page-info-links-list" class="link-chip-list"></div>
         </div>
-        <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
-          <input type="checkbox" id="page-info-pinned" style="width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent-blue);">
-          <label for="page-info-pinned" style="margin-bottom: 0; cursor: pointer; user-select: none;">Pin this page to the top of its section</label>
+        <div class="form-group check-row">
+          <input type="checkbox" id="page-info-pinned">
+          <label for="page-info-pinned">Pin this page to the top of its section</label>
         </div>
       </div>
       <div class="modal-footer">
@@ -1115,13 +1122,13 @@
             <option value="Legal">Legal</option>
           </select>
         </div>
-        <div class="form-group" style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
-          <input type="checkbox" id="pdf-open-after" style="width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent-blue);">
-          <label for="pdf-open-after" style="margin-bottom: 0; cursor: pointer; user-select: none;">Open the PDF after export</label>
+        <div class="form-group check-row" style="margin-bottom: 10px;">
+          <input type="checkbox" id="pdf-open-after">
+          <label for="pdf-open-after">Open the PDF after export</label>
         </div>
-        <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
-          <input type="checkbox" id="pdf-reveal" style="width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent-blue);">
-          <label for="pdf-reveal" style="margin-bottom: 0; cursor: pointer; user-select: none;">Show in containing folder</label>
+        <div class="form-group check-row">
+          <input type="checkbox" id="pdf-reveal">
+          <label for="pdf-reveal">Show in containing folder</label>
         </div>
       </div>
       <div class="modal-footer">

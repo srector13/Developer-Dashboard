@@ -901,6 +901,43 @@ if (IS_MAC) {
     JSON.stringify(boldTooltip));
 }
 
+// Lists and block inserts collapsed into two menus — the row is one control
+// per concept, and the shortcut text inside a menu row gets platform-corrected
+// the same way tooltips do.
+check('list and block inserts each collapsed to one toolbar control', await page.evaluate(() => {
+  const group = document.getElementById('editor-format-tools');
+  return group.querySelectorAll(':scope > .toolbar-btn, :scope > .editor-dropdown').length === 11 &&
+    !!document.getElementById('dropdown-list') && !!document.getElementById('dropdown-block');
+}));
+check('the list menu carries all three list kinds', await page.evaluate(() =>
+  Array.from(document.querySelectorAll('#dropdown-list .dropdown-item'))
+    .map(el => el.getAttribute('onclick'))
+    .join('|').includes('list-bullet') &&
+  document.querySelectorAll('#dropdown-list .dropdown-item').length === 3));
+check('the block menu carries quote, callout and divider', await page.evaluate(() => {
+  const calls = Array.from(document.querySelectorAll('#dropdown-block .dropdown-item'))
+    .map(el => el.getAttribute('onclick')).join('|');
+  return calls.includes('blockquote') && calls.includes('tldr') && calls.includes('separator');
+}));
+const listHint = await page.evaluate(() =>
+  document.querySelector('#dropdown-list .shortcut-hint').textContent);
+if (IS_MAC) {
+  check('menu shortcut hint platform-correct (darwin)', listHint.includes('⌘') && !listHint.includes('Ctrl'),
+    JSON.stringify(listHint));
+} else {
+  check('menu shortcut hint platform-correct (win32)', listHint.includes('Ctrl+') && !listHint.includes('Cmd') && !listHint.includes('⌘'),
+    JSON.stringify(listHint));
+}
+// A floating context menu used to break the next toolbar dropdown click
+await page.evaluate(() => {
+  window.showPageMenu(new MouseEvent('contextmenu', { clientX: 60, clientY: 60 }), '/nb', 'smoke.md', '/nb/smoke.md');
+  window.toggleEditorDropdown('dropdown-list', new MouseEvent('click'));
+});
+check('opening a toolbar menu dismisses an open context menu', await page.evaluate(() =>
+  !document.getElementById('tab-context-menu') &&
+  document.getElementById('dropdown-list').classList.contains('active')));
+await page.evaluate(() => window.toggleEditorDropdown('dropdown-list', new MouseEvent('click')));
+
 
 // ==========================================
 // CYCLE 3 COVERAGE
@@ -1524,7 +1561,7 @@ await page.locator('#btn-open-search').click();
 await page.waitForTimeout(200);
 check('toolbar search icon opens drawer on Search and focuses the box', await page.evaluate(() =>
   !document.getElementById('right-drawer').classList.contains('collapsed') &&
-  document.getElementById('drawer-tab-search').classList.contains('active') &&
+  document.getElementById('drawer-title').textContent === 'Search' &&
   document.getElementById('drawer-search-view').style.display !== 'none' &&
   document.getElementById('drawer-outline-view').style.display === 'none' &&
   document.activeElement === document.getElementById('search-input')));
@@ -1546,10 +1583,12 @@ check('search groups render inside the drawer', await page.evaluate(() =>
 check('drawer view choice persisted', await page.evaluate(() =>
   localStorage.getItem('mdnb-drawer-tab') === 'search'));
 await page.evaluate(() => window.setDrawerTab('outline'));
-check('toggle switches back to outline', await page.evaluate(() =>
+check('switching back to outline retitles the drawer', await page.evaluate(() =>
   document.getElementById('drawer-outline-view').style.display !== 'none' &&
   document.getElementById('drawer-search-view').style.display === 'none' &&
-  document.getElementById('drawer-tab-outline').classList.contains('active')));
+  document.getElementById('drawer-title').textContent === 'Outline'));
+check('the redundant in-drawer Outline/Search toggle is gone', await page.evaluate(() =>
+  !document.querySelector('.drawer-tabs') && !document.querySelector('.drawer-tab')));
 await page.evaluate(() => window.setDrawerTab('search'));
 await page.locator('#search-input').fill('');
 await page.waitForTimeout(300);
@@ -1639,6 +1678,41 @@ await page.waitForTimeout(500);
 check('close-all clears the tab strip and canvas', await page.evaluate(() =>
   document.querySelectorAll('#tab-strip .note-tab').length === 0 &&
   document.getElementById('tab-strip').style.display === 'none'));
+
+// --- 38b. Tree rows: one inline action, the rest behind a menu ---
+check('a page row carries a single hover action', await page.evaluate(() => {
+  const rows = Array.from(document.querySelectorAll('#notebook-tree .tree-node'))
+    .filter(n => n.getAttribute('oncontextmenu')?.includes('showPageMenu'));
+  return rows.length > 0 &&
+    rows.every(n => n.querySelectorAll('.tree-node-actions .tree-node-btn').length === 1);
+}));
+check('a section row keeps New Page plus the menu', await page.evaluate(() => {
+  const row = Array.from(document.querySelectorAll('#notebook-tree .tree-node'))
+    .find(n => n.getAttribute('oncontextmenu')?.includes('showSectionMenu'));
+  return row && row.querySelectorAll('.tree-node-actions .tree-node-btn').length === 2;
+}));
+await page.evaluate(() => window.showPageMenu(new MouseEvent('contextmenu', { clientX: 100, clientY: 100 }),
+  '/nb', 'smoke.md', '/nb/smoke.md'));
+check('page menu offers info, both moves and delete', await page.evaluate(() => {
+  const labels = Array.from(document.querySelectorAll('#tab-context-menu .dropdown-item')).map(el => el.textContent);
+  return labels.length === 4 && labels[0].startsWith('Page Info') &&
+    labels.includes('Move Up') && labels.includes('Move Down') && labels[3] === 'Delete Page';
+}));
+check('the destructive entry is marked as such', await page.evaluate(() =>
+  document.querySelector('#tab-context-menu .dropdown-item.danger')?.textContent === 'Delete Page'));
+check('menu groups are separated', await page.evaluate(() =>
+  document.querySelectorAll('#tab-context-menu .dropdown-divider').length === 2));
+await page.evaluate(() => window.hideTabContextMenu());
+await page.evaluate(() => window.showSectionMenu(new MouseEvent('contextmenu', { clientX: 100, clientY: 100 }),
+  '/nb/Projects', 'Projects'));
+check('section menu offers both creates, rename and delete', await page.evaluate(() => {
+  const labels = Array.from(document.querySelectorAll('#tab-context-menu .dropdown-item')).map(el => el.textContent);
+  return labels.length === 4 && labels[0] === 'New Page' && labels[1] === 'New Subsection' &&
+    labels[2].startsWith('Rename') && labels[3] === 'Delete Section';
+}));
+await page.evaluate(() => window.hideTabContextMenu());
+check('the tree menu is dismissed like the tab menu', await page.evaluate(() =>
+  !document.getElementById('tab-context-menu')));
 
 // --- 39. Portrait mermaid diagrams are height-capped in the preview ---
 await page.evaluate(async () => { await window.openNote('/nb/smoke.md'); });

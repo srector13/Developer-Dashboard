@@ -393,6 +393,17 @@ for (const t of ['light', 'dark']) {
   contrastReport[`${t}-modals`].dropdown = await probeContrast([
     ['dropdown-item', '#dropdown-heading .dropdown-item'],
   ]);
+
+  // Tree row context menu — its Delete entry is the only red-on-surface text
+  await page.evaluate(() => window.showPageMenu(
+    new MouseEvent('contextmenu', { clientX: 300, clientY: 300 }), '/nb', 'smoke.md', '/nb/smoke.md'));
+  await page.waitForTimeout(250);
+  await shot(`${t}-tree-context-menu`, { clip: { x: 0, y: 0, width: 900, height: 600 } });
+  contrastReport[`${t}-modals`].treeMenu = await probeContrast([
+    ['context-item', '#tab-context-menu .dropdown-item:not(.danger)'],
+    ['context-item-danger', '#tab-context-menu .dropdown-item.danger'],
+  ]);
+  await page.evaluate(() => window.hideTabContextMenu());
   await page.evaluate(() => {
     document.getElementById('dropdown-heading').classList.remove('active');
     window.setViewMode('preview');
