@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same ref supersedes any still-running CI for it
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Fast path: the renderer suite in plain Chromium. The UI is shared with the
+  # Rust shell but needs no Windows and no Rust toolchain, so it runs first and
+  # cheaply on every push.
+  renderer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
+      - name: Renderer suite (launcher + dashboard)
+        run: npm run test:renderer
+      # Not a byte-for-byte diff against the committed icons: zlib's output
+      # varies between Node versions, so that check fails for reasons that have
+      # nothing to do with the artwork. This only proves the generator runs.
+      - name: The icon generator still works
+        run: npm run icons
+
+  # The backend's own tests. Pure logic — fuzzy ranking, config migration, git
+  # status against a fixture repo, markdown todo parsing — so it runs on Linux
+  # where runners are cheapest and fastest.
+  rust-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache cargo registry and build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-test-
+      - name: Install Linux WebView dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev \
+                                  libjavascriptcoregtk-4.1-dev
+      # The projects fixture creates real commits, so libgit2 needs an identity.
+      - name: Give git an identity for the fixture repos
+        run: |
+          git config --global user.name "CI"
+          git config --global user.email "ci@example.com"
+      - name: Unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  # Everything that only exists on Windows: the tray, the foreground
+  # workaround, and the portable exe itself.
+  windows-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache cargo registry and build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-build-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-build-
+      - name: Formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - name: Clippy (warnings are errors)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: Unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Build the portable executable
+        run: cargo build --release --manifest-path src-tauri/Cargo.toml
+      - name: Upload the portable exe for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-hub-portable
+          path: src-tauri/target/release/dev-hub.exe
+          retention-days: 7

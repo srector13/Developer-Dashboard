@@ -1,0 +1,481 @@
+/* Dev Hub Desktop Styling
+ *
+ * The :root block below is copied verbatim from Markdown Notebook's style.css.
+ * Every component class in this file draws from those tokens and adds nothing
+ * to the palette — that is what makes the two apps read as one family of tools.
+ * If a colour is needed that isn't here, add a semantic token, don't inline it.
+ */
+
+@import url('vendor/fonts.css');
+
+:root {
+  /* Dark Theme Palette (base). Named themes override these variables in
+     body[data-theme=...] blocks at the end of this file. */
+  --bg-primary: #0d1117;
+  --bg-secondary: rgba(22, 27, 34, 0.7);
+  --bg-tertiary: rgba(13, 17, 23, 0.5);
+
+  --border-color: rgba(240, 246, 252, 0.1);
+  --border-glow: rgba(56, 139, 253, 0.4);
+
+  --text-primary: #c9d1d9;
+  --text-secondary: #8b949e;
+  --text-muted: #484f58;
+
+  --accent-blue: #58a6ff;
+  --accent-teal: #39c5cf;
+  --accent-green: #3fb950;
+  --accent-red: #f85149;
+  --accent-glow: rgba(88, 166, 255, 0.15);
+
+  --glass-bg: rgba(22, 27, 34, 0.6);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-blur: blur(16px);
+
+  /* Semantic tokens: every component color must come from one of these so
+     light mode and the named themes stay correct everywhere. */
+  --text-heading: #ffffff;         /* titles, hover/active emphasis */
+  --text-strong: #f0f6fc;          /* sub-headings */
+  --text-inverse: #0d1117;         /* text sitting on accent backgrounds */
+  --editor-bg: #090c10;            /* raw editor pane */
+  --editor-text: #e6edf3;
+  --code-bg: #090c10;              /* pre / fenced code */
+  --code-surface: #0d1117;         /* code block wrapper card */
+  --surface-hover: rgba(255, 255, 255, 0.06);
+  --surface-active: rgba(255, 255, 255, 0.1);
+  --chip-bg: rgba(255, 255, 255, 0.06);
+  --menu-bg: rgba(22, 27, 34, 0.95);      /* dropdowns, palette, popout */
+  --tooltip-bg: rgba(22, 27, 34, 0.98);
+  --scrollbar-thumb: rgba(255, 255, 255, 0.08);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.16);
+  --heading-border: rgba(255, 255, 255, 0.1);
+  --blockquote-text: #9ecbff;
+  --mark-text: #f2c94c;
+  --mark-bg: rgba(242, 201, 76, 0.15);
+  --mark-border: rgba(242, 201, 76, 0.3);
+
+  --inset-bg: rgba(0, 0, 0, 0.2);        /* recessed control groups */
+  --overlay-bg: rgba(0, 0, 0, 0.7);      /* modal backdrop */
+
+  /* Shared shape tokens */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-display: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: 'SFMono-Regular', Consolas, "Liberation Mono", Menlo, Courier, monospace;
+}
+
+/* Light theme: the same tokens, re-pointed. Nothing below this block needs to
+   know which theme is active. */
+body[data-theme="light"] {
+  --bg-primary: #f6f8fa;
+  --bg-secondary: rgba(255, 255, 255, 0.8);
+  --bg-tertiary: rgba(255, 255, 255, 0.6);
+
+  --border-color: rgba(31, 35, 40, 0.12);
+
+  --text-primary: #1f2328;
+  --text-secondary: #59636e;
+  --text-muted: #818b98;
+
+  --accent-blue: #0969da;
+  --accent-teal: #1b7c83;
+  --accent-green: #1a7f37;
+  --accent-red: #cf222e;
+  --accent-glow: rgba(9, 105, 218, 0.12);
+
+  --glass-bg: rgba(255, 255, 255, 0.75);
+  --glass-border: rgba(31, 35, 40, 0.08);
+
+  --text-heading: #010409;
+  --text-strong: #0d1117;
+  --text-inverse: #ffffff;
+  --surface-hover: rgba(31, 35, 40, 0.05);
+  --surface-active: rgba(31, 35, 40, 0.09);
+  --chip-bg: rgba(31, 35, 40, 0.05);
+  --menu-bg: rgba(255, 255, 255, 0.97);
+  --scrollbar-thumb: rgba(31, 35, 40, 0.12);
+  --scrollbar-thumb-hover: rgba(31, 35, 40, 0.22);
+  --inset-bg: rgba(31, 35, 40, 0.04);
+}
+
+body[data-theme="dark"] { color-scheme: dark; }
+body[data-theme="light"] { color-scheme: light; }
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+  display: flex;
+  flex-direction: column;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Keyboard accessibility: buttons deliberately drop the default outline, so
+   give keyboard users a consistent focus ring instead. */
+.btn:focus-visible,
+.icon-btn:focus-visible,
+.card-row:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+
+/* ---------------------------------------------------------------------------
+   Top strip
+   --------------------------------------------------------------------------- */
+
+#topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  backdrop-filter: var(--glass-blur);
+  flex-shrink: 0;
+}
+
+#brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-heading);
+  letter-spacing: 0.2px;
+}
+
+#brand img { width: 22px; height: 22px; }
+
+/* Styled as a search field, but it is a button — clicking it summons the
+   launcher, which is the app's single search surface. */
+#search-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 520px;
+  padding: 7px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--inset-bg);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+#search-wrap:hover { border-color: var(--border-glow); color: var(--text-secondary); }
+#search-wrap svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2; flex-shrink: 0; }
+#search-icon { display: flex; }
+#search-label { flex: 1; }
+
+#search-kbd {
+  font-size: 10.5px;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--chip-bg);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+#search-kbd:empty { display: none; }
+
+.topbar-spacer { flex: 1; }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  min-width: 32px;
+  padding: 0 9px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.icon-btn:hover { background: var(--surface-hover); color: var(--text-heading); border-color: var(--text-muted); }
+.icon-btn svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2; }
+.icon-btn.spinning svg { animation: spin 0.9s linear infinite; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------------------------------------------------------------------------
+   Banner — config errors and shortcut failures
+   --------------------------------------------------------------------------- */
+
+#banner {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  font-size: 12.5px;
+  background: rgba(248, 81, 73, 0.12);
+  border-bottom: 1px solid var(--accent-red);
+  color: var(--text-strong);
+  flex-shrink: 0;
+}
+
+#banner.visible { display: flex; }
+#banner .banner-text { flex: 1; }
+
+/* ---------------------------------------------------------------------------
+   Card grid
+   --------------------------------------------------------------------------- */
+
+#grid {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px;
+  display: grid;
+  grid-template-columns: repeat(var(--columns, 2), minmax(0, 1fr));
+  gap: 16px;
+  align-content: start;
+  /* Cards size to their content instead of stretching to the tallest in the
+     row — a three-row Launch card should not be as tall as a ten-row one. */
+  align-items: start;
+}
+
+/* One column below the width where two would each be too narrow to read a
+   repo path in. */
+@media (max-width: 900px) {
+  #grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+.card {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  backdrop-filter: var(--glass-blur);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-color);
+  cursor: pointer;
+  user-select: none;
+}
+
+.card.collapsed .card-header { border-bottom: none; }
+.card.collapsed .card-body { display: none; }
+
+.card-chevron {
+  display: flex;
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+}
+.card-chevron svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; }
+.card:not(.collapsed) .card-chevron { transform: rotate(90deg); }
+
+.card-title {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.card-count {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--chip-bg);
+  color: var(--text-secondary);
+}
+
+.card-meta {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.card-refresh {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+}
+.card-refresh:hover { color: var(--accent-blue); background: var(--surface-hover); }
+.card-refresh svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; }
+.card-refresh.spinning svg { animation: spin 0.9s linear infinite; }
+
+.card-body { padding: 6px; max-height: 420px; overflow-y: auto; }
+
+.card-error {
+  margin: 6px;
+  padding: 9px 11px;
+  border-radius: var(--radius-md);
+  background: rgba(248, 81, 73, 0.1);
+  border: 1px solid rgba(248, 81, 73, 0.35);
+  color: var(--text-strong);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.card-empty {
+  padding: 16px 12px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+/* Rows */
+
+/* Top-aligned, not centred: a row with badges is three lines tall, and a dot
+   centred against that sits beside the subtitle instead of the title it
+   describes. */
+.card-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.card-row:hover { background: var(--surface-hover); }
+
+.row-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-muted);
+}
+.row-dot.ok { background: var(--accent-green); }
+.row-dot.warn { background: var(--mark-text); }
+.row-dot.error { background: var(--accent-red); }
+.row-dot.pending { background: var(--accent-blue); opacity: 0.45; }
+
+.row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+
+.row-title {
+  font-size: 13px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-row:hover .row-title { color: var(--text-heading); }
+
+.row-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row-badges { display: flex; gap: 5px; flex-wrap: wrap; }
+
+.badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--chip-bg);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.badge.warn { color: var(--mark-text); border-color: var(--mark-border); background: var(--mark-bg); }
+
+/* The rest of an item's actions: revealed on hover, always reachable by
+   keyboard because the buttons stay in the DOM. */
+.row-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-top: 1px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.card-row:hover .row-actions,
+.card-row:focus-within .row-actions { opacity: 1; }
+
+.row-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.row-btn:hover { color: var(--text-heading); border-color: var(--accent-blue); }
+.row-btn svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; }
+
+/* ---------------------------------------------------------------------------
+   Toast
+   --------------------------------------------------------------------------- */
+
+#toast {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%) translateY(12px);
+  padding: 9px 16px;
+  border-radius: var(--radius-lg);
+  background: var(--menu-bg);
+  border: 1px solid var(--border-color);
+  color: var(--text-strong);
+  font-size: 12.5px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  max-width: 70vw;
+}
+
+#toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+#toast.error { border-color: var(--accent-red); }

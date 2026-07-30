@@ -1,0 +1,22 @@
+{
+  "name": "dev-hub",
+  "version": "0.1.0-beta.1",
+  "private": true,
+  "description": "A portable Windows hub for full-stack development work — a global quick launcher plus a dashboard that aggregates live signal from git repos, running services and markdown notes.",
+  "author": "Stephen Rector",
+  "license": "MIT",
+  "scripts": {
+    "dev": "cargo tauri dev",
+    "build": "cargo build --release --manifest-path src-tauri/Cargo.toml",
+    "check": "cargo check --manifest-path src-tauri/Cargo.toml",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:renderer": "node tests/renderer/launcher.spec.mjs && node tests/renderer/dashboard.spec.mjs",
+    "fonts:sync": "node scripts/sync-fonts.mjs",
+    "icons": "node scripts/render-win-icons.mjs"
+  },
+  "devDependencies": {
+    "@fontsource/inter": "^5.2.8",
+    "@fontsource/outfit": "^5.2.8",
+    "@playwright/test": "^1.61.1"
+  }
+}

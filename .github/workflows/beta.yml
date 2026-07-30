@@ -1,0 +1,127 @@
+name: Beta
+
+# The iteration loop. Every push to a development branch rebuilds the portable
+# Windows exe and republishes it under a single, permanent `beta` tag, so the
+# download URL never changes:
+#
+#   https://github.com/srector13/Developer-Dashboard/releases/download/beta/Dev-Hub-beta-win-x64-portable.exe
+#
+# Bookmark that URL on the work PC: each new build replaces the file at the same
+# address, so testing a change is "download, overwrite, run" with no hunting for
+# a release page. Your DevHubData folder is untouched by a swap.
+#
+# `.github/workflows/release.yml` handles real, versioned releases from a v*
+# tag; this workflow is deliberately separate so a beta can never be mistaken
+# for one.
+on:
+  push:
+    branches: [main, 'claude/**']
+    paths-ignore: ['**/*.md', 'docs/**']
+  workflow_dispatch:
+
+# A newer push supersedes a running beta build — the rolling tag should always
+# hold the newest commit, not whichever build happened to finish last.
+concurrency:
+  group: beta
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry and build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-beta-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-beta-
+
+      # A beta you can't trust is worse than no beta, so the same tests that
+      # gate CI gate the download.
+      - name: Unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build (release)
+        run: cargo build --release --manifest-path src-tauri/Cargo.toml
+
+      - name: Name the artifact
+        id: artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          NAME="Dev-Hub-beta-win-x64-portable.exe"
+          cp "src-tauri/target/release/dev-hub.exe" "dist/$NAME"
+          echo "path=dist/$NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+          ls -l dist
+
+      - name: Write the release notes
+        shell: bash
+        run: |
+          cat > release-notes.md <<NOTES
+          **Rolling beta** — rebuilt on every push. This tag always points at the
+          newest development build.
+
+          | | |
+          | --- | --- |
+          | Version | \`${{ steps.artifact.outputs.version }}\` |
+          | Commit | [\`${GITHUB_SHA:0:7}\`](https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}) |
+          | Branch | \`${GITHUB_REF_NAME}\` |
+          | Built | $(date -u '+%Y-%m-%d %H:%M UTC') |
+
+          ### Running it
+
+          Download the \`.exe\`, put it wherever you like, and run it. No
+          installer, no admin rights, nothing to unpack. Settings and your
+          \`hub.config.json\` live in a \`DevHubData\` folder created next to the
+          exe, so the app travels with the file — and swapping in a new build
+          leaves them alone.
+
+          Requires the Microsoft Edge WebView2 runtime, which ships with
+          Windows 10 (from the 2020 updates) and Windows 11.
+
+          First run writes a starter \`DevHubData/hub.config.json\`. Edit it
+          (tray → *Edit hub.config.json*) to point at your repos, URLs and
+          health endpoints; the app hot-reloads on save.
+
+          ### Expectations
+
+          This is pre-1.0 and unsigned, so SmartScreen will warn on first run.
+          It makes no network calls except to the health endpoints and command
+          providers you configure yourself. A running executable can't replace
+          itself, so there is no auto-update: download and overwrite.
+          NOTES
+          cat release-notes.md
+
+      # A rolling tag has to be moved, not created, or the second push fails.
+      - name: Publish the rolling beta
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view beta >/dev/null 2>&1; then
+            gh release upload beta "${{ steps.artifact.outputs.path }}" --clobber
+            gh release edit beta \
+              --target "$GITHUB_SHA" \
+              --title "Dev Hub — rolling beta" \
+              --notes-file release-notes.md \
+              --prerelease
+          else
+            gh release create beta "${{ steps.artifact.outputs.path }}" \
+              --target "$GITHUB_SHA" \
+              --title "Dev Hub — rolling beta" \
+              --notes-file release-notes.md \
+              --prerelease
+          fi
+          echo "Download: https://github.com/${GITHUB_REPOSITORY}/releases/download/beta/Dev-Hub-beta-win-x64-portable.exe" >> "$GITHUB_STEP_SUMMARY"

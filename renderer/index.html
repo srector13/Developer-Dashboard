@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ipc: http://ipc.localhost">
+  <title>Dev Hub</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-theme="dark">
+  <div id="topbar">
+    <div id="brand">
+      <img src="app-icon.png" alt="">
+      <span>Dev Hub</span>
+    </div>
+
+    <!-- Deliberately a button, not an input: there is one search surface in
+         this app and it is the launcher. Two search boxes with different
+         ranking is how a tool starts feeling arbitrary. -->
+    <button id="search-wrap" type="button" title="Open the quick launcher">
+      <span id="search-icon"></span>
+      <span id="search-label">Search everything…</span>
+      <span id="search-kbd"></span>
+    </button>
+
+    <span class="topbar-spacer"></span>
+
+    <button class="icon-btn" id="refresh-all" title="Refresh every provider">
+      <span data-icon="refresh"></span><span>Refresh</span>
+    </button>
+    <button class="icon-btn" id="edit-config" title="Open hub.config.json">
+      <span data-icon="settings"></span><span>Config</span>
+    </button>
+    <button class="icon-btn" id="toggle-theme" title="Switch theme">
+      <span data-icon="grid"></span>
+    </button>
+  </div>
+
+  <div id="banner">
+    <span class="banner-text"></span>
+    <button class="icon-btn" id="banner-action">Open config</button>
+  </div>
+
+  <main id="grid"></main>
+
+  <div id="toast"></div>
+
+  <script src="icons.js"></script>
+  <script src="api-tauri.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
