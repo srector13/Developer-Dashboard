@@ -267,30 +267,44 @@ fn item_for(
     }
 
     // Exactly one action, so a todo row is a single thing you click rather than
-    // a menu of ways to look at it: open the note where the todo lives. The
-    // configured opener wins — point it at Markdown Notebook and clicking a
-    // todo lands you in the note, on the line. Without one, the file goes to
-    // whatever the OS associates with .md.
+    // a menu of ways to look at it: open the note where the todo lives, on the
+    // line.
+    //
+    // Three tiers, in order: whatever the config says, then Markdown Notebook
+    // if it can be found on disk, then the OS default for .md. The middle tier
+    // is the point — the two apps already find each other's *notebook*, so
+    // finding each other's *binary* costs nothing and means a todo opens in the
+    // right place with no configuration at all.
     let path_str = file.to_string_lossy().into_owned();
+    let expand = |program: String, args: &[String]| Action::Run {
+        label: "Open in Markdown Notebook".into(),
+        program,
+        args: args
+            .iter()
+            .map(|a| util::expand_placeholders(a, &path_str, Some(todo.line)))
+            .collect(),
+        cwd: None,
+        capture: false,
+    };
+
     let open = match config
         .open_with
         .as_ref()
         .filter(|o| !o.program.trim().is_empty())
     {
-        Some(opener) => Action::Run {
-            label: "Open in Markdown Notebook".into(),
-            program: opener.program.clone(),
-            args: opener
-                .args
-                .iter()
-                .map(|a| util::expand_placeholders(a, &path_str, Some(todo.line)))
-                .collect(),
-            cwd: None,
-            capture: false,
-        },
-        None => Action::OpenPath {
-            label: "Open note".into(),
-            path: path_str,
+        Some(opener) => expand(opener.program.clone(), &opener.args),
+        None => match crate::detect::markdown_notebook() {
+            Some(program) => {
+                let args: Vec<String> = crate::detect::NOTEBOOK_ARGS
+                    .iter()
+                    .map(|a| a.to_string())
+                    .collect();
+                expand(program.to_string_lossy().into_owned(), &args)
+            }
+            None => Action::OpenPath {
+                label: "Open note".into(),
+                path: path_str,
+            },
         },
     };
     item.action(open)
@@ -559,6 +573,20 @@ mod tests {
             }
             other => panic!("expected the configured opener, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn the_notebook_opener_passes_the_line_and_the_path_in_the_flag_form() {
+        // A Windows path already contains a colon, so `--line N … <path>` is
+        // what Markdown Notebook is handed rather than `path:line`.
+        let args: Vec<String> = crate::detect::NOTEBOOK_ARGS
+            .iter()
+            .map(|a| util::expand_placeholders(a, "C:\\notes\\alpha.md", Some(42)))
+            .collect();
+        assert_eq!(
+            args,
+            vec!["--line", "42", "--view", "edit", "C:\\notes\\alpha.md"]
+        );
     }
 
     #[test]

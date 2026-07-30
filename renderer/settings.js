@@ -233,6 +233,32 @@
       </div>`;
   }
 
+  /// Items the user hid from the ⋯ menu, so there is a way back.
+  function hiddenSection() {
+    const overrides = settings.itemOverrides || {};
+    const hidden = Object.keys(overrides).filter(key => overrides[key] && overrides[key].hidden);
+    if (!hidden.length) {
+      return `
+        <div class="set-group">
+          <h3>Hidden items</h3>
+          <p class="set-hint">
+            Nothing hidden. Right-click any item — or use its ⋯ button — to
+            rename it, give it an icon or a colour, or hide it.
+          </p>
+        </div>`;
+    }
+    return `
+      <div class="set-group">
+        <h3>Hidden items</h3>
+        <p class="set-hint">Hidden from the dashboard and the launcher. Bring one back:</p>
+        ${hidden.map(key => `
+          <div class="set-row">
+            <span class="hidden-key">${esc(key)}</span>
+            <button class="btn-ghost" data-unhide="${esc(key)}">Show again</button>
+          </div>`).join('')}
+      </div>`;
+  }
+
   function generalSection() {
     return `
       <div class="set-group">
@@ -272,7 +298,8 @@
         ${toggleField('settings', 'providers.projects', 'Repos', null)}
         ${toggleField('settings', 'providers.todos', 'Todos', null)}
         ${toggleField('settings', 'providers.health', 'Services', null)}
-      </div>`;
+      </div>
+      ${hiddenSection()}`;
   }
 
   /**
@@ -774,6 +801,26 @@
       if (!target) return;
       const index = parseInt(target.dataset.index, 10);
 
+      // Unhiding is immediate rather than staged behind Save: it is one
+      // reversible click, and a hidden item you can't see is a poor thing to
+      // leave pending.
+      if (target.dataset.unhide) {
+        const key = target.dataset.unhide;
+        const existing = (settings.itemOverrides || {})[key] || {};
+        try {
+          settings = await api.setItemOverride(key, {
+            nickname: existing.nickname || null,
+            icon: existing.icon || null,
+            accent: existing.accent || null,
+            hidden: false,
+          });
+          render();
+          window.DevHubDashboard.toast('Item restored');
+        } catch (err) {
+          window.DevHubDashboard.toast(String(err), true);
+        }
+        return;
+      }
       if (target.id === 'set-record') { recording = !recording; render(); return; }
       if (target.id === 'set-run-at-login') return; // handled on change
       if (target.id === 'set-test') { api.showLauncher(); return; }

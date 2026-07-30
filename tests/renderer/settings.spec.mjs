@@ -32,18 +32,32 @@ await page.addInitScript(() => {
   };
   window.__shortcut = { accelerator: 'CommandOrControl+Shift+Space', registered: false, error: 'Windows refused it — another application already owns it.' };
 
-  window.hubApi = {
-    getSettings: async () => window.__settings || {
-      theme: 'dark', launcherShortcut: 'CommandOrControl+Shift+Space', keepInTray: true,
-      startMinimized: false, dashboardColumns: 2, notifyOnFailure: false,
-      providers: { launch: true, projects: true, todos: true, health: true },
-      collapsed: [], cardLayout: {}, setupComplete: true,
-      launcher: {
-        opacity: 0.88, showHints: true, maxResults: 40, showRecentWhenEmpty: true,
-        modes: ['all', 'projects', 'launch', 'todos', 'health'],
-      },
+  // Seeded rather than defaulted inside getSettings: setItemOverride merges
+  // onto this object, and merging onto `undefined` throws.
+  window.__settings = {
+    theme: 'dark', launcherShortcut: 'CommandOrControl+Shift+Space', keepInTray: true,
+    startMinimized: false, dashboardColumns: 2, notifyOnFailure: false,
+    providers: { launch: true, projects: true, todos: true, health: true },
+    collapsed: [], cardLayout: {}, setupComplete: true,
+    itemOverrides: { 'launch::0:Jenkins': { hidden: true } },
+    launcher: {
+      opacity: 0.88, showHints: true, maxResults: 40, showRecentWhenEmpty: true,
+      modes: ['all', 'projects', 'launch', 'todos', 'health'],
     },
+  };
+
+  window.hubApi = {
+    getSettings: async () => window.__settings,
     setupSuggestions: async () => ({ tools: [], repoRoots: [], notebookRoot: '' }),
+    setItemOverride: async (key, itemOverride) => {
+      window.__calls.push(['setItemOverride', key, JSON.stringify(itemOverride)]);
+      const overrides = Object.assign({}, window.__settings.itemOverrides);
+      if (itemOverride.hidden) overrides[key] = itemOverride; else delete overrides[key];
+      window.__settings = Object.assign({}, window.__settings, { itemOverrides: overrides });
+      return window.__settings;
+    },
+    hiddenItems: async () => [],
+    onItemsChanged: () => {},
     runAtLogin: async () => window.__runAtLogin || false,
     setRunAtLogin: async (enabled) => {
       window.__calls.push(['setRunAtLogin', String(enabled)]);
@@ -133,6 +147,24 @@ check('a modifier alone does not end recording', await page.evaluate(() =>
   window.DevHubSettings.acceleratorFrom({ key: 'Control', ctrlKey: true, altKey: false, shiftKey: false, metaKey: false }) === null));
 check('space is named the way the backend parses it', await page.evaluate(() =>
   window.DevHubSettings.acceleratorFrom({ key: ' ', ctrlKey: true, altKey: false, shiftKey: true, metaKey: false }) === 'CommandOrControl+Shift+Space'));
+
+// --- Hidden items ---------------------------------------------------------
+
+await openSettings('general');
+check('hidden items are listed with a way back', await page.evaluate(() =>
+  document.querySelector('#settings-body').textContent.includes('launch::0:Jenkins') &&
+  !!document.querySelector('[data-unhide]')));
+
+await page.click('[data-unhide]');
+await page.waitForTimeout(250);
+check('restoring one clears its hidden flag', await page.evaluate(() => {
+  const call = window.__calls.filter(c => c[0] === 'setItemOverride').pop();
+  return call[1] === 'launch::0:Jenkins' && JSON.parse(call[2]).hidden === false;
+}));
+
+check('the list empties once nothing is hidden', await page.evaluate(() =>
+  !document.querySelector('[data-unhide]') &&
+  document.querySelector('#settings-body').textContent.includes('Nothing hidden')));
 
 // --- Quick Launch ---------------------------------------------------------
 

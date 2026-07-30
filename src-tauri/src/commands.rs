@@ -65,6 +65,8 @@ pub struct SetupSuggestions {
     pub repo_roots: Vec<String>,
     /// The notebook Markdown Notebook last opened, if it left a pointer.
     pub notebook_root: String,
+    /// Markdown Notebook itself, if it's on disk — usually beside this exe.
+    pub notebook_app: Option<String>,
 }
 
 /// What first-run setup can offer without asking: the IDEs and terminals
@@ -76,6 +78,8 @@ pub fn setup_suggestions() -> SetupSuggestions {
         tools: crate::detect::detect_tools(),
         repo_roots: crate::detect::detect_repo_roots(),
         notebook_root: settings::read_notebook_pointer(),
+        notebook_app: crate::detect::markdown_notebook()
+            .map(|path| path.to_string_lossy().into_owned()),
     }
 }
 
@@ -100,6 +104,32 @@ pub fn set_run_at_login(state: State<AppState>, enabled: bool) -> Result<bool, S
 // ---------------------------------------------------------------------------
 // The launcher hotkey
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Per-item customisation
+// ---------------------------------------------------------------------------
+
+/// One item's nickname, icon, accent and hidden flag. An override that says
+/// nothing is removed rather than stored.
+#[tauri::command]
+pub fn set_item_override(
+    app: AppHandle,
+    state: State<AppState>,
+    key: String,
+    #[allow(non_snake_case)] itemOverride: crate::settings::ItemOverride,
+) -> AppSettings {
+    state.set_item_override(&key, itemOverride);
+    // Both windows read the same cache, so both need telling.
+    let _ = tauri::Emitter::emit(&app, "items-changed", ());
+    desktop::refresh_launcher_context(&app);
+    state.settings()
+}
+
+/// What the user has hidden, as `provider::id` keys.
+#[tauri::command]
+pub fn hidden_items(state: State<AppState>) -> Vec<String> {
+    state.hidden_items()
+}
 
 #[tauri::command]
 pub fn shortcut_status(state: State<AppState>) -> crate::state::ShortcutStatus {
@@ -293,9 +323,13 @@ pub fn get_results(state: State<AppState>) -> Vec<ProviderResult> {
     registry::build(&settings, &config)
         .into_iter()
         .map(|provider| {
-            state
+            let mut result = state
                 .result(provider.id())
-                .unwrap_or_else(|| ProviderResult::pending(provider.id(), provider.display_name()))
+                .unwrap_or_else(|| ProviderResult::pending(provider.id(), provider.display_name()));
+            // The cache holds what providers produced; the user's renames,
+            // recolours and hides are applied on the way out.
+            result.items = state.apply_overrides(result.items);
+            result
         })
         .collect()
 }

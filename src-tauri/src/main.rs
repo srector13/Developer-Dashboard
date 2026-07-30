@@ -49,6 +49,9 @@ fn main() {
             commands::setup_suggestions,
             commands::run_at_login,
             commands::set_run_at_login,
+            // per-item customisation
+            commands::set_item_override,
+            commands::hidden_items,
             // launcher hotkey
             commands::shortcut_status,
             commands::shortcut_suggestions,

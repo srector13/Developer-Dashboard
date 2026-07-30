@@ -35,6 +35,10 @@ pub struct Item {
     /// let a `command` provider inject markup into both windows.
     #[serde(default)]
     pub icon: Option<String>,
+    /// A per-item colour, set by the user rather than a provider. Validated as
+    /// a hex literal before it is stored — it ends up in a style attribute.
+    #[serde(default)]
+    pub accent: Option<String>,
     /// Drives the dashboard's status dot.
     #[serde(default)]
     pub status: Status,
@@ -80,6 +84,7 @@ impl Item {
             rich_title: false,
             subtitle: None,
             icon: None,
+            accent: None,
             status: Status::Neutral,
             badges: Vec::new(),
             keywords: Vec::new(),

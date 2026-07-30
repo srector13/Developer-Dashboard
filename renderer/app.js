@@ -124,15 +124,43 @@
           ${iconSvg(ACTION_ICONS[a.kind] || 'chevron')}<span>${esc(a.label)}</span>
         </button>`).join('');
 
+    // The ⋯ button is the discoverable way into per-item customisation;
+    // right-clicking the row is the fast one.
+    const customise = `
+      <button class="row-btn row-btn-icon" data-customise="${esc(key)}" title="Customise this item">
+        ${iconSvg('more')}
+      </button>`;
+    const accent = item.accent ? ` style="--row-accent: ${esc(item.accent)}"` : '';
+    // Dot *and* glyph: the dot is the status, the glyph is what kind of thing
+    // it is. Replacing one with the other would trade a signal for a decoration.
+    const glyph = item.icon ? `<span class="row-glyph">${iconSvg(item.icon)}</span>` : '';
+
     return `
-      <div class="card-row" tabindex="0" data-key="${esc(key)}" data-action="0" title="${esc(item.title)}">
-        <span class="row-dot ${statusClass(item.status)}"></span>
+      <div class="card-row" tabindex="0" data-key="${esc(key)}" data-action="0"${accent}
+           title="${esc(item.title)}">
+        <span class="row-dot ${statusClass(item.status)}"></span>${glyph}
         <span class="row-main">
           <span class="row-title">${renderInline(item.title, item.richTitle)}</span>
           ${item.subtitle ? `<span class="row-sub">${esc(item.subtitle)}</span>` : ''}
           ${badges ? `<span class="row-badges">${badges}</span>` : ''}
         </span>
-        <span class="row-actions">${groupButtons}${loose}</span>
+        <span class="row-actions">${groupButtons}${loose}${customise}</span>
+      </div>`;
+  }
+
+  /** A tile, for cards in grid view — fewer words, more of them on screen. */
+  function tileHtml(item) {
+    const key = `${item.provider}::${item.id}`;
+    const accent = item.accent ? ` style="--row-accent: ${esc(item.accent)}"` : '';
+    return `
+      <div class="card-tile" tabindex="0" data-key="${esc(key)}" data-action="0"${accent}
+           title="${esc(item.title)}${item.subtitle ? ` — ${esc(item.subtitle)}` : ''}">
+        <span class="tile-glyph">${iconSvg(item.icon || 'dot')}</span>
+        <span class="tile-title">${renderInline(item.title, item.richTitle)}</span>
+        <span class="tile-dot ${statusClass(item.status)}"></span>
+        <button class="tile-more" data-customise="${esc(key)}" title="Customise this item">
+          ${iconSvg('more')}
+        </button>
       </div>`;
   }
 
@@ -142,7 +170,9 @@
     // scan should show what it did find and say what it couldn't reach.
     if (result.error) html += `<div class="card-error">${esc(result.error)}</div>`;
     if (result.items && result.items.length) {
-      html += result.items.map(rowHtml).join('');
+      const grid = viewFor(result.provider) === 'grid';
+      const rendered = result.items.map(grid ? tileHtml : rowHtml).join('');
+      html += grid ? `<div class="tile-grid">${rendered}</div>` : rendered;
     } else if (!result.error) {
       html += `<div class="card-empty">${result.refreshedAt ? 'Nothing here yet.' : 'Loading…'}</div>`;
     }
@@ -155,11 +185,29 @@
     return SIZES.includes(stored.size) ? stored.size : 'medium';
   }
 
-  function setSize(providerId, size) {
-    if (!SIZES.includes(size)) return;
-    settings.cardLayout = Object.assign({}, settings.cardLayout, { [providerId]: { size } });
+  /** A card's view mode. Anything unrecognised reads as a list. */
+  function viewFor(providerId) {
+    const stored = (settings && settings.cardLayout && settings.cardLayout[providerId]) || {};
+    return stored.view === 'grid' ? 'grid' : 'list';
+  }
+
+  /** Merge one field of a card's layout, keeping the rest. */
+  function setLayout(providerId, patch) {
+    const current = { size: sizeFor(providerId), view: viewFor(providerId) };
+    settings.cardLayout = Object.assign({}, settings.cardLayout, {
+      [providerId]: Object.assign(current, patch),
+    });
     api.saveSettings({ cardLayout: settings.cardLayout }).catch(() => {});
     renderCard(providerId);
+  }
+
+  function setSize(providerId, size) {
+    if (!SIZES.includes(size)) return;
+    setLayout(providerId, { size });
+  }
+
+  function setView(providerId, view) {
+    setLayout(providerId, { view: view === 'grid' ? 'grid' : 'list' });
   }
 
   /**
@@ -199,6 +247,12 @@
           <span class="card-title">${esc(result.displayName || result.provider)}</span>
           <span class="card-count">${(result.items || []).length}</span>
           <span class="card-meta">${esc(relativeAge(result.refreshedAt))}</span>
+          <span class="size-group">
+            <button class="size-btn ${viewFor(result.provider) === 'list' ? 'active' : ''}"
+                    data-view="list" data-provider="${esc(result.provider)}" title="List view">☰</button>
+            <button class="size-btn ${viewFor(result.provider) === 'grid' ? 'active' : ''}"
+                    data-view="grid" data-provider="${esc(result.provider)}" title="Grid view">⊞</button>
+          </span>
           <span class="size-group">${sizeButtons}</span>
           <button class="card-btn" data-refresh="${esc(result.provider)}" title="Refresh this card">
             ${iconSvg('refresh')}
@@ -300,6 +354,13 @@
 
   /** The one popup menu, reused. Lives on <body> so no card can clip it. */
   let popupEl = null;
+
+  function openItemMenu(key, rect) {
+    const item = findItem(key);
+    if (!item) return;
+    closeMenus();
+    window.DevHubItemMenu.open(item, rect, (settings && settings.itemOverrides) || {});
+  }
 
   function closeMenus() {
     if (popupEl) { popupEl.remove(); popupEl = null; }
@@ -423,6 +484,18 @@
         setSize(size.dataset.provider, size.dataset.size);
         return;
       }
+      const view = event.target.closest('[data-view]');
+      if (view) {
+        event.stopPropagation();
+        setView(view.dataset.provider, view.dataset.view);
+        return;
+      }
+      const customise = event.target.closest('[data-customise]');
+      if (customise) {
+        event.stopPropagation();
+        openItemMenu(customise.dataset.customise, customise.getBoundingClientRect());
+        return;
+      }
       const openMenu = event.target.closest('[data-open-menu]');
       if (openMenu) {
         event.stopPropagation();
@@ -449,8 +522,16 @@
         runAction(button.dataset.key, parseInt(button.dataset.action, 10));
         return;
       }
-      const row = event.target.closest('.card-row');
-      if (row) runAction(row.dataset.key, 0);
+      const clickable = event.target.closest('.card-row, .card-tile');
+      if (clickable) runAction(clickable.dataset.key, 0);
+    });
+
+    // Right-click anywhere on an item is the fast route to the same menu.
+    gridEl.addEventListener('contextmenu', (event) => {
+      const target = event.target.closest('.card-row, .card-tile');
+      if (!target) return;
+      event.preventDefault();
+      openItemMenu(target.dataset.key, target.getBoundingClientRect());
     });
 
     // The menu is anchored to a viewport position, so anything that moves the
@@ -597,6 +678,9 @@
     });
     window.DevHubSetup.init(api, {
       onDone: () => { toast('Ready to go'); load(); },
+    });
+    window.DevHubItemMenu.init(api, {
+      onChanged: () => { toast('Saved'); load(); },
     });
     wireEvents();
     load().then(maybeOpenSetup);

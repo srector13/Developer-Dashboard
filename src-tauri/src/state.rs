@@ -172,11 +172,80 @@ impl AppState {
     }
 
     pub fn items(&self, provider: Option<&str>) -> Vec<Item> {
-        let results = self.results.read().unwrap();
-        match provider {
-            Some(id) => results.get(id).map(|r| r.items.clone()).unwrap_or_default(),
-            None => results.values().flat_map(|r| r.items.clone()).collect(),
+        let raw: Vec<Item> = {
+            let results = self.results.read().unwrap();
+            match provider {
+                Some(id) => results.get(id).map(|r| r.items.clone()).unwrap_or_default(),
+                None => results.values().flat_map(|r| r.items.clone()).collect(),
+            }
+        };
+        self.apply_overrides(raw)
+    }
+
+    /// Apply the user's per-item edits, and drop the ones they hid.
+    ///
+    /// Done here rather than in each provider so exactly one place decides what
+    /// an item looks like — a nickname that showed on the dashboard but not in
+    /// the launcher would be worse than no nickname at all.
+    pub fn apply_overrides(&self, items: Vec<Item>) -> Vec<Item> {
+        let overrides = self.settings.read().unwrap().item_overrides.clone();
+        if overrides.is_empty() {
+            return items;
         }
+        items
+            .into_iter()
+            .filter_map(|mut item| {
+                let Some(patch) = overrides.get(&item.key()) else {
+                    return Some(item);
+                };
+                if patch.hidden {
+                    return None;
+                }
+                if let Some(nickname) = patch.nickname.as_deref() {
+                    item.title = nickname.to_string();
+                    // A nickname is typed into a text field, not lifted out of
+                    // a note, so it is never parsed as markdown.
+                    item.rich_title = false;
+                }
+                if let Some(icon) = patch.icon.clone() {
+                    item.icon = Some(icon);
+                }
+                if let Some(accent) = patch.accent.clone() {
+                    item.accent = Some(accent);
+                }
+                Some(item)
+            })
+            .collect()
+    }
+
+    /// Merge one item's override, dropping it entirely when it says nothing.
+    pub fn set_item_override(&self, key: &str, patch: crate::settings::ItemOverride) {
+        let patch = patch.sanitised();
+        let snapshot = {
+            let mut settings = self.settings.write().unwrap();
+            if patch.is_empty() {
+                settings.item_overrides.remove(key);
+            } else {
+                settings.item_overrides.insert(key.to_string(), patch);
+            }
+            settings.clone()
+        };
+        if let Err(err) = settings::save_settings(&snapshot) {
+            eprintln!("Failed to write settings: {err}");
+        }
+    }
+
+    /// The keys the user has hidden, so Settings can offer them back.
+    pub fn hidden_items(&self) -> Vec<String> {
+        let settings = self.settings.read().unwrap();
+        let mut keys: Vec<String> = settings
+            .item_overrides
+            .iter()
+            .filter(|(_, patch)| patch.hidden)
+            .map(|(key, _)| key.clone())
+            .collect();
+        keys.sort();
+        keys
     }
 
     /// Resolve an item by its namespaced key. This is the only way an action

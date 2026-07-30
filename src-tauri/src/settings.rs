@@ -112,6 +112,62 @@ impl Default for LauncherSettings {
 /// and icons; this is the list settings validates against.
 pub const LAUNCHER_MODES: &[&str] = &["all", "projects", "launch", "todos", "health"];
 
+/// A user's personal edits to one item, keyed by `Item::key()`.
+///
+/// Providers own what an item *is*; this owns what you want it called and how
+/// you want it to look. Kept in settings.json rather than hub.config.json
+/// because it is decoration rather than content — and because an item's key
+/// only means anything alongside the provider that produced it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemOverride {
+    /// Shown instead of the provider's title. Searched, too, so renaming an
+    /// item to what you actually call it makes it findable by that name.
+    #[serde(default)]
+    pub nickname: Option<String>,
+    /// A token from the renderer's fixed icon set.
+    #[serde(default)]
+    pub icon: Option<String>,
+    /// `#rgb` or `#rrggbb`. Validated on the way in — it reaches a style
+    /// attribute, so anything else is refused rather than sanitised.
+    #[serde(default)]
+    pub accent: Option<String>,
+    /// Hidden from every surface until unhidden from Settings.
+    #[serde(default)]
+    pub hidden: bool,
+}
+
+impl ItemOverride {
+    /// Is this override doing anything? An empty one is dropped rather than
+    /// stored, so settings.json doesn't accumulate rows that say nothing.
+    pub fn is_empty(&self) -> bool {
+        !self.hidden
+            && self.nickname.as_deref().unwrap_or("").trim().is_empty()
+            && self.icon.is_none()
+            && self.accent.is_none()
+    }
+
+    /// Drop anything malformed. The accent lands in a style attribute, so it is
+    /// checked against a strict hex shape rather than trusted or escaped.
+    pub fn sanitised(mut self) -> Self {
+        self.nickname = self
+            .nickname
+            .map(|n| n.trim().to_string())
+            .filter(|n| !n.is_empty());
+        self.icon = self.icon.filter(|i| !i.trim().is_empty());
+        self.accent = self.accent.filter(|a| is_hex_colour(a));
+        self
+    }
+}
+
+fn is_hex_colour(value: &str) -> bool {
+    let body = match value.strip_prefix('#') {
+        Some(body) => body,
+        None => return false,
+    };
+    matches!(body.len(), 3 | 6) && body.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 /// One card's size on the dashboard grid.
 ///
 /// Presets rather than a pixel height. Freeform dragging produced overlapping,
@@ -124,6 +180,14 @@ pub struct CardLayout {
     /// "small" | "medium" | "large". Unknown values fall back to medium.
     #[serde(default = "default_card_size")]
     pub size: String,
+    /// "list" | "grid". A list reads better for paths; a grid fits more of a
+    /// launch card on screen at once.
+    #[serde(default = "default_card_view")]
+    pub view: String,
+}
+
+fn default_card_view() -> String {
+    "list".to_string()
 }
 
 fn default_card_size() -> String {
@@ -134,6 +198,7 @@ impl Default for CardLayout {
     fn default() -> Self {
         Self {
             size: default_card_size(),
+            view: default_card_view(),
         }
     }
 }
@@ -164,9 +229,12 @@ pub struct AppSettings {
     /// False until first-run setup has been completed or dismissed.
     #[serde(default)]
     pub setup_complete: bool,
-    /// Per-card size, keyed by provider.
+    /// Per-card size and view, keyed by provider.
     #[serde(default)]
     pub card_layout: std::collections::HashMap<String, CardLayout>,
+    /// Personal edits to individual items, keyed by `Item::key()`.
+    #[serde(default)]
+    pub item_overrides: std::collections::HashMap<String, ItemOverride>,
     /// Provider ids in the order the user dragged them into. Providers missing
     /// from this list keep their registry order and land at the end, so a new
     /// card appears rather than disappearing.
@@ -192,6 +260,7 @@ impl Default for AppSettings {
             notify_on_failure: false,
             setup_complete: false,
             card_layout: std::collections::HashMap::new(),
+            item_overrides: std::collections::HashMap::new(),
             card_order: Vec::new(),
             ai: AiSettings::default(),
             collapsed: Vec::new(),
@@ -505,10 +574,15 @@ pub const DEFAULT_CONFIG: &str = r#"{
     ]
   },
 
+  "//todos": [
+    "Leave roots empty and Dev Hub follows whatever notebook Markdown Notebook",
+    "last opened. Leave openWith out entirely and it finds Markdown Notebook on",
+    "disk too — set it only to override that, e.g. to open todos in an editor:",
+    "  \"openWith\": { \"program\": \"code\", \"args\": [\"-g\", \"{path}:{line}\"] }"
+  ],
   "todos": {
     "roots": [],
-    "includeTags": [],
-    "openWith": { "program": "code", "args": ["-g", "{path}:{line}"] }
+    "includeTags": []
   },
 
   "health": {
@@ -687,6 +761,68 @@ mod tests {
         // The keys the file didn't mention keep their defaults.
         assert!(settings.providers.projects);
         assert!(settings.providers.health);
+    }
+
+    #[test]
+    fn an_accent_that_is_not_a_hex_colour_is_refused() {
+        // It ends up in a style attribute, so this is a validation boundary
+        // rather than a formatting preference.
+        for good in ["#fff", "#FFAA33", "#0d1117"] {
+            let patch = ItemOverride {
+                accent: Some(good.into()),
+                ..Default::default()
+            }
+            .sanitised();
+            assert_eq!(patch.accent.as_deref(), Some(good), "{good}");
+        }
+        for bad in [
+            "red",
+            "#12",
+            "#1234",
+            "#gggggg",
+            "javascript:alert(1)",
+            "#fff; background: url(x)",
+            "",
+        ] {
+            let patch = ItemOverride {
+                accent: Some(bad.into()),
+                ..Default::default()
+            }
+            .sanitised();
+            assert_eq!(patch.accent, None, "{bad} should have been refused");
+        }
+    }
+
+    #[test]
+    fn an_override_that_says_nothing_is_treated_as_empty() {
+        assert!(ItemOverride::default().is_empty());
+        assert!(ItemOverride {
+            nickname: Some("   ".into()),
+            ..Default::default()
+        }
+        .sanitised()
+        .is_empty());
+
+        assert!(!ItemOverride {
+            hidden: true,
+            ..Default::default()
+        }
+        .is_empty());
+        assert!(!ItemOverride {
+            nickname: Some("Payments".into()),
+            ..Default::default()
+        }
+        .is_empty());
+    }
+
+    #[test]
+    fn a_card_view_defaults_to_list_and_survives_a_partial_entry() {
+        let settings = migrate(serde_json::json!({
+            "cardLayout": { "projects": { "size": "large" } }
+        }));
+        let layout = &settings.card_layout["projects"];
+        assert_eq!(layout.size, "large");
+        assert_eq!(layout.view, "list");
     }
 
     #[test]
