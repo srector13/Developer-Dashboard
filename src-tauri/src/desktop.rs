@@ -428,6 +428,90 @@ pub fn watch_config(app: &AppHandle) {
     }
 }
 
+static TODO_WATCHER: Mutex<Option<notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>>> =
+    Mutex::new(None);
+
+/// Is this path a note the todos provider would actually read?
+///
+/// The watcher fires for every write under the notebook root, and a notebook is
+/// usually a git repo with attachments — without this filter, a `git status`
+/// touching `.git/index` would trigger a full rescan.
+pub fn is_watched_note(path: &std::path::Path, root: &std::path::Path) -> bool {
+    if path
+        .extension()
+        .map(|e| !e.eq_ignore_ascii_case("md"))
+        .unwrap_or(true)
+    {
+        return false;
+    }
+    let relative = path.strip_prefix(root).unwrap_or(path);
+    !relative.components().any(|component| {
+        let part = component.as_os_str().to_string_lossy().to_lowercase();
+        part.starts_with('.') || crate::providers::todos::IGNORE_DIRS.contains(&part.as_str())
+    })
+}
+
+/// Watch the notebook roots and refresh the todos provider when a note changes,
+/// so ticking a checkbox in Markdown Notebook updates the card in seconds
+/// instead of waiting out the 5-minute interval.
+///
+/// Re-established on every registry restart, because the roots come from the
+/// config and can move.
+pub fn watch_todo_roots(app: &AppHandle) {
+    use notify::RecursiveMode;
+    use notify_debouncer_mini::{new_debouncer, DebounceEventResult};
+
+    let mut slot = TODO_WATCHER.lock().unwrap();
+    *slot = None; // drop the old watcher first, so the paths are released
+
+    let state = app.state::<AppState>();
+    if !state.settings().providers.todos {
+        return;
+    }
+    let roots: Vec<std::path::PathBuf> =
+        crate::providers::todos::resolve_roots(&state.config().todos)
+            .into_iter()
+            .map(std::path::PathBuf::from)
+            .filter(|root| root.is_dir())
+            .collect();
+    if roots.is_empty() {
+        return;
+    }
+
+    let watched = roots.clone();
+    let app_handle = app.clone();
+    let debouncer = new_debouncer(
+        std::time::Duration::from_millis(CONFIG_DEBOUNCE_MS),
+        move |result: DebounceEventResult| {
+            let Ok(events) = result else { return };
+            let relevant = events.iter().any(|event| {
+                watched
+                    .iter()
+                    .any(|root| is_watched_note(&event.path, root))
+            });
+            if !relevant {
+                return;
+            }
+            let app = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = registry::refresh_provider(&app, crate::providers::todos::ID).await;
+            });
+        },
+    );
+
+    match debouncer {
+        Ok(mut debouncer) => {
+            for root in &roots {
+                if let Err(err) = debouncer.watcher().watch(root, RecursiveMode::Recursive) {
+                    eprintln!("Failed to watch {}: {err}", root.display());
+                }
+            }
+            *slot = Some(debouncer);
+        }
+        Err(err) => eprintln!("Failed to start the notes watcher: {err}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -482,5 +566,41 @@ mod tests {
     #[test]
     fn an_empty_shortcut_is_a_deliberate_off_switch_not_a_parse_error() {
         assert_eq!(normalize_accelerator("").trim(), "");
+    }
+
+    #[test]
+    fn the_notes_watcher_only_wakes_for_markdown_the_provider_would_read() {
+        let root = std::path::Path::new("/notes");
+        assert!(is_watched_note(
+            std::path::Path::new("/notes/work/plan.md"),
+            root
+        ));
+        assert!(is_watched_note(
+            std::path::Path::new("/notes/plan.MD"),
+            root
+        ));
+
+        // Churn a notebook produces constantly, and none of it changes a todo.
+        assert!(!is_watched_note(
+            std::path::Path::new("/notes/.git/index"),
+            root
+        ));
+        assert!(!is_watched_note(
+            std::path::Path::new("/notes/.git/HEAD"),
+            root
+        ));
+        assert!(!is_watched_note(
+            std::path::Path::new("/notes/plan.txt"),
+            root
+        ));
+        assert!(!is_watched_note(std::path::Path::new("/notes/work"), root));
+        assert!(!is_watched_note(
+            std::path::Path::new("/notes/attachments/shot.md"),
+            root
+        ));
+        assert!(!is_watched_note(
+            std::path::Path::new("/notes/templates/daily.md"),
+            root
+        ));
     }
 }

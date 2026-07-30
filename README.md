@@ -46,7 +46,7 @@ in the other.
 | --- | --- | --- |
 | `launch` | Static apps, URLs and folders from your config | On config change |
 | `projects` | Git repos found under your roots — branch, dirty flag, ahead/behind, last-commit age | 120s |
-| `todos` | Unchecked `- [ ]` lines in your markdown notes, with `#tags` and `@due` dates | 300s |
+| `todos` | Unchecked `- [ ]` lines in your markdown notes, with `#tags` and `@due` dates | On note change, 300s floor |
 | `health` | HTTP checks against endpoints you list — status code and latency | Configurable, 60s default |
 | `command` | **The escape hatch.** Runs any command on an interval and reads stdout as JSON items | Configurable |
 
@@ -115,6 +115,12 @@ When `todos.roots` is empty, Dev Hub reads
 Markdown Notebook writes — and scans that notebook. Open a notebook in one app
 and the other finds it with zero configuration. Dev Hub only ever reads that
 file; it never writes it.
+
+The notebook roots are watched too, so ticking a checkbox in Markdown Notebook
+updates the Todos card within a second or two rather than waiting out the
+refresh interval. The watcher ignores everything the provider wouldn't read —
+`.git`, `attachments`, `templates`, non-markdown files — so a `git status` in
+your notes repo doesn't trigger a rescan.
 
 ### `settings.json`
 

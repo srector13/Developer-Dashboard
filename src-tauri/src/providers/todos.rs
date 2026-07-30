@@ -17,7 +17,7 @@ pub const NAME: &str = "Todos";
 
 /// The notebook's own ignore list, so Dev Hub sees exactly the notes Markdown
 /// Notebook shows.
-const IGNORE_DIRS: &[&str] = &[
+pub const IGNORE_DIRS: &[&str] = &[
     "_media",
     "attachments",
     "templates",

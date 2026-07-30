@@ -95,6 +95,10 @@ pub fn restart(app: &AppHandle) {
         }
     }
 
+    // The notes watcher follows the config's todo roots, so it is re-armed
+    // whenever the provider set is rebuilt.
+    crate::desktop::watch_todo_roots(app);
+
     let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
 
     for provider in providers {
