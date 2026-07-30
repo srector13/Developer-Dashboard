@@ -477,7 +477,11 @@
       try {
         const ctx = await api.context();
         if (ctx) {
-          if (ctx.theme) document.body.classList.toggle('light', ctx.theme === 'light');
+          // "system" resolves here rather than in Rust, because the webview is
+          // the only thing that knows what the OS is currently asking for.
+          const light = ctx.theme === 'light' || (ctx.theme === 'system'
+            && window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
+          document.body.classList.toggle('light', !!light);
           liveProviders = ctx.providers || [];
         }
       } catch {}
