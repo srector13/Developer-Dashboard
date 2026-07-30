@@ -4,11 +4,13 @@
 
 mod commands;
 mod desktop;
+mod detect;
 mod model;
 mod providers;
 mod registry;
 mod search;
 mod settings;
+mod startup;
 mod state;
 mod util;
 
@@ -43,6 +45,10 @@ fn main() {
             commands::get_settings,
             commands::save_settings,
             commands::app_version,
+            // first-run setup
+            commands::setup_suggestions,
+            commands::run_at_login,
+            commands::set_run_at_login,
             // launcher hotkey
             commands::shortcut_status,
             commands::shortcut_suggestions,
@@ -85,9 +91,12 @@ fn main() {
             if let Some(main) = app.get_webview_window(desktop::MAIN) {
                 // The window is created hidden and revealed here, so the first
                 // frame is the app's own shell rather than a white flash.
-                if settings.start_minimized && settings.keep_in_tray {
-                    // Straight to the tray: the hotkey is the entry point.
-                } else {
+                // A login start goes straight to the tray. Opening the
+                // dashboard over the desktop every morning is how a helpful
+                // tool becomes one you uninstall.
+                let to_tray = settings.keep_in_tray
+                    && (settings.start_minimized || startup::launched_at_login());
+                if !to_tray {
                     let _ = main.show();
                 }
 

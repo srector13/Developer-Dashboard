@@ -47,7 +47,7 @@ in the other.
 | `launch` | Static apps, URLs and folders from your config | On config change |
 | `projects` | Git repos found under your roots — branch, dirty flag, ahead/behind, last-commit age | 120s |
 | `todos` | Unchecked `- [ ]` lines in your markdown notes, with `#tags` and `@due` dates | On note change, 300s floor |
-| `health` | HTTP checks against endpoints you list — status code and latency | Configurable, 60s default |
+| `health` | HTTP checks against endpoints you list — status code, latency, and a warning when a service answers but slowly | Configurable, 60s default |
 | `command` | **The escape hatch.** Runs any command on an interval and reads stdout as JSON items | Configurable |
 
 The `command` provider is what makes this extensible without a plugin API. If a
@@ -158,12 +158,16 @@ file never silently loses keys.
 
 | Key | Does |
 | --- | --- |
+| <kbd>/</kbd> | List commands — `/projects`, `/apps`, `/todos`, `/health`, `/all` |
 | <kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd> | Cycle modes (All · Projects · Launch · Todos · Health) |
 | <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>5</kbd> | Jump straight to a mode |
 | <kbd>↑</kbd> <kbd>↓</kbd> | Move the selection |
-| <kbd>Enter</kbd> | Run the item's default action |
+| <kbd>Enter</kbd> | Run the item's default action — named on the selected row |
 | <kbd>Ctrl</kbd>+<kbd>Enter</kbd> | Open the item's full action menu |
-| <kbd>Esc</kbd> | Leave the action menu, or hide the launcher |
+| <kbd>Esc</kbd> | Leave the commands or action menu, or hide the launcher |
+
+Typing `/` opens the command list; typing narrows it, and <kbd>Tab</kbd> or
+<kbd>Enter</kbd> picks. Aliases work too — `/repos`, `/p`, `/a`, `/t`.
 
 Matching is a fuzzy subsequence over title, subtitle and hidden keywords, scored
 by contiguity and word-boundary starts, with prefix matches first. Things you

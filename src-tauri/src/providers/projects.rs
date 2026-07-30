@@ -162,9 +162,11 @@ pub fn read_status(path: &Path) -> Result<RepoStatus, String> {
             }
         }
         Err(_) => {
-            // A freshly `git init`ed repo with no commits.
+            // A freshly `git init`ed repo with no commits. The branch badge
+            // says this on its own — setting `note` too produced two badges
+            // ("no commits" and "No commits yet") that meant the same thing.
+            // `note` stays reserved for a status read that genuinely failed.
             status.branch = "no commits".into();
-            status.note.get_or_insert_with(|| "No commits yet".into());
         }
     }
 
@@ -420,6 +422,27 @@ mod tests {
         );
         assert_eq!(item.status, Status::Warn);
         assert!(item.badges.iter().any(|b| b == "dirty"));
+    }
+
+    #[test]
+    fn a_repo_with_no_commits_says_so_exactly_once() {
+        let dir = std::env::temp_dir().join(format!("dev-hub-test-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        git2::Repository::init(&dir).unwrap();
+
+        let status = read_status(&dir).unwrap();
+        assert_eq!(status.branch, "no commits");
+        assert_eq!(status.note, None, "the branch badge already says this");
+
+        let item = item_for(&dir, &status, &ProjectsConfig::default(), util::now_secs());
+        let saying_no_commits = item
+            .badges
+            .iter()
+            .filter(|b| b.to_lowercase().contains("no commits"))
+            .count();
+        assert_eq!(saying_no_commits, 1, "badges: {:?}", item.badges);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

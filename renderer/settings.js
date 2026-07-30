@@ -32,6 +32,8 @@
   let config = null;     // working copy of hub.config.json
   let status = null;     // ShortcutStatus
   let suggestions = [];
+  /// Read from the registry rather than settings.json, which only mirrors it.
+  let runAtLogin = false;
   let dirty = false;
   let recording = false;
   let onSaved = () => {};
@@ -190,6 +192,18 @@
           'Closing the window leaves Dev Hub running so the hotkey keeps working.')}
         ${toggleField('settings', 'startMinimized', 'Start in the tray',
           'Launch straight to the tray instead of opening the dashboard.')}
+        <label class="set-toggle">
+          <input type="checkbox" id="set-run-at-login" ${runAtLogin ? 'checked' : ''}>
+          <span class="set-toggle-body">
+            <span class="set-label">Start with Windows</span>
+            <span class="set-hint">
+              A launcher you have to launch is one you forget. Starts in the tray,
+              so it never opens over what you're doing.
+            </span>
+          </span>
+        </label>
+        ${toggleField('settings', 'notifyOnFailure', 'Tell me when a service breaks',
+          'A desktop notification the moment a watched service stops answering — only on the change, never repeatedly.')}
       </div>
       <div class="set-group">
         <h3>Cards</h3>
@@ -335,6 +349,16 @@
         })}
       </div>
       <div class="set-group">
+        <h3>Duplicates</h3>
+        ${toggleField('config', 'todos.deduplicate', 'Collapse repeated todos',
+          'A generated folder index lists every todo underneath it, so without this each one shows twice. The copy kept is the one in the note you would actually edit.')}
+        <p class="set-hint">Files skipped entirely, by name:</p>
+        ${stringList('todos.excludeFiles', {
+          placeholder: 'index', empty: 'Nothing skipped.',
+          add: 'Skip another file name',
+        })}
+      </div>
+      <div class="set-group">
         <h3>Open a todo with…</h3>
         <p class="set-hint">Use <code>{path}</code> and <code>{line}</code> to jump to the right line.</p>
         ${textField('config', 'todos.openWith.program', 'Program', { browse: 'program', placeholder: 'code' })}
@@ -362,6 +386,10 @@
         <h3>Timing</h3>
         ${textField('config', 'health.intervalSeconds', 'Check every (seconds)', { type: 'number', min: 5 })}
         ${textField('config', 'health.timeoutMs', 'Give up after (ms)', { type: 'number', min: 250 })}
+        ${textField('config', 'health.slowMs', 'Warn when slower than (ms)', {
+          type: 'number', min: 0,
+          hint: 'A service answering in four seconds instead of forty milliseconds is broken in the way that costs you an afternoon, and "200 OK" hides it. 0 switches the warning off.',
+        })}
       </div>`;
   }
 
@@ -621,8 +649,22 @@
       }
     });
 
-    el.body.addEventListener('change', (event) => {
+    el.body.addEventListener('change', async (event) => {
       const target = event.target;
+      // The registry is the truth here, so this applies immediately and then
+      // re-reads it — a checkbox that disagreed with Task Manager would be
+      // worse than not having one.
+      if (target.id === 'set-run-at-login') {
+        try {
+          runAtLogin = await api.setRunAtLogin(target.checked);
+          target.checked = runAtLogin;
+          window.DevHubDashboard.toast(runAtLogin ? 'Dev Hub will start with Windows' : 'Dev Hub will not start with Windows');
+        } catch (err) {
+          target.checked = runAtLogin;
+          window.DevHubDashboard.toast(String(err), true);
+        }
+        return;
+      }
       if (target.type === 'checkbox' && target.dataset.path) {
         set(target.dataset.scope === 'settings' ? settings : config, target.dataset.path, target.checked);
         markDirty();
@@ -644,6 +686,7 @@
       const index = parseInt(target.dataset.index, 10);
 
       if (target.id === 'set-record') { recording = !recording; render(); return; }
+      if (target.id === 'set-run-at-login') return; // handled on change
       if (target.id === 'set-test') { api.showLauncher(); return; }
       if (target.id === 'set-clear-shortcut') { applyShortcut(''); return; }
       if (target.dataset.shortcut) { applyShortcut(target.dataset.shortcut); return; }
@@ -757,13 +800,16 @@
     recording = false;
     dirty = false;
     try {
-      const [loadedSettings, loadedConfig, loadedStatus, loadedSuggestions] = await Promise.all([
-        api.getSettings(), api.getConfigJson(), api.shortcutStatus(), api.shortcutSuggestions(),
-      ]);
+      const [loadedSettings, loadedConfig, loadedStatus, loadedSuggestions, loadedRunAtLogin] =
+        await Promise.all([
+          api.getSettings(), api.getConfigJson(), api.shortcutStatus(),
+          api.shortcutSuggestions(), api.runAtLogin(),
+        ]);
       settings = clone(loadedSettings);
       config = clone(loadedConfig);
       status = loadedStatus;
       suggestions = loadedSuggestions || [];
+      runAtLogin = !!loadedRunAtLogin;
       // The opener's args edit as one string; keep the split copy out of the way.
       if (config.todos && config.todos.openWith) {
         config.todos.openWith.argsText = (config.todos.openWith.args || []).join(' ');

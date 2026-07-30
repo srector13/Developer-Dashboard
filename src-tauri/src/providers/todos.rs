@@ -118,6 +118,56 @@ fn is_overdue(due: &str, today: &str) -> bool {
     due < today
 }
 
+/// Is this file one of the generated directory indexes we should skip?
+///
+/// A notebook app writes a table-of-contents note per folder that repeats every
+/// todo underneath it. Scanning those reports each todo a second time, pointing
+/// at a file you'd never edit — so they are excluded by name, matched with and
+/// without the extension so both `index` and `index.md` work in the config.
+pub fn is_excluded(file: &Path, excludes: &[String]) -> bool {
+    let Some(name) = file.file_name().map(|n| n.to_string_lossy().to_lowercase()) else {
+        return false;
+    };
+    let stem = file
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    excludes.iter().any(|raw| {
+        let wanted = raw.trim().to_lowercase();
+        !wanted.is_empty() && (wanted == name || wanted == stem)
+    })
+}
+
+/// How specific a file is as the *home* of a todo, lower being better.
+///
+/// When the same todo text appears twice, the copy in a shallow, index-shaped
+/// file is the generated one and the deeper note is where it actually lives —
+/// so that is the one to keep and the one whose line number is worth opening.
+fn specificity(relative: &Path) -> (usize, usize) {
+    let stem = relative
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let index_shaped = usize::from(
+        default_index_names().contains(&stem.as_str())
+            // A note named after its own folder is the same convention.
+            || relative
+                .parent()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().to_lowercase() == stem)
+                .unwrap_or(false),
+    );
+    // Deeper wins among equals: a todo in Projects/Alpha/plan.md is more
+    // specific than one repeated in Projects/plan.md.
+    (index_shaped, usize::MAX - relative.components().count())
+}
+
+fn default_index_names() -> &'static [&'static str] {
+    &[
+        "index", "toc", "_toc", "contents", "_index", "readme", "home",
+    ]
+}
+
 fn markdown_files(root: &Path) -> Vec<PathBuf> {
     walkdir::WalkDir::new(root)
         .follow_links(false)
@@ -258,7 +308,8 @@ fn scan(config: &TodosConfig) -> (Vec<Item>, Option<String>) {
         .filter(|t| !t.is_empty())
         .collect();
 
-    let mut items = Vec::new();
+    // (specificity, item) — the key decides which copy of a repeated todo wins.
+    let mut candidates: Vec<((usize, usize), Item)> = Vec::new();
     let mut problems = Vec::new();
 
     for root in &roots {
@@ -268,20 +319,38 @@ fn scan(config: &TodosConfig) -> (Vec<Item>, Option<String>) {
             continue;
         }
         for file in markdown_files(&root_path) {
+            if is_excluded(&file, &config.exclude_files) {
+                continue;
+            }
             let Ok(text) = std::fs::read_to_string(&file) else {
                 problems.push(format!("could not read {}", util::display_path(&file)));
                 continue;
             };
+            let relative = file.strip_prefix(&root_path).unwrap_or(&file).to_path_buf();
             for todo in parse_todos(&text) {
                 if !wanted.is_empty()
                     && !todo.tags.iter().any(|t| wanted.contains(&t.to_lowercase()))
                 {
                     continue;
                 }
-                items.push(item_for(&root_path, &file, &todo, config, &today));
+                candidates.push((
+                    specificity(&relative),
+                    item_for(&root_path, &file, &todo, config, &today),
+                ));
             }
         }
     }
+
+    // Collapse repeats. A generated directory index lists every todo beneath
+    // it, so without this each one appears twice — once in the note where you'd
+    // actually edit it, once in a file you'd never open. Keeping the most
+    // specific occurrence means the row still opens the right line.
+    if config.deduplicate {
+        candidates.sort_by_key(|(specificity, _)| *specificity);
+        let mut seen = std::collections::HashSet::new();
+        candidates.retain(|(_, item)| seen.insert(dedupe_key(item)));
+    }
+    let mut items: Vec<Item> = candidates.into_iter().map(|(_, item)| item).collect();
 
     // Overdue first, then by due date, then by title — "what should I do next"
     // is the question, so undated work sinks below dated work.
@@ -296,6 +365,22 @@ fn scan(config: &TodosConfig) -> (Vec<Item>, Option<String>) {
 
     let error = (!problems.is_empty()).then(|| problems.join("; "));
     (items, error)
+}
+
+/// What makes two todos "the same one".
+///
+/// Text plus tags plus due date, case-folded and whitespace-normalised. Text
+/// alone would merge two genuinely different `- [ ] follow up` lines; including
+/// the metadata keeps those apart while still catching a verbatim copy.
+fn dedupe_key(item: &Item) -> String {
+    let title = item.title.to_lowercase();
+    let mut badges = item.badges.clone();
+    badges.sort();
+    format!(
+        "{}|{}",
+        title.split_whitespace().collect::<Vec<_>>().join(" "),
+        badges.join(",")
+    )
 }
 
 /// Sortable due date, with undated todos pushed to the end.
@@ -504,6 +589,81 @@ mod tests {
             assert!(items.is_empty());
             assert!(error.unwrap().contains("hub.config.json"));
         }
+    }
+
+    #[test]
+    fn generated_directory_indexes_are_excluded_by_name() {
+        let excludes = TodosConfig::default().exclude_files;
+        assert!(is_excluded(Path::new("/n/work/index.md"), &excludes));
+        assert!(is_excluded(Path::new("/n/work/TOC.md"), &excludes));
+        assert!(is_excluded(Path::new("/n/work/Contents.md"), &excludes));
+        assert!(!is_excluded(Path::new("/n/work/plan.md"), &excludes));
+        // Configured with the extension spelled out, which is the natural way
+        // to write it in a config file.
+        assert!(is_excluded(
+            Path::new("/n/work/summary.md"),
+            &["summary.md".to_string()]
+        ));
+    }
+
+    #[test]
+    fn a_todo_repeated_in_a_generated_index_is_reported_once_from_the_real_note() {
+        let root = std::env::temp_dir().join(format!("dev-hub-dedupe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("work")).unwrap();
+        std::fs::write(root.join("work").join("plan.md"), "- [ ] ship the beta\n").unwrap();
+        // A generated folder index that repeats it, named something the
+        // default exclude list does NOT cover — so this exercises the dedupe
+        // rather than the name filter.
+        std::fs::write(
+            root.join("work").join("work.md"),
+            "# Work\n\n- [ ] ship the beta\n",
+        )
+        .unwrap();
+
+        let config = TodosConfig {
+            roots: vec![root.to_string_lossy().into_owned()],
+            ..Default::default()
+        };
+        let (items, _) = scan(&config);
+        assert_eq!(
+            items.len(),
+            1,
+            "{:?}",
+            items.iter().map(|i| &i.subtitle).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            items[0].subtitle.as_deref(),
+            Some("work/plan.md:1"),
+            "the surviving row must open the note you'd actually edit"
+        );
+
+        // Switched off, both copies come back — the behaviour is a choice.
+        let noisy = TodosConfig {
+            deduplicate: false,
+            ..config
+        };
+        assert_eq!(scan(&noisy).0.len(), 2);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn two_different_todos_that_merely_share_a_word_are_not_merged() {
+        let root = std::env::temp_dir().join(format!("dev-hub-nodedupe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("a.md"),
+            "- [ ] follow up #alpha\n- [ ] follow up #beta\n- [ ] review the design\n",
+        )
+        .unwrap();
+
+        let config = TodosConfig {
+            roots: vec![root.to_string_lossy().into_owned()],
+            ..Default::default()
+        };
+        assert_eq!(scan(&config).0.len(), 3);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

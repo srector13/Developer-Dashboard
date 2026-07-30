@@ -70,10 +70,12 @@
       return `<span class="badge ${warn ? 'warn' : ''}">${esc(b)}</span>`;
     }).join('');
     // Action 0 is the row click; the rest live in the hover strip, so every
-    // action an item carries is reachable without a context menu.
+    // action an item carries is reachable without a context menu. Each carries
+    // its label — a strip of unlabelled glyphs means hovering every one of them
+    // to find out which is which.
     const extra = (item.actions || []).slice(1).map((a, i) => `
       <button class="row-btn" data-key="${esc(key)}" data-action="${i + 1}" title="${esc(a.label)}">
-        ${iconSvg(ACTION_ICONS[a.kind] || 'chevron')}
+        ${iconSvg(ACTION_ICONS[a.kind] || 'chevron')}<span>${esc(a.label)}</span>
       </button>`).join('');
 
     return `
@@ -101,21 +103,79 @@
     return html;
   }
 
+  /** The stored size for a card, clamped to a grid that may have shrunk. */
+  function layoutFor(providerId) {
+    const columns = (settings && settings.dashboardColumns) || 2;
+    const stored = (settings && settings.cardLayout && settings.cardLayout[providerId]) || {};
+    return {
+      span: Math.min(Math.max(Number(stored.span) || 1, 1), columns),
+      height: Number(stored.height) || 0,
+    };
+  }
+
   function cardHtml(result) {
     const isCollapsed = collapsed.has(result.provider);
+    const layout = layoutFor(result.provider);
+    const columns = (settings && settings.dashboardColumns) || 2;
     return `
-      <section class="card ${isCollapsed ? 'collapsed' : ''}" data-provider="${esc(result.provider)}">
+      <section class="card ${isCollapsed ? 'collapsed' : ''}" data-provider="${esc(result.provider)}"
+               style="grid-column: span ${layout.span}">
         <header class="card-header">
           <span class="card-chevron">${iconSvg('chevron')}</span>
           <span class="card-title">${esc(result.displayName || result.provider)}</span>
           <span class="card-count">${(result.items || []).length}</span>
           <span class="card-meta">${esc(relativeAge(result.refreshedAt))}</span>
-          <button class="card-refresh" data-refresh="${esc(result.provider)}" title="Refresh this card">
+          ${columns > 1 ? `
+            <button class="card-btn" data-widen="${esc(result.provider)}"
+                    title="${layout.span > 1 ? 'Make this card narrower' : 'Make this card wider'}">
+              ${iconSvg('grid')}
+            </button>` : ''}
+          <button class="card-btn" data-refresh="${esc(result.provider)}" title="Refresh this card">
             ${iconSvg('refresh')}
           </button>
         </header>
-        <div class="card-body">${bodyHtml(result)}</div>
+        <div class="card-body" ${layout.height ? `style="max-height:${layout.height}px"` : ''}>${bodyHtml(result)}</div>
+        <div class="card-resize" data-resize="${esc(result.provider)}" title="Drag to resize · double-click to fit"></div>
       </section>`;
+  }
+
+  /** Persist a card's size. Merged, so widening doesn't forget a set height. */
+  function saveLayout(providerId, patch) {
+    const layout = Object.assign({}, layoutFor(providerId), patch);
+    settings.cardLayout = Object.assign({}, settings.cardLayout, { [providerId]: layout });
+    api.saveSettings({ cardLayout: settings.cardLayout }).catch(() => {});
+  }
+
+  function toggleWidth(providerId) {
+    const columns = (settings && settings.dashboardColumns) || 2;
+    const next = layoutFor(providerId).span > 1 ? 1 : Math.min(2, columns);
+    saveLayout(providerId, { span: next });
+    renderCard(providerId);
+  }
+
+  /** Drag the handle at a card's foot to set its height. */
+  function startResize(providerId, event) {
+    const card = gridEl.querySelector(`.card[data-provider="${CSS.escape(providerId)}"]`);
+    const body = card && card.querySelector('.card-body');
+    if (!body) return;
+    event.preventDefault();
+
+    const startY = event.clientY;
+    const startHeight = body.getBoundingClientRect().height;
+    document.body.classList.add('resizing');
+
+    const onMove = (move) => {
+      const height = Math.max(80, Math.round(startHeight + (move.clientY - startY)));
+      body.style.maxHeight = `${height}px`;
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.classList.remove('resizing');
+      saveLayout(providerId, { height: Math.round(body.getBoundingClientRect().height) });
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
   }
 
   function renderGrid() {
@@ -196,8 +256,26 @@
   // --- wiring --------------------------------------------------------------
 
   function wireGrid() {
+    gridEl.addEventListener('mousedown', (event) => {
+      const handle = event.target.closest('.card-resize');
+      if (handle) startResize(handle.dataset.resize, event);
+    });
+
+    gridEl.addEventListener('dblclick', (event) => {
+      const handle = event.target.closest('.card-resize');
+      if (!handle) return;
+      saveLayout(handle.dataset.resize, { height: 0 });
+      renderCard(handle.dataset.resize);
+    });
+
     gridEl.addEventListener('click', (event) => {
-      const refresh = event.target.closest('.card-refresh');
+      const widen = event.target.closest('[data-widen]');
+      if (widen) {
+        event.stopPropagation();
+        toggleWidth(widen.dataset.widen);
+        return;
+      }
+      const refresh = event.target.closest('[data-refresh]');
       if (refresh) {
         event.stopPropagation();
         refreshProvider(refresh.dataset.refresh, refresh);
@@ -320,12 +398,22 @@
     }
   }
 
+  /// Show first-run setup, but only while it is genuinely unanswered.
+  ///
+  /// Skipping counts as answering: a wizard that reappears every launch until
+  /// you complete it is worse than no wizard.
+  function maybeOpenSetup() {
+    if (!settings || settings.setupComplete) return false;
+    window.DevHubSetup.open();
+    return true;
+  }
+
   // Exposed for the renderer specs, which drive these directly against stubs
   // rather than reaching into the closure. `toast` is also how settings.js
   // reports back without owning a second notification surface.
   window.DevHubDashboard = {
     load, renderGrid, renderCard, results, relativeAge, rowHtml, cardHtml,
-    toggleCard, refreshAll, toast, reportShortcut,
+    toggleCard, refreshAll, toast, reportShortcut, maybeOpenSetup,
     collapsedSet: () => collapsed,
   };
 
@@ -335,7 +423,10 @@
     window.DevHubSettings.init(api, {
       onSaved: () => { toast('Settings saved'); load(); },
     });
+    window.DevHubSetup.init(api, {
+      onDone: () => { toast('Ready to go'); load(); },
+    });
     wireEvents();
-    load();
+    load().then(maybeOpenSetup);
   }
 })();

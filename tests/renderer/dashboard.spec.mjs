@@ -53,8 +53,13 @@ await page.addInitScript(() => {
   window.hubApi = {
     getSettings: async () => window.__settings || {
       theme: 'dark', launcherShortcut: 'CommandOrControl+Shift+Space',
-      dashboardColumns: 2, collapsed: [],
+      dashboardColumns: 2, collapsed: [], cardLayout: {},
+      // Already set up: first-run setup has its own spec.
+      setupComplete: true,
     },
+    setupSuggestions: async () => ({ tools: [], repoRoots: [], notebookRoot: '' }),
+    runAtLogin: async () => false,
+    setRunAtLogin: async (enabled) => enabled,
     saveSettings: async (patch) => {
       window.__calls.push(['saveSettings', JSON.stringify(patch)]);
       window.__settings = Object.assign({}, window.__settings, patch);
@@ -160,7 +165,7 @@ await page.evaluate(() => { window.__runResult = { success: true }; });
 
 // --- Refresh --------------------------------------------------------------
 
-await page.click('.card[data-provider="health"] .card-refresh');
+await page.click('.card[data-provider="health"] [data-refresh]');
 await page.waitForTimeout(150);
 check('the per-card refresh button refreshes only that provider', await page.evaluate(() =>
   window.__calls.some(c => c[0] === 'refreshProvider' && c[1] === 'health')));
@@ -206,6 +211,52 @@ await page.click('.card[data-provider="launch"] .card-header');
 await page.waitForTimeout(120);
 check('clicking again expands it', await page.evaluate(() =>
   !document.querySelector('.card[data-provider="launch"]').classList.contains('collapsed')));
+
+// --- Card sizing ----------------------------------------------------------
+
+// The projects card was replaced by the provider-updated test above with
+// action-less items, so this reads the launch card, which still has its.
+check('action buttons carry their label, not just a glyph', await page.evaluate(() => {
+  const button = document.querySelector('.card[data-provider="launch"] .row-btn');
+  return button.textContent.trim() === 'Copy URL' && !!button.querySelector('svg');
+}));
+
+check('cards start one column wide', await page.evaluate(() =>
+  document.querySelector('.card[data-provider="launch"]').style.gridColumn === 'span 1'));
+
+await page.click('.card[data-provider="launch"] [data-widen]');
+await page.waitForTimeout(150);
+check('the widen button spans the card across two columns', await page.evaluate(() =>
+  document.querySelector('.card[data-provider="launch"]').style.gridColumn === 'span 2'));
+check('the new width is persisted', await page.evaluate(() =>
+  window.__calls.some(c => c[0] === 'saveSettings' && c[1].includes('"span":2'))));
+
+await page.click('.card[data-provider="launch"] [data-widen]');
+await page.waitForTimeout(150);
+check('clicking again narrows it back', await page.evaluate(() =>
+  document.querySelector('.card[data-provider="launch"]').style.gridColumn === 'span 1'));
+
+// Drag the handle down 60px and let go.
+const handle = await page.$('.card[data-provider="projects"] .card-resize');
+const box = await handle.boundingBox();
+await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+await page.mouse.down();
+await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + 60, { steps: 6 });
+await page.mouse.up();
+await page.waitForTimeout(200);
+check('dragging the handle sets an explicit body height', await page.evaluate(() => {
+  const body = document.querySelector('.card[data-provider="projects"] .card-body');
+  return /\d+px/.test(body.style.maxHeight);
+}));
+check('the dragged height is persisted', await page.evaluate(() =>
+  window.__calls.some(c => c[0] === 'saveSettings' && /"height":\d+/.test(c[1]))));
+
+await page.dblclick('.card[data-provider="projects"] .card-resize');
+await page.waitForTimeout(200);
+check('double-clicking the handle goes back to sizing by content', await page.evaluate(() => {
+  const body = document.querySelector('.card[data-provider="projects"] .card-body');
+  return !body.style.maxHeight;
+}));
 
 // --- Top strip ------------------------------------------------------------
 

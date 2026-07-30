@@ -57,6 +57,13 @@
   --inset-bg: rgba(0, 0, 0, 0.2);        /* recessed control groups */
   --overlay-bg: rgba(0, 0, 0, 0.7);      /* modal backdrop */
 
+  /* Form controls must be OPAQUE. A native <select> hands its own background
+     to the OS dropdown, and a translucent one composites against the desktop
+     rather than the app — on Windows that renders the closed list white, with
+     white text on it, readable only under the hover highlight. */
+  --control-bg: #161b22;
+  --control-text: #e6edf3;
+
   /* Shared shape tokens */
   --radius-sm: 4px;
   --radius-md: 6px;
@@ -100,6 +107,8 @@ body[data-theme="light"] {
   --scrollbar-thumb: rgba(31, 35, 40, 0.12);
   --scrollbar-thumb-hover: rgba(31, 35, 40, 0.22);
   --inset-bg: rgba(31, 35, 40, 0.04);
+  --control-bg: #ffffff;
+  --control-text: #1f2328;
 }
 
 body[data-theme="dark"] { color-scheme: dark; }
@@ -326,7 +335,7 @@ select:focus-visible {
   white-space: nowrap;
 }
 
-.card-refresh {
+.card-btn {
   border: none;
   background: transparent;
   color: var(--text-muted);
@@ -334,12 +343,41 @@ select:focus-visible {
   display: flex;
   padding: 4px;
   border-radius: var(--radius-sm);
+  flex-shrink: 0;
 }
-.card-refresh:hover { color: var(--accent-blue); background: var(--surface-hover); }
-.card-refresh svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; }
-.card-refresh.spinning svg { animation: spin 0.9s linear infinite; }
+.card-btn:hover { color: var(--accent-blue); background: var(--surface-hover); }
+.card-btn svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; }
+.card-btn.spinning svg { animation: spin 0.9s linear infinite; }
 
 .card-body { padding: 6px; max-height: 420px; overflow-y: auto; }
+
+/* Drag to set a card's height; double-click to go back to sizing by content. */
+.card-resize {
+  height: 9px;
+  cursor: ns-resize;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.card-resize::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 3px;
+  width: 28px;
+  height: 3px;
+  margin-left: -14px;
+  border-radius: 999px;
+  background: var(--border-color);
+  transition: background 0.12s ease;
+}
+
+.card:hover .card-resize::after { background: var(--text-muted); }
+.card-resize:hover::after { background: var(--accent-blue); }
+.card.collapsed .card-resize { display: none; }
+
+/* While dragging, stop the pointer selecting text across the whole grid. */
+body.resizing { user-select: none; cursor: ns-resize; }
 
 .card-error {
   margin: 6px;
@@ -439,13 +477,19 @@ select:focus-visible {
 .card-row:hover .row-actions,
 .card-row:focus-within .row-actions { opacity: 1; }
 
+/* Labelled, not icon-only. A row of bare glyphs means hovering each one to
+   find out what it does, which is slower than reading three words. */
 .row-btn {
-  width: 26px;
   height: 26px;
+  padding: 0 9px;
+  gap: 5px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-color);
   background: var(--bg-tertiary);
   color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 11.5px;
+  white-space: nowrap;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -453,7 +497,7 @@ select:focus-visible {
 }
 
 .row-btn:hover { color: var(--text-heading); border-color: var(--accent-blue); }
-.row-btn svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; }
+.row-btn svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; flex-shrink: 0; }
 
 /* ---------------------------------------------------------------------------
    Settings
@@ -613,6 +657,19 @@ select:focus-visible {
 
 #settings-body textarea { font-family: var(--font-mono); font-size: 11.5px; line-height: 1.55; width: 100%; resize: vertical; }
 #settings-body input:focus, #settings-body select:focus, #settings-body textarea:focus { border-color: var(--accent-blue); }
+
+/* Opaque, and the options styled explicitly — see --control-bg. `color-scheme`
+   additionally tells the OS to draw the popup's own chrome to match. */
+#settings-body select {
+  background: var(--control-bg);
+  color: var(--control-text);
+  color-scheme: inherit;
+}
+
+#settings-body select option {
+  background: var(--control-bg);
+  color: var(--control-text);
+}
 #settings-body input.narrow { flex: 0 0 78px; }
 #settings-body input.narrow-id { flex: 0 0 130px; }
 #settings-body input.grow { flex: 2; }
@@ -727,6 +784,103 @@ select:focus-visible {
 }
 
 .chip-btn:hover { border-color: var(--accent-blue); color: var(--text-heading); }
+
+/* ---------------------------------------------------------------------------
+   First-run setup
+   --------------------------------------------------------------------------- */
+
+#setup-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay-bg);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 950;
+  padding: 24px;
+}
+
+#setup-overlay.visible { display: flex; }
+
+#setup-panel {
+  width: min(600px, 100%);
+  max-height: min(760px, 100%);
+  display: flex;
+  flex-direction: column;
+  background: var(--menu-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-xl);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+#setup-head {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 20px 22px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+#setup-head img { width: 38px; height: 38px; flex-shrink: 0; }
+
+#setup-head h2 {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-heading);
+  margin-bottom: 3px;
+}
+
+#setup-head p { font-size: 12.5px; color: var(--text-muted); line-height: 1.5; }
+
+#setup-body { flex: 1; padding: 18px 22px; overflow-y: auto; }
+
+.setup-step { margin-bottom: 24px; }
+
+.setup-step h3 {
+  font-family: var(--font-display);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-strong);
+  margin-bottom: 8px;
+}
+
+.setup-step code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+  background: var(--chip-bg);
+  word-break: break-all;
+}
+
+.setup-check {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 9px 11px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-tertiary);
+  cursor: pointer;
+}
+
+.setup-check:hover { border-color: var(--accent-blue); }
+.setup-check input { margin-top: 2px; accent-color: var(--accent-blue); }
+.setup-check-body { min-width: 0; }
+.setup-check-body .set-label { display: block; margin-bottom: 2px; }
+.setup-check-body .set-hint { margin-bottom: 0; word-break: break-all; }
+
+#setup-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 22px;
+  border-top: 1px solid var(--border-color);
+}
 
 /* ---------------------------------------------------------------------------
    Toast

@@ -66,9 +66,62 @@ pub async fn refresh_one(
 ) -> ProviderResult {
     let result = provider.items(config).await;
     let state = app.state::<AppState>();
+    let previous = state.result(provider.id());
     state.set_result(result.clone());
+    notify_new_failures(app, previous.as_ref(), &result);
     emit_result(app, &result);
     result
+}
+
+/// Tell the user when something that was fine has broken.
+///
+/// Only the transition is worth a notification — a service that has been down
+/// all afternoon should not toast every refresh interval, which is the fastest
+/// way to teach someone to ignore the app. Off unless they asked for it.
+fn notify_new_failures(
+    app: &AppHandle,
+    previous: Option<&ProviderResult>,
+    current: &ProviderResult,
+) {
+    use tauri_plugin_notification::NotificationExt;
+
+    let state = app.state::<AppState>();
+    if !state.settings().notify_on_failure {
+        return;
+    }
+    // Nothing to compare against on the first load: everything would look new,
+    // and announcing a service that was already down at launch is noise.
+    let Some(previous) = previous else { return };
+    if previous.refreshed_at == 0 {
+        return;
+    }
+
+    let was_failing: std::collections::HashSet<&str> = previous
+        .items
+        .iter()
+        .filter(|item| item.status == crate::model::Status::Error)
+        .map(|item| item.id.as_str())
+        .collect();
+
+    for item in current
+        .items
+        .iter()
+        .filter(|item| item.status == crate::model::Status::Error)
+    {
+        if was_failing.contains(item.id.as_str()) {
+            continue; // already known to be down
+        }
+        let body = item
+            .subtitle
+            .clone()
+            .unwrap_or_else(|| "Not responding".into());
+        let _ = app
+            .notification()
+            .builder()
+            .title(format!("{} is failing", item.title))
+            .body(body)
+            .show();
+    }
 }
 
 /// Rebuild the provider set and restart its refresh loops.

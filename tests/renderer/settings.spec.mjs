@@ -35,9 +35,16 @@ await page.addInitScript(() => {
   window.hubApi = {
     getSettings: async () => window.__settings || {
       theme: 'dark', launcherShortcut: 'CommandOrControl+Shift+Space', keepInTray: true,
-      startMinimized: false, dashboardColumns: 2,
+      startMinimized: false, dashboardColumns: 2, notifyOnFailure: false,
       providers: { launch: true, projects: true, todos: true, health: true },
-      collapsed: [],
+      collapsed: [], cardLayout: {}, setupComplete: true,
+    },
+    setupSuggestions: async () => ({ tools: [], repoRoots: [], notebookRoot: '' }),
+    runAtLogin: async () => window.__runAtLogin || false,
+    setRunAtLogin: async (enabled) => {
+      window.__calls.push(['setRunAtLogin', String(enabled)]);
+      window.__runAtLogin = enabled;
+      return enabled;
     },
     saveSettings: async (patch) => {
       window.__calls.push(['saveSettings', JSON.stringify(patch)]);
