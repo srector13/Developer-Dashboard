@@ -302,53 +302,49 @@ struct RunSpec {
 
 /// Build the command for a program name.
 ///
-/// On Windows, `CreateProcess` only ever appends `.exe`, so a config entry of
-/// `code` or `npm` — which are really `code.cmd` and `npm.cmd` — would fail to
-/// launch with a bare "not found". Anything that isn't already an `.exe` goes
-/// through `cmd /C`, which does consult PATHEXT.
-fn build_command(spec: &RunSpec) -> std::process::Command {
+/// The program is resolved to a concrete executable first (see
+/// `util::resolve_program`), so a name that isn't installed fails *here*, with
+/// a message naming it, instead of appearing to launch. A resolved batch file
+/// still has to go through the interpreter, but by then we know it exists.
+fn build_command(spec: &RunSpec) -> Result<std::process::Command, String> {
+    let resolved = util::resolve_program(&spec.program).ok_or_else(|| {
+        format!(
+            "{} is not installed, or not on the PATH this app inherited.",
+            spec.program
+        )
+    })?;
+
+    let mut command = if util::needs_command_interpreter(&resolved) {
+        let mut command = std::process::Command::new("cmd");
+        command.arg("/C").arg(&resolved).args(&spec.args);
+        command
+    } else {
+        let mut command = std::process::Command::new(&resolved);
+        command.args(&spec.args);
+        command
+    };
+
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-        let is_exe = std::path::Path::new(&spec.program)
-            .extension()
-            .map(|e| e.eq_ignore_ascii_case("exe"))
-            .unwrap_or(false);
-
-        let mut command = if is_exe {
-            let mut command = std::process::Command::new(&spec.program);
-            command.args(&spec.args);
-            command
-        } else {
-            let mut command = std::process::Command::new("cmd");
-            command.arg("/C").arg(&spec.program).args(&spec.args);
-            command
-        };
         // Never flash a console — this app is summoned from a hotkey.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
-        if let Some(cwd) = spec.cwd.as_deref().filter(|c| !c.trim().is_empty()) {
-            command.current_dir(cwd);
-        }
-        command
     }
-    #[cfg(not(windows))]
-    {
-        let mut command = std::process::Command::new(&spec.program);
-        command.args(&spec.args);
-        if let Some(cwd) = spec.cwd.as_deref().filter(|c| !c.trim().is_empty()) {
-            command.current_dir(cwd);
-        }
-        command
+    if let Some(cwd) = spec.cwd.as_deref().filter(|c| !c.trim().is_empty()) {
+        command.current_dir(cwd);
     }
+    Ok(command)
 }
 
 fn run_program(spec: &RunSpec) -> ActionResult {
     if spec.program.trim().is_empty() {
         return ActionResult::failed("No program configured for that action.");
     }
-    let mut command = build_command(spec);
+    let mut command = match build_command(spec) {
+        Ok(command) => command,
+        Err(message) => return ActionResult::failed(message),
+    };
 
     if spec.capture {
         return match command.output() {
@@ -488,44 +484,80 @@ mod tests {
             .contains("dev-hub-definitely-not-installed"));
     }
 
+    /// A program that exists on every machine CI runs on. `echo` is a cmd
+    /// *builtin* on Windows, not an executable, so it can't be the one.
+    fn echo_spec(text: &str) -> RunSpec {
+        if cfg!(windows) {
+            RunSpec {
+                program: "cmd".into(),
+                args: vec!["/C".into(), "echo".into(), text.into()],
+                cwd: None,
+                capture: true,
+            }
+        } else {
+            RunSpec {
+                program: "echo".into(),
+                args: vec![text.into()],
+                cwd: None,
+                capture: true,
+            }
+        }
+    }
+
     #[test]
     fn a_captured_run_returns_the_programs_stdout() {
-        // `cmd /C echo` on Windows, `echo` elsewhere — build_command picks.
-        let result = run_program(&RunSpec {
-            program: "echo".into(),
-            args: vec!["hello".into()],
-            cwd: None,
-            capture: true,
-        });
+        let result = run_program(&echo_spec("hello"));
         assert!(result.success, "{:?}", result.message);
         assert_eq!(result.output.unwrap().trim(), "hello");
     }
 
-    #[cfg(windows)]
+    /// The regression this whole resolution path exists for: a fire-and-forget
+    /// spawn of a program that isn't installed used to start `cmd` (which
+    /// succeeds) and only then fail to find the program, so the launcher
+    /// reported success, hid itself, and nothing happened.
     #[test]
-    fn non_exe_programs_go_through_cmd_so_shims_like_code_cmd_resolve() {
-        let spec = RunSpec {
-            program: "code".into(),
-            args: vec!["C:\\dev".into()],
+    fn a_fire_and_forget_run_of_a_missing_program_still_fails() {
+        let result = run_program(&RunSpec {
+            program: "dev-hub-definitely-not-installed".into(),
+            args: vec!["--flag".into()],
             cwd: None,
             capture: false,
-        };
-        let command = build_command(&spec);
-        assert_eq!(command.get_program(), "cmd");
-        let args: Vec<_> = command.get_args().collect();
-        assert_eq!(args[0], "/C");
-        assert_eq!(args[1], "code");
+        });
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn a_resolved_batch_file_goes_through_the_interpreter() {
+        assert!(util::needs_command_interpreter(std::path::Path::new(
+            "C:\\bin\\code.cmd"
+        )));
+        assert!(util::needs_command_interpreter(std::path::Path::new(
+            "C:\\bin\\build.BAT"
+        )));
+        // An exe is launched directly — no cmd in the middle to swallow errors.
+        assert!(!util::needs_command_interpreter(std::path::Path::new(
+            "C:\\bin\\idea64.exe"
+        )));
     }
 
     #[cfg(windows)]
     #[test]
-    fn an_explicit_exe_is_launched_directly() {
-        let spec = RunSpec {
-            program: "C:\\bin\\idea64.exe".into(),
-            args: vec![],
-            cwd: None,
-            capture: false,
-        };
-        assert_eq!(build_command(&spec).get_program(), "C:\\bin\\idea64.exe");
+    fn a_bare_name_resolves_through_path_and_pathext() {
+        // cmd.exe is on the PATH of every Windows machine, without its
+        // extension being spelled out.
+        let resolved = util::resolve_program("cmd").expect("cmd must resolve");
+        assert!(resolved.is_file());
+        assert_eq!(
+            resolved
+                .extension()
+                .map(|e| e.to_string_lossy().to_lowercase()),
+            Some("exe".to_string())
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_absolute_path_is_used_as_given_and_never_looked_up_on_path() {
+        assert!(util::resolve_program("C:\\definitely\\not\\here.exe").is_none());
     }
 }

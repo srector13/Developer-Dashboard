@@ -69,15 +69,32 @@ async fn run(config: &CommandProviderConfig) -> Result<Vec<Item>, String> {
     if config.program.trim().is_empty() {
         return Err("no program configured".into());
     }
-    let mut command = tokio::process::Command::new(&config.program);
-    command.args(&config.args).kill_on_drop(true);
+    // Resolved the same way an action's program is, so a config that says `npm`
+    // or `gh` works on Windows where those are really `.cmd` shims — and so a
+    // missing tool says so on the card instead of failing obscurely.
+    let resolved = crate::util::resolve_program(&config.program).ok_or_else(|| {
+        format!(
+            "{} is not installed, or not on the PATH this app inherited",
+            config.program
+        )
+    })?;
+    let mut command = if crate::util::needs_command_interpreter(&resolved) {
+        let mut command = tokio::process::Command::new("cmd");
+        command.arg("/C").arg(&resolved).args(&config.args);
+        command
+    } else {
+        let mut command = tokio::process::Command::new(&resolved);
+        command.args(&config.args);
+        command
+    };
+    command.kill_on_drop(true);
     if let Some(cwd) = config.cwd.as_deref().filter(|c| !c.trim().is_empty()) {
         command.current_dir(cwd);
     }
     #[cfg(windows)]
     {
         // CREATE_NO_WINDOW — otherwise every refresh flashes a console.
-        use std::os::windows::process::CommandExt;
+        // tokio's Command carries this inherently on Windows; no import needed.
         command.creation_flags(0x0800_0000);
     }
 
@@ -199,7 +216,11 @@ mod tests {
             timeout_ms: 2000,
         })
         .await;
-        assert!(result.unwrap_err().contains("could not run"));
+        // The wording differs by platform — Windows fails at resolution, Unix
+        // at spawn — but either way the card names the program that is missing.
+        assert!(result
+            .unwrap_err()
+            .contains("definitely-not-a-real-program-xyz"));
     }
 
     #[tokio::test]
