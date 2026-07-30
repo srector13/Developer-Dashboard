@@ -73,26 +73,27 @@ impl Default for AiSettings {
 }
 
 /// One card's size on the dashboard grid.
+///
+/// Presets rather than a pixel height. Freeform dragging produced overlapping,
+/// misaligned cards because a grid cell's height is not the card's to decide —
+/// its neighbours share the row. Three sizes, expressed as a column span and a
+/// proportion of the window, keep every row aligned by construction.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CardLayout {
-    /// Columns to span. Clamped against the grid width when it renders.
-    #[serde(default = "one")]
-    pub span: u32,
-    /// Body height in pixels; `None` means size to content.
-    #[serde(default)]
-    pub height: Option<u32>,
+    /// "small" | "medium" | "large". Unknown values fall back to medium.
+    #[serde(default = "default_card_size")]
+    pub size: String,
 }
 
-fn one() -> u32 {
-    1
+fn default_card_size() -> String {
+    "medium".to_string()
 }
 
 impl Default for CardLayout {
     fn default() -> Self {
         Self {
-            span: 1,
-            height: None,
+            size: default_card_size(),
         }
     }
 }
@@ -121,9 +122,14 @@ pub struct AppSettings {
     /// False until first-run setup has been completed or dismissed.
     #[serde(default)]
     pub setup_complete: bool,
-    /// Per-card layout from the dashboard's resize handles, keyed by provider.
+    /// Per-card size, keyed by provider.
     #[serde(default)]
     pub card_layout: std::collections::HashMap<String, CardLayout>,
+    /// Provider ids in the order the user dragged them into. Providers missing
+    /// from this list keep their registry order and land at the end, so a new
+    /// card appears rather than disappearing.
+    #[serde(default)]
+    pub card_order: Vec<String>,
     pub ai: AiSettings,
     /// Card collapse state, keyed by provider id. Written by the dashboard.
     #[serde(default)]
@@ -143,6 +149,7 @@ impl Default for AppSettings {
             notify_on_failure: false,
             setup_complete: false,
             card_layout: std::collections::HashMap::new(),
+            card_order: Vec::new(),
             ai: AiSettings::default(),
             collapsed: Vec::new(),
         }
@@ -282,10 +289,22 @@ pub struct TodosConfig {
 }
 
 fn default_todo_excludes() -> Vec<String> {
-    ["index", "toc", "_toc", "contents", "_index", "readme"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
+    [
+        // Aggregate notes: these collect tasks that live in other files, so
+        // scanning them reports every todo a second time.
+        ".toc.md",
+        ".tasks.md",
+        // Whole-name matches for the generated directory indexes.
+        "index",
+        "toc",
+        "_toc",
+        "contents",
+        "_index",
+        "readme",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 fn default_true() -> bool {

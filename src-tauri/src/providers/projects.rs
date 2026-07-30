@@ -225,6 +225,11 @@ pub fn item_for(path: &Path, status: &RepoStatus, config: &ProjectsConfig, now: 
         .keyword(status.branch.clone());
 
     let path_str = path.to_string_lossy().into_owned();
+
+    // The configured editors go behind one "Open with" menu. Four IDEs meant
+    // four buttons on every row, which is a worse-looking menu that also makes
+    // the rows shift width depending on how many you happen to have.
+    let openers_start = item.actions.len();
     for opener in &config.open_with {
         if opener.program.trim().is_empty() {
             continue;
@@ -241,27 +246,32 @@ pub fn item_for(path: &Path, status: &RepoStatus, config: &ProjectsConfig, now: 
             capture: false,
         });
     }
-    // Always openable, even with no `openWith` configured at all.
-    item = item.action(Action::OpenPath {
-        label: "Open folder".into(),
-        path: path_str.clone(),
-    });
+    // Always openable, even with no `openWith` configured at all — so it joins
+    // the menu rather than sitting outside it.
+    item = item
+        .action(Action::OpenPath {
+            label: "Open folder".into(),
+            path: path_str.clone(),
+        })
+        .group_from("Open with", openers_start);
 
     if let Some(web) = status
         .remote_url
         .as_deref()
         .and_then(util::remote_to_web_url)
     {
+        let remote_start = item.actions.len();
         item = item.action(Action::OpenUrl {
-            label: "Open remote".into(),
+            label: "Repository".into(),
             url: web.clone(),
         });
         if !status.branch.is_empty() && status.branch != "detached" {
             item = item.action(Action::OpenUrl {
-                label: "Open branch on remote".into(),
+                label: format!("Branch: {}", status.branch),
                 url: util::branch_web_url(&web, &status.branch),
             });
         }
+        item = item.group_from("Open remote", remote_start);
     }
 
     item.action(Action::Reveal {
@@ -521,6 +531,66 @@ mod tests {
             .collect();
         assert!(urls.contains(&"https://github.com/srector13/fixture"));
         assert!(urls.iter().any(|u| u.contains("/tree/")));
+    }
+
+    #[test]
+    fn every_configured_editor_lands_in_one_open_with_menu() {
+        let fixture = Fixture::new("grouped");
+        let status = read_status(&fixture.dir).unwrap();
+        let config = ProjectsConfig {
+            open_with: vec![
+                OpenWith {
+                    label: "IntelliJ".into(),
+                    program: "idea64.exe".into(),
+                    args: vec!["{path}".into()],
+                },
+                OpenWith {
+                    label: "VS Code".into(),
+                    program: "code".into(),
+                    args: vec!["{path}".into()],
+                },
+            ],
+            ..Default::default()
+        };
+        let item = item_for(&fixture.dir, &status, &config, util::now_secs());
+
+        let open_with = item
+            .action_groups
+            .iter()
+            .find(|g| g.label == "Open with")
+            .expect("the editors should be grouped");
+        // Both editors plus "Open folder", so the menu is the one place that
+        // answers "how do I open this".
+        assert_eq!(open_with.actions.len(), 3);
+        let labels: Vec<&str> = open_with
+            .actions
+            .iter()
+            .map(|i| item.actions[*i].label())
+            .collect();
+        assert_eq!(labels, vec!["IntelliJ", "VS Code", "Open folder"]);
+
+        // Grouping is advisory: the indices still address the real actions.
+        assert!(open_with.actions.iter().all(|i| *i < item.actions.len()));
+
+        let remote = item
+            .action_groups
+            .iter()
+            .find(|g| g.label == "Open remote")
+            .expect("the remote links should be grouped too");
+        assert_eq!(remote.actions.len(), 2);
+    }
+
+    #[test]
+    fn a_repo_with_no_remote_has_no_remote_menu() {
+        let dir = std::env::temp_dir().join(format!("dev-hub-noremote-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        git2::Repository::init(&dir).unwrap();
+
+        let status = read_status(&dir).unwrap();
+        let item = item_for(&dir, &status, &ProjectsConfig::default(), util::now_secs());
+        assert!(!item.action_groups.iter().any(|g| g.label == "Open remote"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

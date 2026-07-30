@@ -28,6 +28,17 @@ on first run.
 
 ---
 
+## The dashboard
+
+Cards sit on a grid, each in one of three sizes — **S**, **M**, **L** — chosen
+from the control that appears when you hover a card. Sizes are whole numbers of
+grid rows and columns, so rows always line up; a large card takes two columns
+where there are two to take. Drag a card by its header to rearrange, and the
+rest close up around it. Both are remembered.
+
+Each provider has its own colour, so a card is identifiable before you've read
+its title.
+
 ## The idea
 
 Everything in the app is a **provider** that yields **items** that carry
@@ -129,6 +140,11 @@ updates the Todos card within a second or two rather than waiting out the
 refresh interval. The watcher ignores everything the provider wouldn't read —
 `.git`, `attachments`, `templates`, non-markdown files — so a `git status` in
 your notes repo doesn't trigger a rescan.
+
+Aggregate notes — `*.toc.md`, `*.tasks.md`, and generated folder indexes — are
+skipped, because they list todos that live in other files and would otherwise
+report each one twice. Identical todos are also collapsed, keeping the copy in
+the note you'd actually edit. Both are adjustable in Settings → Todos.
 
 ### `settings.json`
 

@@ -50,13 +50,34 @@ await page.addInitScript(() => {
     { provider: 'health', displayName: 'Health', refreshedAt: 0, error: null, items: [] },
   ];
 
+  // A provider whose item groups its openers, as `projects` does in practice.
+  window.__groupedResult = {
+    provider: 'grouped', displayName: 'Grouped', refreshedAt: now, error: null,
+    items: [{
+      id: 'g1', provider: 'grouped', title: 'payments-api', subtitle: 'C:/dev/payments-api',
+      status: 'neutral', badges: [],
+      actions: [
+        { kind: 'run', label: 'IntelliJ', program: 'idea64.exe', args: [], capture: false },
+        { kind: 'run', label: 'VS Code', program: 'code', args: [], capture: false },
+        { kind: 'openPath', label: 'Open folder', path: 'C:/dev/payments-api' },
+        { kind: 'copyText', label: 'Copy path', text: 'C:/dev/payments-api' },
+      ],
+      actionGroups: [{ label: 'Open with', actions: [0, 1, 2] }],
+    }],
+  };
+
+  // Seeded rather than defaulted inside getSettings: saveSettings merges onto
+  // this object, and merging onto `undefined` silently dropped every key the
+  // patch didn't mention.
+  window.__settings = {
+    theme: 'dark', launcherShortcut: 'CommandOrControl+Shift+Space',
+    dashboardColumns: 2, collapsed: [], cardLayout: {}, cardOrder: [],
+    // Already set up: first-run setup has its own spec.
+    setupComplete: true,
+  };
+
   window.hubApi = {
-    getSettings: async () => window.__settings || {
-      theme: 'dark', launcherShortcut: 'CommandOrControl+Shift+Space',
-      dashboardColumns: 2, collapsed: [], cardLayout: {},
-      // Already set up: first-run setup has its own spec.
-      setupComplete: true,
-    },
+    getSettings: async () => window.__settings,
     setupSuggestions: async () => ({ tools: [], repoRoots: [], notebookRoot: '' }),
     runAtLogin: async () => false,
     setRunAtLogin: async (enabled) => enabled,
@@ -214,6 +235,10 @@ check('clicking again expands it', await page.evaluate(() =>
 
 // --- Card sizing ----------------------------------------------------------
 
+// Bring in the grouped-actions card for the menu assertions below.
+await page.evaluate(() => window.__providerUpdated(window.__groupedResult));
+await page.waitForTimeout(150);
+
 // The projects card was replaced by the provider-updated test above with
 // action-less items, so this reads the launch card, which still has its.
 check('action buttons carry their label, not just a glyph', await page.evaluate(() => {
@@ -221,41 +246,135 @@ check('action buttons carry their label, not just a glyph', await page.evaluate(
   return button.textContent.trim() === 'Copy URL' && !!button.querySelector('svg');
 }));
 
-check('cards start one column wide', await page.evaluate(() =>
-  document.querySelector('.card[data-provider="launch"]').style.gridColumn === 'span 1'));
+check('cards default to the medium preset', await page.evaluate(() =>
+  document.querySelector('.card[data-provider="launch"]').classList.contains('size-medium')));
 
-await page.click('.card[data-provider="launch"] [data-widen]');
-await page.waitForTimeout(150);
-check('the widen button spans the card across two columns', await page.evaluate(() =>
-  document.querySelector('.card[data-provider="launch"]').style.gridColumn === 'span 2'));
-check('the new width is persisted', await page.evaluate(() =>
-  window.__calls.some(c => c[0] === 'saveSettings' && c[1].includes('"span":2'))));
-
-await page.click('.card[data-provider="launch"] [data-widen]');
-await page.waitForTimeout(150);
-check('clicking again narrows it back', await page.evaluate(() =>
-  document.querySelector('.card[data-provider="launch"]').style.gridColumn === 'span 1'));
-
-// Drag the handle down 60px and let go.
-const handle = await page.$('.card[data-provider="projects"] .card-resize');
-const box = await handle.boundingBox();
-await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-await page.mouse.down();
-await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + 60, { steps: 6 });
-await page.mouse.up();
-await page.waitForTimeout(200);
-check('dragging the handle sets an explicit body height', await page.evaluate(() => {
-  const body = document.querySelector('.card[data-provider="projects"] .card-body');
-  return /\d+px/.test(body.style.maxHeight);
+check('every card is a whole number of grid rows, so rows stay aligned', await page.evaluate(() => {
+  const spans = [...document.querySelectorAll('.card')]
+    .map(c => getComputedStyle(c).gridRowEnd);
+  return spans.every(s => /^span \d+$/.test(s));
 }));
-check('the dragged height is persisted', await page.evaluate(() =>
-  window.__calls.some(c => c[0] === 'saveSettings' && /"height":\d+/.test(c[1]))));
 
-await page.dblclick('.card[data-provider="projects"] .card-resize');
+await page.click('.card[data-provider="launch"] .size-btn[data-size="large"]');
 await page.waitForTimeout(200);
-check('double-clicking the handle goes back to sizing by content', await page.evaluate(() => {
-  const body = document.querySelector('.card[data-provider="projects"] .card-body');
-  return !body.style.maxHeight;
+check('choosing Large applies the preset', await page.evaluate(() => {
+  const card = document.querySelector('.card[data-provider="launch"]');
+  return card.classList.contains('size-large') && !card.classList.contains('size-medium');
+}));
+check('a large card spans two columns', await page.evaluate(() =>
+  getComputedStyle(document.querySelector('.card[data-provider="launch"]')).gridColumnEnd === 'span 2'));
+check('the size is persisted', await page.evaluate(() =>
+  window.__calls.some(c => c[0] === 'saveSettings' && c[1].includes('"size":"large"'))));
+
+await page.click('.card[data-provider="launch"] .size-btn[data-size="small"]');
+await page.waitForTimeout(200);
+check('choosing Small applies too, and drops back to one column', await page.evaluate(() => {
+  const card = document.querySelector('.card[data-provider="launch"]');
+  // Measured against a card known to be one column wide, rather than against
+  // the computed grid-column — an unspanned card computes to `auto`, not
+  // `span 1`, so asserting on the string would be asserting on CSS trivia.
+  const single = document.querySelector('.card[data-provider="projects"]');
+  return card.classList.contains('size-small')
+    && Math.abs(card.getBoundingClientRect().width - single.getBoundingClientRect().width) < 2;
+}));
+check('the active size is the one marked in the control', await page.evaluate(() => {
+  const active = document.querySelector('.card[data-provider="launch"] .size-btn.active');
+  return active && active.dataset.size === 'small';
+}));
+
+check('cards never overlap each other', await page.evaluate(() => {
+  const boxes = [...document.querySelectorAll('.card')].map(c => c.getBoundingClientRect());
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = i + 1; j < boxes.length; j++) {
+      const a = boxes[i], b = boxes[j];
+      const overlaps = a.left < b.right - 1 && b.left < a.right - 1
+        && a.top < b.bottom - 1 && b.top < a.bottom - 1;
+      if (overlaps) return false;
+    }
+  }
+  return true;
+}));
+
+check('a large card cannot span two columns when the grid has one', await page.evaluate(async () => {
+  window.__settings = Object.assign({}, await window.hubApi.getSettings(), { dashboardColumns: 1 });
+  await window.DevHubDashboard.load();
+  window.DevHubDashboard.setSize('launch', 'large');
+  await new Promise(r => setTimeout(r, 80));
+  const card = document.querySelector('.card[data-provider="launch"]');
+  const grid = document.getElementById('grid');
+  // Never wider than the grid's content box, whatever the preset says.
+  return card.getBoundingClientRect().width <= grid.clientWidth + 1;
+}));
+
+await page.evaluate(async () => {
+  window.__settings = Object.assign({}, await window.hubApi.getSettings(), { dashboardColumns: 2 });
+  window.DevHubDashboard.setSize('launch', 'small');
+  await window.DevHubDashboard.load();
+  // load() re-reads getResults(), which doesn't include the injected grouped
+  // provider — put it back for the assertions below.
+  window.__providerUpdated(window.__groupedResult);
+});
+await page.waitForTimeout(200);
+
+// --- Rearranging ----------------------------------------------------------
+
+check('a provider with no saved order is appended rather than dropped', await page.evaluate(() =>
+  window.DevHubDashboard.orderedProviders().join(',') === 'launch,projects,health,grouped'));
+
+check('dragging is started from the header, not the body', await page.evaluate(() =>
+  document.querySelector('.card-header').getAttribute('draggable') === 'true' &&
+  !document.querySelector('.card-body').getAttribute('draggable')));
+
+// Reorder through the DOM the way a drop does, then persist.
+check('a rearrangement is persisted as the new order', await page.evaluate(() => {
+  const grid = document.getElementById('grid');
+  const launch = document.querySelector('.card[data-provider="launch"]');
+  const health = document.querySelector('.card[data-provider="health"]');
+  grid.insertBefore(launch, health.nextSibling);
+  window.DevHubDashboard.persistOrder();
+  const call = window.__calls.filter(c => c[0] === 'saveSettings').pop();
+  return JSON.parse(call[1]).cardOrder.join(',') === 'projects,health,launch,grouped';
+}));
+
+// --- Grouped actions ------------------------------------------------------
+
+check('grouped actions collapse into one menu button', await page.evaluate(() => {
+  const row = document.querySelector('.card[data-provider="grouped"] .card-row');
+  const buttons = [...row.querySelectorAll('.row-actions > .row-btn, .row-actions > .row-menu > .row-btn')];
+  // Three editors behind "Open with", plus the ungrouped "Copy path" — two
+  // buttons where the old layout would have shown four.
+  return buttons.length === 2
+    && buttons[0].textContent.trim() === 'Open with'
+    && buttons[1].textContent.trim() === 'Copy path';
+}));
+
+check('a grouped action is not also shown as a loose button', await page.evaluate(() => {
+  const labels = [...document.querySelectorAll('.card[data-provider="grouped"] .row-actions > .row-btn')]
+    .map(b => b.textContent.trim());
+  return !labels.includes('IntelliJ') && !labels.includes('VS Code');
+}));
+
+check('the menu is closed until asked for', await page.evaluate(() =>
+  !document.querySelector('.card[data-provider="grouped"] .row-menu.open')));
+
+await page.click('.card[data-provider="grouped"] [data-open-menu]');
+await page.waitForTimeout(150);
+check('opening the menu lists every editor', await page.evaluate(() => {
+  const items = [...document.querySelectorAll('.card[data-provider="grouped"] .row-menu.open .menu-item')];
+  return items.map(i => i.textContent.trim()).join(',') === 'IntelliJ,VS Code,Open folder';
+}));
+
+await page.click('.card[data-provider="grouped"] .row-menu.open .menu-item:nth-child(2)');
+await page.waitForTimeout(150);
+check('choosing one runs that action index', await page.evaluate(() =>
+  window.__calls.some(c => c[0] === 'runAction' && c[1] === 'grouped::g1' && c[2] === 1)));
+check('the menu closes after choosing', await page.evaluate(() =>
+  !document.querySelector('.card[data-provider="grouped"] .row-menu.open')));
+
+check('cards carry a per-provider accent colour', await page.evaluate(() => {
+  const a = document.querySelector('.card[data-provider="launch"]').style.getPropertyValue('--card-accent');
+  const b = document.querySelector('.card[data-provider="projects"]').style.getPropertyValue('--card-accent');
+  return !!a && !!b && a !== b;
 }));
 
 // --- Top strip ------------------------------------------------------------
