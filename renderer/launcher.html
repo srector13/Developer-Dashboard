@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost">
+  <title>Dev Hub Launcher</title>
+  <style>
+    /* The launcher's own chrome variables, lifted from Markdown Notebook so
+       the two launchers are indistinguishable in feel. Do not redesign. */
+    :root {
+      --lg-bg: rgba(28, 30, 38, 0.72);
+      --lg-border: rgba(255, 255, 255, 0.14);
+      --lg-text: #f2f4f8;
+      --lg-dim: #a2a8b6;
+      --lg-accent: #6ea8ff;
+      --lg-orb: rgba(255, 255, 255, 0.08);
+      --lg-orb-active: rgba(110, 168, 255, 0.28);
+      --lg-ok: #3fb950;
+      --lg-warn: #f2c94c;
+      --lg-error: #f85149;
+    }
+    body.light {
+      --lg-bg: rgba(250, 250, 252, 0.82);
+      --lg-border: rgba(0, 0, 0, 0.10);
+      --lg-text: #1a1c22;
+      --lg-dim: #6a7080;
+      --lg-orb: rgba(0, 0, 0, 0.05);
+      --lg-orb-active: rgba(80, 140, 255, 0.20);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      background: transparent;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: var(--lg-text);
+      user-select: none;
+      overflow: hidden;
+    }
+    #shell {
+      margin: 42px;
+      border-radius: 22px;
+      background: var(--lg-bg);
+      border: 1px solid var(--lg-border);
+      /* Layered, feathered falloff — each layer stays within the transparent
+         margin so the window edge never clips it into a hard line. */
+      box-shadow:
+        0 1px 2px rgba(0, 0, 0, 0.12),
+        0 4px 10px rgba(0, 0, 0, 0.16),
+        0 12px 24px rgba(0, 0, 0, 0.20),
+        0 22px 38px rgba(0, 0, 0, 0.22);
+      backdrop-filter: blur(30px) saturate(150%);
+      -webkit-backdrop-filter: blur(30px) saturate(150%);
+      overflow: hidden;
+      -webkit-app-region: drag;
+    }
+    /* Orb rail */
+    #orbs {
+      display: flex;
+      gap: 10px;
+      padding: 16px 18px 6px;
+      justify-content: center;
+      -webkit-app-region: no-drag;
+    }
+    .orb {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+      opacity: 0.72;
+      transition: opacity 0.15s ease, transform 0.18s cubic-bezier(.2,.8,.2,1);
+      width: 66px;
+    }
+    .orb .disc {
+      width: 46px; height: 46px;
+      border-radius: 50%;
+      background: var(--lg-orb);
+      border: 1px solid var(--lg-border);
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s ease, box-shadow 0.2s ease, transform 0.18s cubic-bezier(.2,.8,.2,1);
+    }
+    .orb .disc svg { width: 22px; height: 22px; stroke: var(--lg-text); fill: none; stroke-width: 2; }
+    .orb .label { font-size: 10.5px; color: var(--lg-dim); letter-spacing: 0.2px; }
+    .orb.active { opacity: 1; }
+    .orb.active .disc {
+      background: var(--lg-orb-active);
+      box-shadow: 0 0 0 2px var(--lg-accent), 0 8px 24px rgba(110,168,255,0.35);
+      transform: translateY(-3px) scale(1.06);
+    }
+    .orb.active .label { color: var(--lg-text); font-weight: 600; }
+    .orb:hover { opacity: 1; }
+    /* A provider with nothing in it yet: still reachable, visibly quiet. */
+    .orb.empty .disc { opacity: 0.45; }
+
+    /* Input row */
+    #inputrow {
+      display: flex; align-items: center;
+      padding: 6px 22px 18px;
+      -webkit-app-region: no-drag;
+    }
+    #mode-glyph {
+      margin-right: 12px; width: 26px; height: 26px;
+      display: flex; align-items: center; justify-content: center; color: var(--lg-dim);
+    }
+    #mode-glyph svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 2; }
+    #q {
+      flex: 1;
+      background: transparent; border: none; outline: none;
+      color: var(--lg-text);
+      font-size: 24px; font-weight: 400;
+      caret-color: var(--lg-accent);
+    }
+    #q::placeholder { color: var(--lg-dim); }
+
+    /* Results / body area */
+    #body { -webkit-app-region: no-drag; }
+    #results { list-style: none; padding: 0 10px 10px; max-height: 380px; overflow-y: auto; }
+    .result {
+      display: flex; align-items: center; gap: 12px;
+      padding: 8px 14px; margin: 2px 0;
+      border-radius: 12px; cursor: pointer;
+    }
+    /* Fixed width for the three action slots so titles line up down the list
+       however many actions each item happens to carry. */
+    .r-actions { display: flex; gap: 6px; flex-shrink: 0; min-width: 102px; justify-content: flex-end; }
+    .r-btn {
+      -webkit-app-region: no-drag;
+      width: 30px; height: 30px; border-radius: 8px;
+      border: 1px solid var(--lg-border); background: var(--lg-orb);
+      color: var(--lg-dim); cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.12s ease, color 0.12s ease;
+    }
+    .r-btn:hover { background: var(--lg-orb-active); color: var(--lg-text); }
+    .r-btn svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2; }
+    .r-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .r-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .r-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--lg-dim); }
+    .r-dot.ok { background: var(--lg-ok); }
+    .r-dot.warn { background: var(--lg-warn); }
+    .r-dot.error { background: var(--lg-error); }
+    .r-dot.pending { background: var(--lg-accent); opacity: 0.5; }
+    .result .r-title { font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .result .r-sub { font-size: 11.5px; color: var(--lg-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .r-badges { display: flex; gap: 5px; flex-shrink: 0; }
+    .r-badge {
+      font-size: 10px; padding: 1px 6px; border-radius: 999px;
+      background: var(--lg-orb); border: 1px solid var(--lg-border); color: var(--lg-dim);
+      white-space: nowrap;
+    }
+    .result.sel { background: var(--lg-orb-active); }
+    .result.empty { cursor: default; }
+    #hint {
+      padding: 4px 24px 18px; font-size: 12px; color: var(--lg-dim); line-height: 1.5;
+    }
+    #hint kbd {
+      font-family: inherit; font-size: 11px;
+      border: 1px solid var(--lg-border); border-radius: 5px; padding: 1px 6px; color: var(--lg-text);
+      background: var(--lg-orb);
+    }
+    #status { padding: 0 24px 16px; font-size: 12.5px; color: var(--lg-accent); min-height: 0; }
+    #status:empty { display: none; }
+  </style>
+</head>
+<body>
+  <div id="shell">
+    <div id="orbs"><!-- built by JS --></div>
+    <div id="inputrow">
+      <span id="mode-glyph"></span>
+      <input id="q" type="text" autofocus spellcheck="false" placeholder="Search everything…">
+    </div>
+    <div id="body">
+      <ul id="results"></ul>
+      <div id="hint"></div>
+      <div id="status"></div>
+    </div>
+  </div>
+
+  <script src="icons.js"></script>
+  <script src="api-tauri.js"></script>
+  <script>
+    const api = window.launcherApi;
+    const { iconSvg, ACTION_ICONS } = window.DevHubIcons;
+
+    // The orbs, in Tab order. `input` tools consume the text field and search
+    // their provider; an `action` tool fires on Enter with no text.
+    const TOOLS = [
+      { id: 'all', label: 'All', kind: 'input', provider: null,
+        placeholder: 'Search everything…', icon: 'search' },
+      { id: 'projects', label: 'Projects', kind: 'input', provider: 'projects',
+        placeholder: 'Find a repo…', icon: 'git' },
+      { id: 'launch', label: 'Launch', kind: 'input', provider: 'launch',
+        placeholder: 'Open an app or a URL…', icon: 'app' },
+      { id: 'todos', label: 'Todos', kind: 'input', provider: 'todos',
+        placeholder: 'Find a todo…', icon: 'check' },
+      { id: 'health', label: 'Health', kind: 'action', provider: 'health',
+        placeholder: 'Re-check every endpoint', icon: 'health' },
+    ];
+
+    let activeIdx = 0;
+    let results = [];
+    let selResult = 0;
+    let searchToken = 0;
+    // When non-null, the results list is showing this item's action menu
+    // instead of search results.
+    let menuItem = null;
+    let liveProviders = [];
+
+    const orbsEl = document.getElementById('orbs');
+    const input = document.getElementById('q');
+    const glyphEl = document.getElementById('mode-glyph');
+    const resultsEl = document.getElementById('results');
+    const hintEl = document.getElementById('hint');
+    const statusEl = document.getElementById('status');
+
+    function tool() { return TOOLS[activeIdx]; }
+
+    function esc(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function buildOrbs() {
+      orbsEl.innerHTML = TOOLS.map((t, i) => {
+        const quiet = t.provider && liveProviders.length && !liveProviders.includes(t.provider);
+        return `
+        <div class="orb ${i === activeIdx ? 'active' : ''} ${quiet ? 'empty' : ''}" data-idx="${i}" title="${esc(t.label)}">
+          <div class="disc">${iconSvg(t.icon)}</div>
+          <div class="label">${esc(t.label)}</div>
+        </div>`;
+      }).join('');
+      orbsEl.querySelectorAll('.orb').forEach(el => {
+        el.addEventListener('click', () => setActive(parseInt(el.dataset.idx, 10)));
+      });
+    }
+
+    function fitHeight() {
+      // Ask the backend to size the window to the content (shell + the
+      // transparent margin the feathered shadow lives in, top and bottom).
+      const h = document.getElementById('shell').offsetHeight + 84;
+      api.resize(h);
+    }
+
+    function renderHint() {
+      if (menuItem) {
+        hintEl.innerHTML = '<kbd>↑</kbd> <kbd>↓</kbd> to move · <kbd>Enter</kbd> to run · <kbd>Esc</kbd> back';
+        return;
+      }
+      const t = tool();
+      if (t.kind === 'action') {
+        hintEl.innerHTML = '<kbd>Enter</kbd> to re-check · <kbd>Tab</kbd> switches mode';
+      } else if (results.length) {
+        hintEl.innerHTML = '<kbd>↑</kbd> <kbd>↓</kbd> to move · <kbd>Enter</kbd> to open · <kbd>Ctrl</kbd>+<kbd>Enter</kbd> for more · <kbd>Tab</kbd> switches mode';
+      } else {
+        hintEl.innerHTML = '<kbd>Tab</kbd> switches mode · <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>5</kbd> jumps';
+      }
+    }
+
+    function setActive(idx) {
+      const changed = idx !== activeIdx;
+      activeIdx = (idx + TOOLS.length) % TOOLS.length;
+      const t = tool();
+      orbsEl.querySelectorAll('.orb').forEach((el, i) => el.classList.toggle('active', i === activeIdx));
+      glyphEl.innerHTML = iconSvg(t.icon);
+      input.placeholder = t.placeholder;
+      input.style.display = t.kind === 'action' ? 'none' : '';
+      // Each mode starts with a fresh field — a search query must not leak
+      // into another mode.
+      if (changed) input.value = '';
+      menuItem = null;
+      results = [];
+      selResult = 0;
+      resultsEl.innerHTML = '';
+      statusEl.textContent = '';
+      renderHint();
+      if (t.kind !== 'action') {
+        input.focus();
+        runSearch();
+      } else {
+        fitHeight();
+      }
+    }
+
+    async function runSearch() {
+      const t = tool();
+      if (t.kind === 'action') return;
+      const q = input.value.trim();
+      const token = ++searchToken;
+      let rows = [];
+      try {
+        // An empty query still ranks: usage recency floats the things this
+        // person actually opens to the top, so the launcher is useful before
+        // the first keystroke.
+        rows = await api.search(q, t.provider, q ? 40 : 8);
+      } catch { rows = []; }
+      if (token !== searchToken) return; // superseded by a newer keystroke
+      results = rows || [];
+      selResult = 0;
+      renderResults();
+      renderHint();
+      fitHeight();
+    }
+
+    function statusClass(status) {
+      return ['ok', 'warn', 'error', 'pending'].includes(status) ? status : '';
+    }
+
+    function rowHtml(item, i) {
+      const all = item.actions || [];
+      const buttons = all.slice(0, 2).map((a, ai) => `
+        <button class="r-btn" data-act="${ai}" data-idx="${i}" title="${esc(a.label)}">${iconSvg(ACTION_ICONS[a.kind] || 'chevron')}</button>`).join('')
+        + (all.length > 2 ? `<button class="r-btn" data-more="1" data-idx="${i}" title="More actions">${iconSvg('command')}</button>` : '');
+      const badges = (item.badges || []).slice(0, 4)
+        .map(b => `<span class="r-badge">${esc(b)}</span>`).join('');
+      return `
+        <li class="result ${i === selResult ? 'sel' : ''}" data-idx="${i}">
+          <span class="r-actions">${buttons}</span>
+          <span class="r-main">
+            <span class="r-head">
+              <span class="r-dot ${statusClass(item.status)}"></span>
+              <span class="r-title">${esc(item.title)}</span>
+              <span class="r-badges">${badges}</span>
+            </span>
+            <span class="r-sub">${esc(item.subtitle || '')}</span>
+          </span>
+        </li>`;
+    }
+
+    function renderResults() {
+      if (menuItem) { renderMenu(); return; }
+      if (!results.length) {
+        resultsEl.innerHTML = input.value.trim()
+          ? '<li class="result empty"><span class="r-sub">Nothing matched</span></li>' : '';
+        return;
+      }
+      resultsEl.innerHTML = results.map(rowHtml).join('');
+      resultsEl.querySelectorAll('.result .r-main').forEach(el => {
+        el.addEventListener('click', () => {
+          const i = parseInt(el.closest('.result').dataset.idx, 10);
+          runAction(results[i], 0);
+        });
+      });
+      resultsEl.querySelectorAll('.r-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const i = parseInt(btn.dataset.idx, 10);
+          if (btn.dataset.more) openMenu(i);
+          else runAction(results[i], parseInt(btn.dataset.act, 10));
+        });
+      });
+    }
+
+    function renderMenu() {
+      const actions = menuItem.actions || [];
+      resultsEl.innerHTML = actions.map((a, i) => `
+        <li class="result ${i === selResult ? 'sel' : ''}" data-idx="${i}">
+          <span class="r-actions"><span class="r-btn">${iconSvg(ACTION_ICONS[a.kind] || 'chevron')}</span></span>
+          <span class="r-main">
+            <span class="r-head"><span class="r-title">${esc(a.label)}</span></span>
+            <span class="r-sub">${esc(menuItem.title)}</span>
+          </span>
+        </li>`).join('');
+      resultsEl.querySelectorAll('.result').forEach(el => {
+        el.addEventListener('click', () => runAction(menuItem, parseInt(el.dataset.idx, 10)));
+      });
+    }
+
+    function openMenu(i) {
+      const item = results[i];
+      if (!item || !(item.actions || []).length) return;
+      menuItem = item;
+      selResult = 0;
+      renderResults();
+      renderHint();
+      fitHeight();
+    }
+
+    function closeMenu() {
+      menuItem = null;
+      selResult = 0;
+      renderResults();
+      renderHint();
+      fitHeight();
+    }
+
+    async function runAction(item, actionIndex) {
+      if (!item || !(item.actions || []).length) {
+        flash('That item has nothing to open — check hub.config.json.');
+        return;
+      }
+      let res;
+      try { res = await api.run(`${item.provider}::${item.id}`, actionIndex); }
+      catch (err) { res = { success: false, message: String(err) }; }
+      if (res && res.success) api.hide();
+      else flash((res && res.message) || 'That action did not run.');
+    }
+
+    function moveSel(dir) {
+      const length = menuItem ? (menuItem.actions || []).length : results.length;
+      if (!length) return;
+      selResult = (selResult + dir + length) % length;
+      resultsEl.querySelectorAll('.result').forEach((el, i) => el.classList.toggle('sel', i === selResult));
+      const sel = resultsEl.querySelector('.result.sel');
+      if (sel) sel.scrollIntoView({ block: 'nearest' });
+    }
+
+    function flash(message) {
+      statusEl.textContent = message;
+      fitHeight();
+    }
+
+    async function recheckHealth() {
+      flash('Re-checking…');
+      let result;
+      try { result = await api.refresh('health'); }
+      catch (err) { flash(String(err)); return; }
+      results = (result && result.items) || [];
+      selResult = 0;
+      menuItem = null;
+      renderResults();
+      statusEl.textContent = (result && result.error) ? result.error : '';
+      renderHint();
+      fitHeight();
+    }
+
+    function commit(withModifier) {
+      if (menuItem) { runAction(menuItem, selResult); return; }
+      const t = tool();
+      if (t.id === 'health') { recheckHealth(); return; }
+      if (!results.length) return;
+      if (withModifier) { openMenu(selResult); return; }
+      runAction(results[selResult], 0);
+    }
+
+    // Keyboard: Tab cycles orbs, Esc closes (or leaves the action menu),
+    // Ctrl+1..5 jump, arrows move selection, Enter runs the default action and
+    // Ctrl+Enter opens the action menu.
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        if (menuItem) closeMenu(); else api.hide();
+        return;
+      }
+      if (e.key === 'Tab') { e.preventDefault(); setActive(activeIdx + (e.shiftKey ? -1 : 1)); return; }
+      if ((e.metaKey || e.ctrlKey) && /^[1-5]$/.test(e.key)) {
+        e.preventDefault(); setActive(parseInt(e.key, 10) - 1); return;
+      }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault(); moveSel(e.key === 'ArrowDown' ? 1 : -1); return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        commit(e.ctrlKey || e.metaKey);
+      }
+    });
+
+    let searchTimer = null;
+    input.addEventListener('input', () => {
+      if (tool().kind === 'action') return;
+      if (menuItem) menuItem = null;
+      if (searchTimer) clearTimeout(searchTimer);
+      searchTimer = setTimeout(runSearch, 120);
+    });
+
+    function resetLauncher() {
+      activeIdx = 0;
+      input.value = '';
+      results = [];
+      menuItem = null;
+      resultsEl.innerHTML = '';
+      statusEl.textContent = '';
+      setActive(0);
+      input.focus();
+    }
+
+    async function init() {
+      try {
+        const ctx = await api.context();
+        if (ctx) {
+          // "system" resolves here rather than in Rust, because the webview is
+          // the only thing that knows what the OS is currently asking for.
+          const light = ctx.theme === 'light' || (ctx.theme === 'system'
+            && window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
+          document.body.classList.toggle('light', !!light);
+          liveProviders = ctx.providers || [];
+        }
+      } catch {}
+      buildOrbs();
+      setActive(0);
+      input.focus();
+    }
+    if (api.onReset) api.onReset(resetLauncher);
+    window.addEventListener('focus', () => input.focus());
+    init();
+  </script>
+</body>
+</html>

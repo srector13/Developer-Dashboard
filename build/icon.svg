@@ -1,0 +1,18 @@
+<!-- The Dev Hub mark: one hub, three spokes.
+
+     This file is the design source of record. It is NOT rasterised at build
+     time — scripts/render-win-icons.mjs redraws the same geometry directly so
+     `npm run icons` needs no browser and no image library, and therefore runs
+     unchanged in CI. Keep the two in step: the numbers below are the numbers
+     the script uses, at a 1024 canvas. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <g fill="none" stroke="#58a6ff" stroke-width="46" stroke-linecap="round">
+    <line x1="512" y1="512" x2="512" y2="212"/>
+    <line x1="512" y1="512" x2="772" y2="662"/>
+    <line x1="512" y1="512" x2="252" y2="662"/>
+  </g>
+  <circle cx="512" cy="212" r="90" fill="#39c5cf"/>
+  <circle cx="772" cy="662" r="90" fill="#39c5cf"/>
+  <circle cx="252" cy="662" r="90" fill="#39c5cf"/>
+  <circle cx="512" cy="512" r="130" fill="#58a6ff"/>
+</svg>

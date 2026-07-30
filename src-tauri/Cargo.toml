@@ -1,0 +1,68 @@
+[package]
+name = "dev-hub"
+version = "0.1.0-beta.1"
+description = "A portable hub for full-stack development work: a global quick launcher plus a live dashboard."
+authors = ["Stephen Rector"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.77"
+
+# One binary, no installer. `windows_subsystem` in main.rs keeps the console
+# window from flashing on launch.
+[[bin]]
+name = "dev-hub"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Scanning roots, watching the config, text work
+walkdir = "2"
+notify = "6"
+notify-debouncer-mini = "0.4"
+regex = "1"
+once_cell = "1"
+
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+# Health checks only ever hit URLs from the user's own config file. TLS via
+# native-tls means schannel on Windows — no C toolchain, no vendored OpenSSL.
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+tokio = { version = "1", features = ["time", "macros", "rt-multi-thread", "sync", "process"] }
+async-trait = "0.1"
+
+# Repo status. default-features = false drops the ssh/https transports (and
+# with them the OpenSSL dependency) — Dev Hub only ever reads local repos.
+# vendored-libgit2 builds libgit2 from source, so there is no system dependency
+# on the machine the exe lands on.
+git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2"] }
+
+[target.'cfg(windows)'.dependencies]
+# The foreground-stealing workaround for hotkey-summoned windows.
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_Threading",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+] }
+
+[profile.release]
+# A portable exe gets copied around by hand (USB stick, email to self), so
+# size matters more here than the last few percent of speed.
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
