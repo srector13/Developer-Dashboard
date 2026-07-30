@@ -72,6 +72,46 @@ impl Default for AiSettings {
     }
 }
 
+/// Everything about the quick launcher except its hotkey, which stays at the
+/// top level because it predates this block and is read from several places.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LauncherSettings {
+    /// Opacity of the launcher's glass panel, 0.5–1.0.
+    ///
+    /// The reference app used 0.72, which reads beautifully over a desktop and
+    /// badly over a busy window — the text behind it competes with the text in
+    /// it. The default here is higher, and it's adjustable because how
+    /// transparent is too transparent depends on what you keep on screen.
+    pub opacity: f64,
+    /// The `Enter to open · Tab switches mode` row along the bottom. Worth
+    /// having while the keyboard model is new, worth reclaiming afterwards.
+    pub show_hints: bool,
+    /// Which mode orbs appear, in order. An empty list means all of them —
+    /// a launcher with no modes would have nothing to search.
+    pub modes: Vec<String>,
+    /// How many matches to list.
+    pub max_results: u32,
+    /// With an empty box, list the things you open most instead of nothing.
+    pub show_recent_when_empty: bool,
+}
+
+impl Default for LauncherSettings {
+    fn default() -> Self {
+        Self {
+            opacity: 0.88,
+            show_hints: true,
+            modes: LAUNCHER_MODES.iter().map(|m| m.to_string()).collect(),
+            max_results: 40,
+            show_recent_when_empty: true,
+        }
+    }
+}
+
+/// Every mode the launcher knows, in orb order. The renderer owns their labels
+/// and icons; this is the list settings validates against.
+pub const LAUNCHER_MODES: &[&str] = &["all", "projects", "launch", "todos", "health"];
+
 /// One card's size on the dashboard grid.
 ///
 /// Presets rather than a pixel height. Freeform dragging produced overlapping,
@@ -104,6 +144,8 @@ pub struct AppSettings {
     pub theme: String,
     /// System-wide launcher shortcut; an empty string switches it off.
     pub launcher_shortcut: String,
+    #[serde(default)]
+    pub launcher: LauncherSettings,
     /// Keep running in the tray when the dashboard window is closed, so the
     /// global shortcut stays live.
     pub keep_in_tray: bool,
@@ -141,6 +183,7 @@ impl Default for AppSettings {
         Self {
             theme: "system".into(),
             launcher_shortcut: "CommandOrControl+Shift+Space".into(),
+            launcher: LauncherSettings::default(),
             keep_in_tray: true,
             start_minimized: false,
             dashboard_columns: 2,
@@ -168,6 +211,27 @@ pub fn migrate(raw: serde_json::Value) -> AppSettings {
     // A zero-column grid renders nothing at all; clamp rather than trusting the
     // file, which a person edits by hand.
     settings.dashboard_columns = settings.dashboard_columns.clamp(1, 4);
+
+    // An invisible launcher is not a setting anyone wants, and a fully opaque
+    // one is — so the floor is "still readable", not "still visible".
+    settings.launcher.opacity = if settings.launcher.opacity.is_finite() {
+        settings.launcher.opacity.clamp(0.5, 1.0)
+    } else {
+        LauncherSettings::default().opacity
+    };
+    settings.launcher.max_results = settings.launcher.max_results.clamp(5, 200);
+
+    // Drop unknown modes and de-duplicate, then fall back to the full set: a
+    // launcher with no modes has nothing to search.
+    settings
+        .launcher
+        .modes
+        .retain(|mode| LAUNCHER_MODES.contains(&mode.as_str()));
+    settings.launcher.modes.dedup();
+    if settings.launcher.modes.is_empty() {
+        settings.launcher.modes = LauncherSettings::default().modes;
+    }
+
     settings
 }
 
@@ -623,6 +687,60 @@ mod tests {
         // The keys the file didn't mention keep their defaults.
         assert!(settings.providers.projects);
         assert!(settings.providers.health);
+    }
+
+    #[test]
+    fn launcher_opacity_is_clamped_to_something_readable() {
+        assert_eq!(
+            migrate(serde_json::json!({ "launcher": { "opacity": 0.0 } }))
+                .launcher
+                .opacity,
+            0.5
+        );
+        assert_eq!(
+            migrate(serde_json::json!({ "launcher": { "opacity": 9.0 } }))
+                .launcher
+                .opacity,
+            1.0
+        );
+        assert_eq!(
+            migrate(serde_json::json!({ "launcher": { "opacity": 0.8 } }))
+                .launcher
+                .opacity,
+            0.8
+        );
+    }
+
+    #[test]
+    fn an_unusable_launcher_mode_list_falls_back_to_all_of_them() {
+        // Every mode switched off would leave nothing to search.
+        let settings = migrate(serde_json::json!({ "launcher": { "modes": [] } }));
+        assert_eq!(settings.launcher.modes, LauncherSettings::default().modes);
+
+        // Unknown names are dropped rather than rendered as empty orbs.
+        let settings = migrate(serde_json::json!({
+            "launcher": { "modes": ["projects", "nonsense", "health"] }
+        }));
+        assert_eq!(settings.launcher.modes, vec!["projects", "health"]);
+    }
+
+    #[test]
+    fn launcher_settings_survive_a_partial_block() {
+        // Only `showHints` mentioned: everything else keeps its default.
+        let settings = migrate(serde_json::json!({ "launcher": { "showHints": false } }));
+        assert!(!settings.launcher.show_hints);
+        assert_eq!(
+            settings.launcher.opacity,
+            LauncherSettings::default().opacity
+        );
+        assert_eq!(settings.launcher.max_results, 40);
+        assert!(settings.launcher.show_recent_when_empty);
+    }
+
+    #[test]
+    fn a_settings_file_predating_the_launcher_block_gets_the_defaults() {
+        let settings = migrate(serde_json::json!({ "theme": "dark" }));
+        assert_eq!(settings.launcher, LauncherSettings::default());
     }
 
     #[test]

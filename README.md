@@ -152,8 +152,17 @@ the note you'd actually edit. Both are adjustable in Settings → Todos.
 {
   "theme": "system",
   "launcherShortcut": "CommandOrControl+Shift+Space",
+  "launcher": {
+    "opacity": 0.88,               // 0.5–1.0
+    "showHints": true,
+    "modes": ["all", "projects", "launch", "todos", "health"],
+    "maxResults": 40,
+    "showRecentWhenEmpty": true
+  },
   "keepInTray": true,
   "startMinimized": false,
+  "runAtLogin": false,
+  "notifyOnFailure": false,
   "dashboardColumns": 2,
   "providers": { "launch": true, "projects": true, "todos": true, "health": true },
   "ai": { "enabled": false, "provider": "openai-compatible", "baseUrl": "", "model": "" }
@@ -184,6 +193,12 @@ file never silently loses keys.
 
 Typing `/` opens the command list; typing narrows it, and <kbd>Tab</kbd> or
 <kbd>Enter</kbd> picks. Aliases work too — `/repos`, `/p`, `/a`, `/t`.
+
+Settings → **Quick Launch** holds the rest of it: the hotkey, how opaque the
+panel is (it floats over whatever you summoned it from, so how transparent is
+too transparent depends on what you keep on screen), whether the keyboard hints
+along the bottom are shown, which modes get an orb, and how many matches a
+search reaches for. Changes reach an open launcher immediately.
 
 Matching is a fuzzy subsequence over title, subtitle and hidden keywords, scored
 by contiguity and word-boundary starts, with prefix matches first. Things you

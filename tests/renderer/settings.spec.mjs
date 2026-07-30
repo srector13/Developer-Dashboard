@@ -38,6 +38,10 @@ await page.addInitScript(() => {
       startMinimized: false, dashboardColumns: 2, notifyOnFailure: false,
       providers: { launch: true, projects: true, todos: true, health: true },
       collapsed: [], cardLayout: {}, setupComplete: true,
+      launcher: {
+        opacity: 0.88, showHints: true, maxResults: 40, showRecentWhenEmpty: true,
+        modes: ['all', 'projects', 'launch', 'todos', 'health'],
+      },
     },
     setupSuggestions: async () => ({ tools: [], repoRoots: [], notebookRoot: '' }),
     runAtLogin: async () => window.__runAtLogin || false,
@@ -92,6 +96,8 @@ check('the settings panel opens on General', await page.evaluate(() =>
   document.getElementById('settings-overlay').classList.contains('visible') &&
   document.querySelector('.set-nav-item.active').textContent.includes('General')));
 
+// The hotkey lives with the rest of the launcher's settings.
+await openSettings('launcher');
 check('a hotkey the OS refused is shown as an error, not as working', await page.evaluate(() =>
   document.querySelector('.shortcut-box').classList.contains('error') &&
   document.querySelector('.shortcut-msg').textContent.includes('already owns')));
@@ -127,6 +133,71 @@ check('a modifier alone does not end recording', await page.evaluate(() =>
   window.DevHubSettings.acceleratorFrom({ key: 'Control', ctrlKey: true, altKey: false, shiftKey: false, metaKey: false }) === null));
 check('space is named the way the backend parses it', await page.evaluate(() =>
   window.DevHubSettings.acceleratorFrom({ key: ' ', ctrlKey: true, altKey: false, shiftKey: true, metaKey: false }) === 'CommandOrControl+Shift+Space'));
+
+// --- Quick Launch ---------------------------------------------------------
+
+await openSettings('launcher');
+check('the opacity slider reflects the stored value', await page.evaluate(() =>
+  document.getElementById('launcher-opacity').value === '88' &&
+  document.getElementById('opacity-value').textContent === '88%'));
+
+await page.fill('#launcher-opacity', '96');
+await page.waitForTimeout(120);
+check('dragging the slider updates the readout live', await page.evaluate(() =>
+  document.getElementById('opacity-value').textContent === '96%'));
+
+check('every mode is listed and ticked by default', await page.evaluate(() => {
+  const boxes = [...document.querySelectorAll('[data-mode]')];
+  return boxes.length === 5 && boxes.every(b => b.checked);
+}));
+
+await page.uncheck('[data-mode="health"]');
+await page.waitForTimeout(120);
+await page.click('#settings-save');
+await page.waitForTimeout(250);
+
+check('opacity is saved as a fraction, not a percentage', await page.evaluate(() => {
+  const patch = JSON.parse(window.__calls.filter(c => c[0] === 'saveSettings').pop()[1]);
+  return patch.launcher.opacity === 0.96;
+}));
+
+check('an unticked mode is dropped, and the rest keep their orb order', await page.evaluate(() => {
+  const patch = JSON.parse(window.__calls.filter(c => c[0] === 'saveSettings').pop()[1]);
+  return patch.launcher.modes.join(',') === 'all,projects,launch,todos';
+}));
+
+// Ticking in a different order must not reorder the orbs.
+await openSettings('launcher');
+await page.uncheck('[data-mode="all"]');
+await page.check('[data-mode="health"]');
+await page.check('[data-mode="all"]');
+await page.waitForTimeout(120);
+await page.click('#settings-save');
+await page.waitForTimeout(250);
+check('mode order follows the orb rail, not the order you ticked them', await page.evaluate(() => {
+  const patch = JSON.parse(window.__calls.filter(c => c[0] === 'saveSettings').pop()[1]);
+  return patch.launcher.modes.join(',') === 'all,projects,launch,todos,health';
+}));
+
+// The last mode standing can't be switched off.
+await openSettings('launcher');
+await page.evaluate(async () => {
+  for (const id of ['all', 'projects', 'launch', 'todos']) {
+    const box = document.querySelector(`[data-mode="${id}"]`);
+    box.checked = false;
+    box.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  const last = document.querySelector('[data-mode="health"]');
+  last.checked = false;
+  last.dispatchEvent(new Event('change', { bubbles: true }));
+  await new Promise(r => setTimeout(r, 60));
+});
+check('switching off the last mode is refused, not silently accepted', await page.evaluate(() =>
+  document.querySelector('[data-mode="health"]').checked &&
+  document.getElementById('toast').textContent.includes('at least one mode')));
+
+check('the keyboard hints have a switch', await page.evaluate(() =>
+  !!document.querySelector('[data-path="launcher.showHints"]')));
 
 // --- Apps & links ---------------------------------------------------------
 

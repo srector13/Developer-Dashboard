@@ -37,8 +37,16 @@ await page.addInitScript(() => {
       actions: [{ kind: 'openUrl', label: 'Open', url: 'https://jenkins.example.com' }],
     },
   ];
+  window.__launcherSettings = {
+    opacity: 0.88, showHints: true, maxResults: 40, showRecentWhenEmpty: true,
+    modes: ['all', 'projects', 'launch', 'todos', 'health'],
+  };
   window.launcherApi = {
-    context: async () => ({ theme: 'dark', version: '0.1.0', providers: ['projects', 'launch'] }),
+    context: async () => ({
+      theme: 'dark', version: '0.1.0', providers: ['projects', 'launch'],
+      launcher: window.__launcherSettings,
+    }),
+    onSettingsChanged: (cb) => { window.__settingsChanged = cb; },
     search: async (query, provider, maxResults) => {
       window.__calls.push(['search', query, provider, maxResults]);
       if (window.__searchDelayMs) await new Promise(r => setTimeout(r, window.__searchDelayMs));
@@ -254,6 +262,70 @@ await page.fill('#q', 'payments/api');
 await page.waitForTimeout(220);
 check('a slash inside a query is not a command', await page.evaluate(() =>
   document.querySelectorAll('#results .cmd').length === 0));
+
+// --- Settings -------------------------------------------------------------
+
+await page.keyboard.press('Control+1');
+await page.waitForTimeout(200);
+
+check('the panel opacity comes from settings', await page.evaluate(() =>
+  getComputedStyle(document.documentElement).getPropertyValue('--lg-alpha').trim() === '0.88'));
+
+check('the keyboard hints are shown by default', await page.evaluate(() =>
+  getComputedStyle(document.getElementById('hint')).display !== 'none'));
+
+// Change the settings and tell the open window to re-read them.
+await page.evaluate(async () => {
+  window.__launcherSettings = {
+    opacity: 1, showHints: false, maxResults: 12, showRecentWhenEmpty: false,
+    modes: ['projects', 'todos'],
+  };
+  await window.__settingsChanged();
+  await new Promise(r => setTimeout(r, 200));
+});
+
+check('a live settings change reaches an already-open launcher', await page.evaluate(() =>
+  getComputedStyle(document.documentElement).getPropertyValue('--lg-alpha').trim() === '1'));
+
+check('hiding the hints hides the row', await page.evaluate(() =>
+  getComputedStyle(document.getElementById('hint')).display === 'none'));
+
+check('only the chosen modes get an orb', await page.evaluate(() => {
+  const labels = [...document.querySelectorAll('#orbs .orb .label')].map(e => e.textContent);
+  return labels.join(',') === 'Projects,Todos';
+}));
+
+check('Ctrl+N is numbered against the visible orbs', await page.evaluate(() => {
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: '2', ctrlKey: true, bubbles: true }));
+  return document.querySelectorAll('.orb')[1].classList.contains('active');
+}));
+
+check('a shortcut past the last visible orb does nothing', await page.evaluate(() => {
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: '5', ctrlKey: true, bubbles: true }));
+  return document.querySelectorAll('.orb')[1].classList.contains('active');
+}));
+
+await page.fill('#q', '/');
+await page.waitForTimeout(220);
+check('commands for hidden modes are not offered', await page.evaluate(() => {
+  const names = [...document.querySelectorAll('#results .cmd .cmd-name')].map(e => e.textContent);
+  return names.join(',') === '/projects,/todos';
+}));
+
+await page.fill('#q', '');
+await page.waitForTimeout(220);
+check('with recents switched off, an empty box lists nothing', await page.evaluate(() =>
+  document.querySelectorAll('#results .result').length === 0));
+
+// Put everything back for the remaining assertions.
+await page.evaluate(async () => {
+  window.__launcherSettings = {
+    opacity: 0.88, showHints: true, maxResults: 40, showRecentWhenEmpty: true,
+    modes: ['all', 'projects', 'launch', 'todos', 'health'],
+  };
+  await window.__settingsChanged();
+  await new Promise(r => setTimeout(r, 200));
+});
 
 // --- Window sizing and reset ----------------------------------------------
 

@@ -93,5 +93,6 @@
     resize: (height) => { invoke('launcher_resize', { height: Math.round(height) }); },
     hide: () => { invoke('launcher_hide'); },
     onReset: (cb) => on('launcher-reset', () => cb()),
+    onSettingsChanged: (cb) => on('launcher-settings-changed', () => cb()),
   };
 })();

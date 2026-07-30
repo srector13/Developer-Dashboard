@@ -780,6 +780,22 @@ body.rearranging .card-body { pointer-events: none; }
 #settings-body select { flex: 0 0 auto; min-width: 150px; cursor: pointer; }
 #settings-body select.icon-select { flex: 0 0 110px; min-width: 0; }
 
+#settings-body input[type="range"] {
+  width: 100%;
+  margin: 4px 0 6px;
+  accent-color: var(--accent-blue);
+  cursor: pointer;
+}
+
+#settings-body kbd {
+  font-family: inherit;
+  font-size: 10.5px;
+  padding: 0 4px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--chip-bg);
+}
+
 .set-toggle { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 12px; cursor: pointer; }
 .set-toggle input { margin-top: 2px; accent-color: var(--accent-blue); }
 .set-toggle-body .set-hint { margin-bottom: 0; }

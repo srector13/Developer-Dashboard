@@ -41,6 +41,11 @@ pub fn save_settings(
     if before.providers != after.providers {
         registry::restart(&app);
     }
+    // The launcher reads its appearance once, when it opens. Tell the open one
+    // to re-read so a slider in Settings moves something you can see.
+    if before.launcher != after.launcher {
+        desktop::refresh_launcher_context(&app);
+    }
     after
 }
 
@@ -557,6 +562,9 @@ pub struct LauncherContext {
     /// Provider ids that currently have items, so the launcher can grey out an
     /// orb for a provider the user hasn't configured yet.
     pub providers: Vec<String>,
+    /// Appearance and behaviour, handed over at open time so the launcher never
+    /// has to make a second round trip before it can draw itself.
+    pub launcher: crate::settings::LauncherSettings,
 }
 
 #[tauri::command]
@@ -571,6 +579,7 @@ pub fn launcher_context(app: AppHandle, state: State<AppState>) -> LauncherConte
             .filter(|r| !r.items.is_empty())
             .map(|r| r.provider)
             .collect(),
+        launcher: settings.launcher,
     }
 }
 
