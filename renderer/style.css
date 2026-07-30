@@ -176,30 +176,8 @@ select:focus-visible {
 
 #brand img { width: 22px; height: 22px; }
 
-/* Styled as a search field, but it is a button — clicking it summons the
-   launcher, which is the app's single search surface. */
-#search-wrap {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  max-width: 520px;
-  padding: 7px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
-  background: var(--inset-bg);
-  color: var(--text-muted);
-  font-family: inherit;
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease;
-}
-
-#search-wrap:hover { border-color: var(--border-glow); color: var(--text-secondary); }
-#search-wrap svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2; flex-shrink: 0; }
 #search-icon { display: flex; }
-#search-label { flex: 1; }
+#search-wrap svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2; flex-shrink: 0; }
 
 #search-kbd {
   font-size: 10.5px;
@@ -559,27 +537,30 @@ body.rearranging .card-body { pointer-events: none; }
 .row-btn svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; flex-shrink: 0; }
 
 /* A group of related actions — the configured IDEs, say — behind one button,
-   so a repo row doesn't grow a button per editor you happen to have installed. */
-.row-menu { position: relative; display: inline-flex; }
-.row-menu > .row-btn svg { transform: rotate(90deg); }
+   so a repo row doesn't grow a button per editor you happen to have installed.
 
-.row-menu-list {
-  display: none;
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  z-index: 20;
-  min-width: 170px;
+   The menu is a fixed-position element on <body>, positioned from JS. An
+   absolutely-positioned dropdown inside the row was clipped by the card, which
+   owns its overflow and has a fixed height on the grid — so a menu opening
+   near a card's edge simply lost its lower half. */
+.row-btn[data-open-menu] svg { transform: rotate(90deg); }
+
+.row-menu-popup {
+  position: fixed;
+  z-index: 1200;
+  min-width: 180px;
+  max-height: 60vh;
+  overflow-y: auto;
   padding: 4px;
+  display: flex;
   flex-direction: column;
   gap: 2px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   background: var(--menu-bg);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
 }
-
-.row-menu.open .row-menu-list { display: flex; }
 
 .menu-item {
   display: flex;
@@ -600,8 +581,17 @@ body.rearranging .card-body { pointer-events: none; }
 .menu-item:hover { background: var(--surface-hover); color: var(--text-heading); }
 .menu-item svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; flex-shrink: 0; }
 
-/* An open menu has to escape the row's scroll container. */
-.card-body:has(.row-menu.open) { overflow: visible; }
+/* Inline markdown from a note: bold, italic, code and friends inside a title. */
+.row-title code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  background: var(--chip-bg);
+}
+.row-title strong { color: var(--text-heading); font-weight: 600; }
+.row-title del { opacity: 0.6; }
+.row-title mark { background: var(--mark-bg); color: var(--mark-text); border-radius: 3px; padding: 0 3px; }
 
 /* ---------------------------------------------------------------------------
    Settings

@@ -211,10 +211,12 @@
   </div>
 
   <script src="icons.js"></script>
+  <script src="inline-markdown.js"></script>
   <script src="api-tauri.js"></script>
   <script>
     const api = window.launcherApi;
     const { iconSvg, ACTION_ICONS } = window.DevHubIcons;
+    const { renderInline } = window.DevHubMarkdown;
 
     // Every mode the launcher knows, in Tab order. `input` tools consume the
     // text field and search their provider; an `action` tool fires on Enter
@@ -443,7 +445,7 @@
           <span class="r-main">
             <span class="r-head">
               <span class="r-dot ${statusClass(item.status)}"></span>
-              <span class="r-title">${esc(item.title)}</span>
+              <span class="r-title">${renderInline(item.title, item.richTitle)}</span>
             </span>
             <span class="r-sub">${esc(item.subtitle || '')}</span>
           </span>

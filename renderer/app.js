@@ -9,6 +9,7 @@
 
   const api = window.hubApi;
   const { iconSvg, ACTION_ICONS } = window.DevHubIcons;
+  const { renderInline } = window.DevHubMarkdown;
 
   /** provider id → ProviderResult, in the order the backend returned them. */
   const results = new Map();
@@ -105,20 +106,13 @@
     // never also as a loose button.
     const grouped = new Set(groups.flatMap(g => g.actions || []));
 
-    const groupButtons = groups.map((group, gi) => {
-      const entries = (group.actions || []).map(index => `
-        <button class="menu-item" data-key="${esc(key)}" data-action="${index}">
-          ${iconSvg(ACTION_ICONS[(actions[index] || {}).kind] || 'chevron')}
-          <span>${esc((actions[index] || {}).label || '')}</span>
+    // The menu itself is built on demand into a fixed-position popup on
+    // <body>, not inline here: a card clips its own overflow and has a fixed
+    // grid height, so an inline dropdown was cut off at the card's edge.
+    const groupButtons = groups.map((group, gi) => `
+        <button class="row-btn" data-open-menu="${gi}" data-key="${esc(key)}" title="${esc(group.label)}">
+          ${iconSvg('chevron')}<span>${esc(group.label)}</span>
         </button>`).join('');
-      return `
-        <span class="row-menu" data-menu="${gi}">
-          <button class="row-btn" data-open-menu="${gi}" title="${esc(group.label)}">
-            ${iconSvg('chevron')}<span>${esc(group.label)}</span>
-          </button>
-          <span class="row-menu-list">${entries}</span>
-        </span>`;
-    }).join('');
 
     // Anything ungrouped keeps its own labelled button. Index 0 is the row
     // click, so it isn't repeated — unless a group claims it, in which case the
@@ -134,7 +128,7 @@
       <div class="card-row" tabindex="0" data-key="${esc(key)}" data-action="0" title="${esc(item.title)}">
         <span class="row-dot ${statusClass(item.status)}"></span>
         <span class="row-main">
-          <span class="row-title">${esc(item.title)}</span>
+          <span class="row-title">${renderInline(item.title, item.richTitle)}</span>
           ${item.subtitle ? `<span class="row-sub">${esc(item.subtitle)}</span>` : ''}
           ${badges ? `<span class="row-badges">${badges}</span>` : ''}
         </span>
@@ -304,8 +298,70 @@
 
   // --- wiring --------------------------------------------------------------
 
+  /** The one popup menu, reused. Lives on <body> so no card can clip it. */
+  let popupEl = null;
+
   function closeMenus() {
-    gridEl.querySelectorAll('.row-menu.open').forEach(m => m.classList.remove('open'));
+    if (popupEl) { popupEl.remove(); popupEl = null; }
+  }
+
+  function findItem(key) {
+    for (const result of results.values()) {
+      const found = (result.items || []).find(item => `${item.provider}::${item.id}` === key);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  /**
+   * Open a group's actions as a floating menu anchored to its button.
+   *
+   * Fixed positioning against the button's viewport rect, flipped upwards when
+   * there isn't room below — the card it belongs to is often near the bottom of
+   * the grid, and a menu that opens off-screen is no better than a clipped one.
+   */
+  function openGroupMenu(button) {
+    const key = button.dataset.key;
+    const item = findItem(key);
+    const group = item && (item.actionGroups || [])[Number(button.dataset.openMenu)];
+    if (!group) return;
+
+    closeMenus();
+    popupEl = document.createElement('div');
+    popupEl.className = 'row-menu-popup';
+    popupEl.innerHTML = (group.actions || []).map(index => {
+      const action = (item.actions || [])[index];
+      if (!action) return '';
+      return `
+        <button class="menu-item" data-key="${esc(key)}" data-action="${index}">
+          ${iconSvg(ACTION_ICONS[action.kind] || 'chevron')}
+          <span>${esc(action.label || '')}</span>
+        </button>`;
+    }).join('');
+    document.body.appendChild(popupEl);
+
+    const anchor = button.getBoundingClientRect();
+    const menu = popupEl.getBoundingClientRect();
+    const gap = 4;
+    const top = anchor.bottom + gap + menu.height > window.innerHeight
+      ? Math.max(gap, anchor.top - menu.height - gap)
+      : anchor.bottom + gap;
+    const left = Math.min(
+      Math.max(gap, anchor.right - menu.width),
+      window.innerWidth - menu.width - gap,
+    );
+    popupEl.style.top = `${Math.round(top)}px`;
+    popupEl.style.left = `${Math.round(left)}px`;
+
+    popupEl.addEventListener('click', (event) => {
+      const entry = event.target.closest('.menu-item');
+      if (!entry) return;
+      event.stopPropagation();
+      const action = parseInt(entry.dataset.action, 10);
+      const entryKey = entry.dataset.key;
+      closeMenus();
+      runAction(entryKey, action);
+    });
   }
 
   /**
@@ -370,17 +426,9 @@
       const openMenu = event.target.closest('[data-open-menu]');
       if (openMenu) {
         event.stopPropagation();
-        const menu = openMenu.closest('.row-menu');
-        const wasOpen = menu.classList.contains('open');
+        const alreadyOpen = !!popupEl;
         closeMenus();
-        if (!wasOpen) menu.classList.add('open');
-        return;
-      }
-      const menuItem = event.target.closest('.menu-item');
-      if (menuItem) {
-        event.stopPropagation();
-        closeMenus();
-        runAction(menuItem.dataset.key, parseInt(menuItem.dataset.action, 10));
+        if (!alreadyOpen) openGroupMenu(openMenu);
         return;
       }
       closeMenus();
@@ -404,6 +452,19 @@
       const row = event.target.closest('.card-row');
       if (row) runAction(row.dataset.key, 0);
     });
+
+    // The menu is anchored to a viewport position, so anything that moves the
+    // button out from under it has to dismiss it.
+    document.addEventListener('click', (event) => {
+      if (popupEl && !event.target.closest('.row-menu-popup') && !event.target.closest('[data-open-menu]')) {
+        closeMenus();
+      }
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') closeMenus();
+    });
+    gridEl.addEventListener('scroll', closeMenus, true);
+    window.addEventListener('resize', closeMenus);
 
     gridEl.addEventListener('keydown', (event) => {
       if (event.key !== 'Enter' && event.key !== ' ') return;
