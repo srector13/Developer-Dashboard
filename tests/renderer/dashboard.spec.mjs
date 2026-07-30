@@ -61,9 +61,21 @@ await page.addInitScript(() => {
       return window.__settings;
     },
     getAppVersion: async () => '0.1.0',
+    shortcutStatus: async () => window.__shortcut || {
+      accelerator: 'CommandOrControl+Shift+Space', registered: true, error: null,
+    },
+    shortcutSuggestions: async () => ['Alt+Space'],
+    setLauncherShortcut: async (accelerator) => {
+      window.__calls.push(['setLauncherShortcut', accelerator]);
+      return { accelerator, registered: true, error: null };
+    },
     getConfig: async () => ({ text: '{}', path: 'C:/DevHubData/hub.config.json', error: window.__configError || null }),
+    getConfigJson: async () => window.__config || { launch: [], projects: { roots: [], maxDepth: 3, openWith: [] }, todos: {}, health: { endpoints: [], intervalSeconds: 60, timeoutMs: 4000 }, command: [] },
     saveConfig: async () => {},
+    saveConfigJson: async (config) => { window.__calls.push(['saveConfigJson', JSON.stringify(config)]); return config; },
     revealConfigFile: () => window.__calls.push(['revealConfigFile']),
+    pickFolder: async () => window.__picked || null,
+    pickProgram: async () => window.__picked || null,
     listProviders: async () => [],
     getResults: async () => window.__results,
     getItems: async () => [],
@@ -87,7 +99,7 @@ await page.addInitScript(() => {
     showLauncher: () => window.__calls.push(['showLauncher']),
     onProviderUpdated: (cb) => { window.__providerUpdated = cb; },
     onConfigChanged: (cb) => { window.__configChanged = cb; },
-    onShortcutFailed: (cb) => { window.__shortcutFailed = cb; },
+    onShortcutStatus: (cb) => { window.__shortcutStatus = cb; },
   };
 });
 
@@ -204,18 +216,28 @@ check('the search field opens the launcher rather than searching in place', awai
 check('the search field shows the configured shortcut', await page.evaluate(() =>
   document.getElementById('search-kbd').textContent === 'Ctrl+Shift+Space'));
 
-await page.click('#edit-config');
+await page.click('#open-settings');
+await page.waitForTimeout(150);
+check('the Settings button opens the settings panel', await page.evaluate(() =>
+  document.getElementById('settings-overlay').classList.contains('visible')));
+await page.keyboard.press('Escape');
 await page.waitForTimeout(80);
-check('the Config button opens hub.config.json', await page.evaluate(() =>
-  window.__calls.some(c => c[0] === 'revealConfigFile')));
+check('Escape closes the settings panel', await page.evaluate(() =>
+  !document.getElementById('settings-overlay').classList.contains('visible')));
 
 // --- Banners --------------------------------------------------------------
 
-await page.evaluate(() => window.__shortcutFailed('CommandOrControl+Shift+Space'));
+await page.evaluate(() => window.__shortcutStatus({
+  accelerator: 'CommandOrControl+Shift+Space',
+  registered: false,
+  error: 'Windows refused CommandOrControl+Shift+Space — another application already owns it.',
+}));
 await page.waitForTimeout(80);
-check('a shortcut clash is reported in the banner', await page.evaluate(() =>
+check('a hotkey that did not register is reported in the banner', await page.evaluate(() =>
   document.getElementById('banner').classList.contains('visible') &&
   document.getElementById('banner').textContent.includes('already owns')));
+check('the banner offers a way to fix it', await page.evaluate(() =>
+  document.getElementById('banner-action').textContent === 'Choose another'));
 
 await page.evaluate(() => window.__configChanged({ ok: false, error: 'hub.config.json is not valid JSON: expected value at line 3' }));
 await page.waitForTimeout(80);

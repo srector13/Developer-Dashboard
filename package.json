@@ -10,7 +10,7 @@
     "build": "cargo build --release --manifest-path src-tauri/Cargo.toml",
     "check": "cargo check --manifest-path src-tauri/Cargo.toml",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
-    "test:renderer": "node tests/renderer/launcher.spec.mjs && node tests/renderer/dashboard.spec.mjs",
+    "test:renderer": "node tests/renderer/launcher.spec.mjs && node tests/renderer/dashboard.spec.mjs && node tests/renderer/settings.spec.mjs",
     "fonts:sync": "node scripts/sync-fonts.mjs",
     "icons": "node scripts/render-win-icons.mjs"
   },

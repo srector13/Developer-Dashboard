@@ -50,6 +50,38 @@ pub fn app_version(app: AppHandle) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// The launcher hotkey
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn shortcut_status(state: State<AppState>) -> crate::state::ShortcutStatus {
+    state.shortcut_status()
+}
+
+#[tauri::command]
+pub fn shortcut_suggestions() -> Vec<&'static str> {
+    desktop::FALLBACK_SHORTCUTS.to_vec()
+}
+
+/// Set the launcher hotkey and report whether the OS accepted it.
+///
+/// Returned rather than fire-and-forget: the settings screen shows the outcome
+/// immediately, so a combination another app already owns is visible at the
+/// moment you choose it instead of the next time you press it and nothing
+/// happens.
+#[tauri::command]
+pub fn set_launcher_shortcut(
+    app: AppHandle,
+    state: State<AppState>,
+    accelerator: String,
+) -> crate::state::ShortcutStatus {
+    let settings = state.update_settings(serde_json::json!({
+        "launcherShortcut": accelerator.trim(),
+    }));
+    desktop::apply_shortcut(&app, &settings)
+}
+
+// ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
@@ -85,6 +117,67 @@ pub fn save_config(app: AppHandle, state: State<AppState>, text: String) -> Resu
     state.set_config(config);
     registry::restart(&app);
     Ok(())
+}
+
+/// The parsed config, for the settings screen's structured editors.
+#[tauri::command]
+pub fn get_config_json(state: State<AppState>) -> HubConfig {
+    state.config()
+}
+
+/// Write the config from the settings screen's structured form.
+///
+/// This normalises the file: it is re-serialised from the parsed shape, so
+/// comments and any unrecognised keys in a hand-written config are dropped.
+/// That is the trade for editing it in a UI — the Advanced tab keeps the raw
+/// text editor for anyone who wants to keep comments.
+#[tauri::command]
+pub fn save_config_json(
+    app: AppHandle,
+    state: State<AppState>,
+    config: serde_json::Value,
+) -> Result<HubConfig, String> {
+    let parsed = settings::migrate_config(config);
+    let text = serde_json::to_string_pretty(&parsed).map_err(|e| e.to_string())?;
+    std::fs::write(settings::config_file(), format!("{text}\n")).map_err(|e| {
+        format!(
+            "Could not write {}: {e}",
+            util::display_path(&settings::config_file())
+        )
+    })?;
+    state.set_config(parsed.clone());
+    registry::restart(&app);
+    Ok(parsed)
+}
+
+// ---------------------------------------------------------------------------
+// File pickers
+//
+// Typing a Windows program path by hand is how `hub.config.json` entries end up
+// subtly wrong, so the settings screen browses for them instead.
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn pick_folder(app: AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    // Blocking picker on a command's worker thread — never the UI thread.
+    app.dialog()
+        .file()
+        .set_title("Choose a folder")
+        .blocking_pick_folder()
+        .map(|path| path.to_string())
+}
+
+#[tauri::command]
+pub async fn pick_program(app: AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    let dialog = app.dialog().file().set_title("Choose a program");
+    let dialog = if cfg!(windows) {
+        dialog.add_filter("Programs", &["exe", "cmd", "bat", "com"])
+    } else {
+        dialog
+    };
+    dialog.blocking_pick_file().map(|path| path.to_string())
 }
 
 /// Open `hub.config.json` in whatever the user's machine associates with .json.

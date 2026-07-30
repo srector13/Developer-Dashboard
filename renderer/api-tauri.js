@@ -35,9 +35,18 @@
     saveSettings: (settings) => invoke('save_settings', { settings }),
     getAppVersion: () => invoke('app_version'),
 
+    // The hotkey, reported rather than assumed — see commands::shortcut_status.
+    shortcutStatus: () => invoke('shortcut_status'),
+    shortcutSuggestions: () => invoke('shortcut_suggestions'),
+    setLauncherShortcut: (accelerator) => invoke('set_launcher_shortcut', { accelerator }),
+
     getConfig: () => invoke('get_config'),
+    getConfigJson: () => invoke('get_config_json'),
     saveConfig: (text) => invoke('save_config', { text }),
+    saveConfigJson: (config) => invoke('save_config_json', { config }),
     revealConfigFile: () => invoke('reveal_config_file'),
+    pickFolder: () => invoke('pick_folder'),
+    pickProgram: () => invoke('pick_program'),
 
     listProviders: () => invoke('list_providers'),
     getResults: () => invoke('get_results'),
@@ -58,7 +67,7 @@
 
     onProviderUpdated: (cb) => on('provider-updated', (e) => cb(e.payload)),
     onConfigChanged: (cb) => on('config-changed', (e) => cb(e.payload)),
-    onShortcutFailed: (cb) => on('shortcut-failed', (e) => cb(e.payload)),
+    onShortcutStatus: (cb) => on('shortcut-status', (e) => cb(e.payload)),
   };
 
   // ==========================================================================

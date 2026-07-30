@@ -49,8 +49,11 @@
     toast.timer = setTimeout(() => toastEl.classList.remove('visible'), 3200);
   }
 
-  function showBanner(message) {
+  function showBanner(message, actionLabel, action) {
     bannerEl.querySelector('.banner-text').textContent = message;
+    const button = document.getElementById('banner-action');
+    button.textContent = actionLabel || 'Open config';
+    if (action) bannerAction = action;
     bannerEl.classList.add('visible');
   }
 
@@ -224,6 +227,9 @@
     });
   }
 
+  /// What the banner's action button does, set alongside the message.
+  let bannerAction = () => api.revealConfigFile();
+
   function wireTopbar() {
     document.getElementById('search-icon').innerHTML = iconSvg('search');
     document.querySelectorAll('[data-icon]').forEach(el => {
@@ -232,13 +238,22 @@
 
     document.getElementById('search-wrap').addEventListener('click', () => api.showLauncher());
     document.getElementById('refresh-all').addEventListener('click', refreshAll);
-    document.getElementById('edit-config').addEventListener('click', () => api.revealConfigFile());
-    document.getElementById('banner-action').addEventListener('click', () => api.revealConfigFile());
+    document.getElementById('open-settings').addEventListener('click', () => window.DevHubSettings.open());
+    document.getElementById('banner-action').addEventListener('click', () => bannerAction());
     document.getElementById('toggle-theme').addEventListener('click', async () => {
       const next = document.body.dataset.theme === 'light' ? 'dark' : 'light';
       applyTheme(next);
       settings = await api.saveSettings({ theme: next });
     });
+  }
+
+  /// The hotkey is the app's front door, so a dead one is worth interrupting
+  /// for — and it can only be reported by asking, since registration happens
+  /// before this window exists to receive an event.
+  function reportShortcut(status) {
+    if (!status || status.registered || !status.error) return false;
+    showBanner(status.error, 'Choose another', () => window.DevHubSettings.open('general'));
+    return true;
   }
 
   function wireEvents() {
@@ -259,9 +274,7 @@
       }
     });
 
-    api.onShortcutFailed((accelerator) => {
-      showBanner(`Another app already owns ${accelerator}. Change launcherShortcut in settings.json.`);
-    });
+    api.onShortcutStatus((status) => reportShortcut(status));
 
     // Last-refreshed stamps are relative, so they go stale just sitting there.
     setInterval(() => {
@@ -275,41 +288,53 @@
 
   async function load() {
     try {
-      const [loadedSettings, loadedResults, config] = await Promise.all([
+      const [loadedSettings, loadedResults, config, shortcut] = await Promise.all([
         api.getSettings(),
         api.getResults(),
         api.getConfig(),
+        api.shortcutStatus(),
       ]);
       settings = loadedSettings;
       collapsed = new Set(settings.collapsed || []);
       applyTheme(settings.theme);
       applyColumns();
 
-      const shortcut = (settings.launcherShortcut || '').replace(/CommandOrControl/i, 'Ctrl');
-      document.getElementById('search-kbd').textContent = shortcut;
+      // Only advertise the hotkey on the search box if it actually registered —
+      // a label promising a key that does nothing is worse than no label.
+      document.getElementById('search-kbd').textContent = shortcut && shortcut.registered
+        ? (settings.launcherShortcut || '').replace(/CommandOrControl/i, 'Ctrl')
+        : '';
 
       results.clear();
       (loadedResults || []).forEach(r => results.set(r.provider, r));
       renderGrid();
 
-      if (config && config.error) showBanner(config.error);
-      else hideBanner();
+      // A broken config wins the banner — it's the one that empties the cards.
+      if (config && config.error) {
+        showBanner(config.error, 'Open config', () => api.revealConfigFile());
+      } else if (!reportShortcut(shortcut)) {
+        hideBanner();
+      }
     } catch (err) {
       showBanner(`Dev Hub could not start cleanly: ${err}`);
     }
   }
 
   // Exposed for the renderer specs, which drive these directly against stubs
-  // rather than reaching into the closure.
+  // rather than reaching into the closure. `toast` is also how settings.js
+  // reports back without owning a second notification surface.
   window.DevHubDashboard = {
     load, renderGrid, renderCard, results, relativeAge, rowHtml, cardHtml,
-    toggleCard, refreshAll,
+    toggleCard, refreshAll, toast, reportShortcut,
     collapsedSet: () => collapsed,
   };
 
   wireTopbar();
   wireGrid();
   if (api) {
+    window.DevHubSettings.init(api, {
+      onSaved: () => { toast('Settings saved'); load(); },
+    });
     wireEvents();
     load();
   }

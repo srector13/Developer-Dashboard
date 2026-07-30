@@ -58,18 +58,26 @@ a card and a launcher source with a config block and no recompile.
 
 ## Configuration
 
-Two files in `DevHubData/`, next to the exe (falling back to `%APPDATA%\DevHub`
-if that folder isn't writable):
+**Everything is editable in the app** — press **Settings** in the top strip. Apps
+and links, repo folders, services to watch, the launcher hotkey, and custom
+command cards all have forms, with Browse buttons so no Windows path has to be
+typed by hand. Nothing below is required reading unless you prefer files.
+
+Behind the UI are two files in `DevHubData/`, next to the exe (falling back to
+`%APPDATA%\DevHub` if that folder isn't writable):
 
 - **`settings.json`** — app state: theme, shortcut, which providers are on.
 - **`hub.config.json`** — your content: projects, URLs, endpoints, todo sources.
 
 They are separate so you can hand-edit (and version) the config without dragging
-app state along. `hub.config.json` is watched: save it and the providers reload.
-No restart to add a project root.
+app state along. `hub.config.json` is watched: save it and the providers reload,
+whether the edit came from the settings screen or your editor. No restart to add
+a project root.
 
-Open it from the tray (*Edit hub.config.json*) or the dashboard's **Config**
-button. A first run writes a starter file full of worked examples.
+> Saving from the settings forms rewrites `hub.config.json` from the parsed
+> shape, which drops comments and any keys the forms don't cover. Settings →
+> **Advanced** keeps a raw text editor that saves the file verbatim if you want
+> to keep comments.
 
 ```jsonc
 {
@@ -163,6 +171,17 @@ launch often get a small recency nudge — enough to break ties, never enough to
 promote a worse match.
 
 Closing the dashboard window leaves Dev Hub in the tray so the hotkey stays live.
+
+### If the hotkey does nothing
+
+Another application already owns the combination. Windows gives no warning — it
+simply doesn't deliver the key, and the app never hears about it either.
+
+Settings → **General** shows whether the hotkey actually registered, and offers
+combinations that rarely clash. **Open the launcher now** in that panel bypasses
+the hotkey entirely, so it tells you whether the problem is the shortcut or the
+launcher itself. The tray menu and the dashboard's search box are the other two
+ways in.
 
 ---
 
