@@ -100,9 +100,15 @@ mod tests {
     #[test]
     fn the_run_command_quotes_the_exe_and_asks_for_a_tray_start() {
         let command = run_command().unwrap();
+        // Quoted, because Program Files has a space in it and an unquoted Run
+        // value would be parsed as a program plus arguments.
         assert!(command.starts_with('"'), "{command}");
         assert!(command.ends_with("--startup"), "{command}");
-        assert!(command.contains("dev-hub"), "{command}");
+        // Whatever the running exe is — under `cargo test` that's the test
+        // harness, not dev-hub.exe, so asserting on the product name here was
+        // testing the test runner.
+        let exe = std::env::current_exe().unwrap().display().to_string();
+        assert!(command.contains(&exe), "{command} should name {exe}");
     }
 
     #[cfg(not(windows))]
