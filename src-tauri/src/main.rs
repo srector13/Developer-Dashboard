@@ -5,6 +5,7 @@
 mod ai;
 mod attachments;
 mod capture;
+mod cli;
 mod commands;
 mod desktop;
 mod exports;
@@ -29,9 +30,16 @@ fn main() {
     tauri::Builder::default()
         // A second launch (or a leftover process trying to start again) hands
         // off to the running app instead of stacking another process that
-        // fights over the global shortcuts.
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        // fights over the global shortcuts. That handoff carries the second
+        // launch's arguments, which is what makes `markdown-notebook.exe
+        // note.md:42` work as a "jump to this line" command from another tool.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            let request = cli::parse(&argv[1.min(argv.len())..])
+                .and_then(|r| cli::resolve(r, Some(std::path::Path::new(&cwd))));
             desktop::reveal_main_window(app, None);
+            if let Some(request) = request {
+                desktop::open_note_at(app, request);
+            }
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -110,6 +118,8 @@ fn main() {
             commands::list_capture_targets,
             commands::append_quick_capture,
             commands::hide_capture_window,
+            // opened from the command line by another tool
+            commands::take_pending_open,
             // launcher
             commands::launcher_context,
             commands::launcher_search,
@@ -136,6 +146,13 @@ fn main() {
 
             // Seed the per-user pointer for installs that predate it.
             settings::write_notebook_pointer(&settings.notebook_root);
+
+            // Park a command-line request for the renderer to collect. It
+            // cannot be emitted as an event here — the webview does not exist
+            // yet, so nothing would be listening.
+            if let Some(request) = cli::from_env().and_then(|r| cli::resolve(r, None)) {
+                *app.state::<AppState>().pending_open.lock().unwrap() = Some(request);
+            }
 
             desktop::build_tray(&handle)?;
             desktop::update_watcher(&handle, &settings);

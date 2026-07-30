@@ -59,7 +59,41 @@ const checks = {
   'dart highlight': /language-dart|hljs/.test(out) && out.includes('hljs'),
   'js highlight': out.includes('hljs-keyword') || out.includes('hljs'),
   'external target': out.includes('target="_blank"'),
+  // Blocks carry the line they came from in the ORIGINAL note, not in the
+  // body left after frontmatter and the leading H1 are stripped. In `sample`
+  // the paragraph is line 8 and the two tasks are lines 10 and 11.
+  'paragraph knows its source line': out.includes('<p data-source-line="8">'),
+  'open task knows its source line': /<li[^>]*data-source-line="10"/.test(out),
+  'done task knows its source line': /<li[^>]*data-source-line="11"/.test(out),
+  'no block claims a line inside the frontmatter':
+    !/data-source-line="[1-5]"/.test(out),
 };
+
+// buildLineMap on its own: the offset has to survive each stripped construct.
+const mapChecks = (() => {
+  const original = [
+    '---',            // 1
+    'title: T',       // 2
+    '---',            // 3
+    '',               // 4
+    '# Heading',      // 5
+    '',               // 6
+    'First para.',    // 7
+    '',               // 8
+    '- [ ] a task',   // 9
+  ].join('\n');
+  const rendered = md.render(original, {});
+  return {
+    'para after a stripped H1 and frontmatter maps to 7':
+      rendered.includes('<p data-source-line="7">'),
+    'task after them maps to 9': /<li[^>]*data-source-line="9"/.test(rendered),
+    'a note with no frontmatter is unshifted':
+      md.render('Just text.\n', {}).includes('<p data-source-line="1">'),
+    'buildLineMap is 0-based internally':
+      JSON.stringify(md.buildLineMap('a\nb\nc', 'b\nc')) === JSON.stringify([1, 2]),
+  };
+})();
+Object.assign(checks, mapChecks);
 let fail = 0;
 for (const [k,v] of Object.entries(checks)) { if(!v) fail++; console.log((v?'  ok  ':'  FAIL') + '  ' + k); }
 console.log('\nresolvePath:', md.resolvePath('C:\\notes\\sec', '../att/x.png'));

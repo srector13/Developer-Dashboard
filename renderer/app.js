@@ -80,6 +80,20 @@ function hideAppLoading() {
   }, remaining);
 }
 
+// Launched from another tool with a note to open, optionally at a line — see
+// docs/command-line.md. The command line counts lines from 1, openNoteAtLine
+// counts from 0.
+async function handleOpenRequest(request) {
+  if (!request || !request.fsPath) return;
+  const view = request.view || null;
+  if (request.line) {
+    await openNoteAtLine(request.fsPath, request.line - 1, { view });
+  } else {
+    await openNote(request.fsPath);
+    if (view) setViewMode(view);
+  }
+}
+
 // Initialize App
 document.addEventListener('DOMContentLoaded', async () => {
   // Load settings
@@ -120,6 +134,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   // painted, so there's a taskbar entry and a branded screen throughout.
   hideAppLoading();
 
+  // A cold start launched with a note on the command line. Collected here,
+  // after the tree is loaded and the previous session's tabs are restored, so
+  // the requested note ends up the active one rather than being overwritten.
+  if (window.api.takePendingOpen) {
+    try {
+      await handleOpenRequest(await window.api.takePendingOpen());
+    } catch (err) {
+      console.error('Command-line open failed:', err);
+    }
+  }
+
   // File watcher setup (auto refresh)
   window.api.onFilesChanged(async () => {
     await refreshNotebook(false); // refresh tree without resetting active note
@@ -139,6 +164,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (fsPath) openNote(fsPath);
     });
   }
+  if (window.api.onOpenNoteAt) {
+    window.api.onOpenNoteAt(handleOpenRequest);
+  }
+
   // Launcher "Export" button: open the note, then its PDF export dialog
   if (window.api.onOpenNoteExport) {
     window.api.onOpenNoteExport(async (fsPath) => {
@@ -849,10 +878,44 @@ function highlightSnippet(text, ranges) {
   return html;
 }
 
-// Open a note and reveal the given line (best effort: exact caret placement
-// in edit/split; proportional scroll in preview, which has no line anchors)
-async function openNoteAtLine(fsPath, line) {
+// Scroll the preview to the block a source line belongs to, and mark it.
+//
+// `sourceLine` is 1-based, matching the `data-source-line` markdown.js stamps
+// and the way every editor counts. Not every line renders to its own element —
+// a line in the middle of a paragraph, or inside a fence — so this takes the
+// last block that starts at or before the target, which is the block that
+// contains it.
+function scrollPreviewToSourceLine(sourceLine) {
+  const preview = document.getElementById('preview-pane');
+  if (!preview) return false;
+  const target = Math.max(1, parseInt(sourceLine, 10) || 1);
+
+  let best = null;
+  let bestLine = -1;
+  preview.querySelectorAll('[data-source-line]').forEach(el => {
+    const at = parseInt(el.getAttribute('data-source-line'), 10);
+    if (!Number.isFinite(at) || at > target) return;
+    // >= keeps the innermost block when several start on the same line, e.g. a
+    // list item and the paragraph inside it.
+    if (at >= bestLine) { best = el; bestLine = at; }
+  });
+  if (!best) return false;
+
+  const top = best.offsetTop - preview.clientHeight / 3;
+  preview.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+  best.classList.add('line-target');
+  setTimeout(() => best.classList.remove('line-target'), 2200);
+  return true;
+}
+
+// Open a note and reveal a line: exact caret placement in edit/split, and the
+// block that contains it in preview. `line` is 0-based, as the search results
+// that call this count lines.
+async function openNoteAtLine(fsPath, line, options = {}) {
   await openNote(fsPath);
+  if (options.view && options.view !== viewMode) {
+    setViewMode(options.view);
+  }
   const lineIdx = Math.max(0, parseInt(line, 10) || 0);
   if (viewMode === 'edit' || viewMode === 'split') {
     const textarea = document.getElementById('note-editor');
@@ -864,12 +927,16 @@ async function openNoteAtLine(fsPath, line) {
     textarea.focus();
     textarea.setSelectionRange(offset, offset);
     scrollEditorCaretIntoView(textarea);
-  } else {
-    const preview = document.getElementById('preview-pane');
-    const totalLines = noteContent.split('\n').length || 1;
+  }
+  if (viewMode === 'preview' || viewMode === 'split') {
     // wait one tick for the render queue to finish laying out
     await renderMarkdownPreview();
-    preview.scrollTop = Math.max(0, (lineIdx / totalLines) * preview.scrollHeight - preview.clientHeight / 3);
+    if (!scrollPreviewToSourceLine(lineIdx + 1)) {
+      // Nothing carried a line stamp — an empty note, or a target past the end.
+      const preview = document.getElementById('preview-pane');
+      const totalLines = noteContent.split('\n').length || 1;
+      preview.scrollTop = Math.max(0, (lineIdx / totalLines) * preview.scrollHeight - preview.clientHeight / 3);
+    }
   }
 }
 

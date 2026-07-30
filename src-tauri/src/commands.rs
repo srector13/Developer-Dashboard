@@ -6,6 +6,7 @@
 //! Electron main process's behaviour.
 
 use crate::attachments::{store_attachment, AttachmentResult};
+use crate::cli;
 use crate::capture::{self, CaptureResult};
 use crate::desktop::{self, notify_files_changed};
 use crate::exports;
@@ -1608,6 +1609,17 @@ pub async fn launcher_open_note(app: AppHandle, fs_path: String) -> Res<()> {
     desktop::hide_launcher_window(&app);
     desktop::reveal_main_window(&app, Some(fs_path));
     Ok(())
+}
+
+/// Hand the renderer whatever the command line asked to open, once.
+///
+/// A cold start parses its arguments long before the webview exists, so the
+/// request is parked in state rather than emitted. The renderer collects it as
+/// part of booting; a second launch, where the window is already up, gets an
+/// `open-note-at` event instead and never reaches this.
+#[tauri::command]
+pub async fn take_pending_open(state: State<'_, AppState>) -> Res<Option<cli::OpenRequest>> {
+    Ok(state.pending_open.lock().unwrap().take())
 }
 
 #[tauri::command]

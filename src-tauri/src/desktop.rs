@@ -62,6 +62,14 @@ pub fn reveal_main_window(app: &AppHandle, open_note: Option<String>) {
     }
 }
 
+/// Tell the running app to open a note, optionally at a line and in a given
+/// view. Used by the second-launch handoff, where the window already exists.
+pub fn open_note_at(app: &AppHandle, request: crate::cli::OpenRequest) {
+    if let Some(window) = app.get_webview_window(MAIN) {
+        let _ = window.emit("open-note-at", request);
+    }
+}
+
 /// Open a note in the main window AND open its PDF export dialog.
 pub fn reveal_main_window_for_export(app: &AppHandle, fs_path: String) {
     let Some(window) = app.get_webview_window(MAIN) else {

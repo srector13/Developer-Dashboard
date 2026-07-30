@@ -49,6 +49,7 @@ flowchart LR
 - **Copy as rich text** — paste a fully formatted note directly into an email, Slack, or a wiki.
 - **Import, too.** Paste a copied email or web page as a clean new note, or import Word / PowerPoint / Excel files into the section of your choice.
 - **Bring your OneNote across.** Point the app at OneNote desktop and pick whole notebooks, sections, or individual pages: each OneNote page becomes its own note, and OneNote's sections (and section groups) become sections here. Images come with it. See [`docs/onenote-import.md`](docs/onenote-import.md).
+- **Open a note from another program.** The exe takes a path and a line — `Markdown-Notebook.exe "C:\notes\alpha.md:42"` — and opens that note scrolled to that line, in the window that is already running. Built for companion tools that scan the notebook and want a clickable result. See [`docs/command-line.md`](docs/command-line.md).
 
 ## Little comforts
 

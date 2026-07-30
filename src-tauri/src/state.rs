@@ -41,6 +41,10 @@ pub struct AppState {
     /// Searches acquire it first so results are never silently partial.
     pub index_gate: tokio::sync::Mutex<()>,
     pub pending_shot: Mutex<Option<PendingShot>>,
+    /// A note the command line asked for, held until the renderer has booted
+    /// far enough to ask for it. A cold start cannot receive an event: the
+    /// webview does not exist yet when the arguments are parsed.
+    pub pending_open: Mutex<Option<crate::cli::OpenRequest>>,
     pub shortcuts: Mutex<RegisteredShortcuts>,
     /// Mirrored from settings so the synchronous window close handler can read
     /// it without touching the settings lock.
@@ -59,6 +63,7 @@ impl AppState {
             search_index: RwLock::new(HashMap::new()),
             index_gate: tokio::sync::Mutex::new(()),
             pending_shot: Mutex::new(None),
+            pending_open: Mutex::new(None),
             shortcuts: Mutex::new(RegisteredShortcuts::default()),
             keep_in_tray: AtomicBool::new(keep),
             quitting: AtomicBool::new(false),

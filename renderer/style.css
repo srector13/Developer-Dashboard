@@ -1152,6 +1152,31 @@ body.sidebar-collapsed #btn-expand-sidebar {
   opacity: 0.75;
 }
 
+/* The block a "jump to line" landed on. Scrolling alone leaves you hunting for
+   which paragraph was meant; this says so, then gets out of the way. */
+.markdown-body .line-target {
+  animation: line-target-fade 2.2s ease-out;
+  border-radius: var(--radius-sm);
+}
+
+@keyframes line-target-fade {
+  0%, 55% {
+    background-color: var(--surface-active);
+    box-shadow: 0 0 0 6px var(--surface-active);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .markdown-body .line-target {
+    animation: none;
+    background-color: var(--surface-active);
+  }
+}
+
 /* Highlight mark styles (Glowing highlighter effect) */
 .markdown-body mark {
   background-color: var(--mark-bg) !important;

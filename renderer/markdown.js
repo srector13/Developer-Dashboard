@@ -282,12 +282,61 @@
       }
     });
 
+    // Stamp every block with the note line it came from, so the preview can be
+    // scrolled to a line — which is what lets another tool say "open this note
+    // at line 42". Block tokens are a flat list, so list items get stamped too
+    // and a task can be targeted individually.
+    md.core.ruler.push('notebook-source-lines', (state) => {
+      const map = (state.env && state.env.lineMap) || null;
+      for (const token of state.tokens) {
+        if (!token.map || token.nesting !== 1) continue;
+        const rendered = token.map[0];
+        const original = map && map[rendered] != null ? map[rendered] : rendered;
+        // 1-based, matching how every editor and error message counts.
+        token.attrSet('data-source-line', String(original + 1));
+      }
+    });
+
     // highlight.js "common" ships ~35 languages; dart and scala are the only
     // languages in the app's dropdown outside that set, and their grammar
     // files (loaded from index.html) register themselves against `hljs`.
 
     mdInstance = md;
     return mdInstance;
+  }
+
+  // Map each line of the preprocessed body back to its line in the original
+  // note, so a preview block can say which source line it came from.
+  //
+  // Rendering strips frontmatter, the leading H1 and TOC backlinks, which shifts
+  // every line that follows — usually by five or six, enough to land a "jump to
+  // line 42" on the wrong paragraph. Rather than teach each of those strips to
+  // count, this walks the two texts together: what survives is a subsequence of
+  // the original, in order, so matching each non-blank line forward from the
+  // last match recovers the offset without the strips having to cooperate.
+  // Blank lines just advance, because nothing ever needs to scroll to one.
+  function buildLineMap(original, body) {
+    const source = original.split('\n');
+    const kept = body.split('\n');
+    const map = new Array(kept.length);
+    let cursor = 0;
+    for (let i = 0; i < kept.length; i++) {
+      const needle = kept[i].trim();
+      if (!needle) {
+        map[i] = cursor;
+        cursor = Math.min(cursor + 1, source.length - 1);
+        continue;
+      }
+      let found = -1;
+      for (let j = cursor; j < source.length; j++) {
+        if (source[j].trim() === needle) { found = j; break; }
+      }
+      // An inline edit (the TOC link removal rewrites a line in place) leaves
+      // no exact match; fall back to the running position rather than drifting.
+      map[i] = found === -1 ? cursor : found;
+      cursor = map[i] + 1;
+    }
+    return map;
   }
 
   // opts.resourceBase (the note's directory) enables relative image
@@ -308,8 +357,11 @@
     // (run after stripping TOC)
     body = body.replace(/^([ \t]*\r?\n)*#[ \t]+.+(\r?\n|$)/, '');
 
-    return getMd().render(body, { resourceBase: (opts && opts.resourceBase) || '' });
+    return getMd().render(body, {
+      resourceBase: (opts && opts.resourceBase) || '',
+      lineMap: buildLineMap(text, body),
+    });
   }
 
-  window.NotebookMarkdown = { render, resolvePath, toAssetUrl };
+  window.NotebookMarkdown = { render, resolvePath, toAssetUrl, buildLineMap };
 })();

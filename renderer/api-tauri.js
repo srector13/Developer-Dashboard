@@ -143,6 +143,11 @@
     onCaptureShortcutFailed: (callback) => on('capture-shortcut-failed', (e) => callback(e.payload)),
     onOpenNote: (callback) => on('open-note', (e) => callback(e.payload)),
     onOpenNoteExport: (callback) => on('open-note-export', (e) => callback(e.payload)),
+    // Another tool launched the exe with a note (and maybe a line) to open.
+    // A second launch arrives as an event; a cold start has to be collected,
+    // because the request is parsed before this webview exists.
+    onOpenNoteAt: (callback) => on('open-note-at', (e) => callback(e.payload)),
+    takePendingOpen: () => invoke('take_pending_open'),
 
     checkForUpdates: () => invoke('check_for_updates'),
     getAppVersion: () => invoke('app_version'),

@@ -72,6 +72,11 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
       kind: 'page', name: 'xss.md', fsPath: '/nb/xss.md', relPath: 'xss.md',
       title: xssTitle, created: '2026-07-01', tags: ['<img src=x onerror=window.__xss4=1>'], pinned: false,
       openTasks: 0, completedTasks: 0, taskLines: [],
+    }, {
+      kind: 'page', name: 'deep.md', fsPath: '/nb/deep.md', relPath: 'deep.md',
+      // Task counts stay zero: the notebook metrics checks assert exact totals.
+      title: 'Deep Link', created: '2026-07-05', tags: [], pinned: false,
+      openTasks: 0, completedTasks: 0, taskLines: [],
     }],
     sections: [{
       kind: 'section', name: 'Projects', fsPath: '/nb/Projects', relPath: 'Projects',
@@ -90,6 +95,14 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
     '/nb/smoke.md': noteMd,
     '/nb/Projects/alpha.md': '# Alpha\n\n- [ ] task\n- [x] done\n',
     '/nb/xss.md': '# x\n',
+    // Line numbers are load-bearing here — see the deep-link section.
+    // 1 --- / 2 title / 3 --- / 4 blank / 5 # Deep / 6 blank / 7 First para.
+    // 8 blank / 9 ## Second / 10 blank / 11 - [ ] find me / 12 - [x] done
+    '/nb/deep.md': [
+      '---', 'title: Deep Link', '---', '',
+      '# Deep', '', 'First para.', '', '## Second', '',
+      '- [ ] find me', '- [x] done', '',
+    ].join('\n'),
   };
 
   // Instrumentation the test reads back
@@ -139,7 +152,7 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
     text.split('\n').forEach((ln, idx) => {
       const t = ln.match(taskRe);
       if (t) {
-        html += `<div><a href="#" class="task-checkbox-link" data-line="${idx}">` +
+        html += `<div data-source-line="${idx + 1}"><a href="#" class="task-checkbox-link" data-line="${idx}">` +
           `<input class="task-checkbox" type="checkbox"${t[1].toLowerCase() === 'x' ? ' checked' : ''}></a>${esc(t[2])}</div>`;
       }
     });
@@ -236,6 +249,8 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
       return ['/nb/Projects/alpha.md'];
     },
     onFilesChanged: (cb) => { window.__filesCb = cb; return () => {}; },
+    onOpenNoteAt: (cb) => { window.__openAtCb = cb; return () => {}; },
+    takePendingOpen: async () => (window.__pendingOpen || null),
     toggleTaskAtLine: async (p, line) => {
       (window.__toggleCalls = window.__toggleCalls || []).push([p, line]);
       return true;
@@ -790,7 +805,8 @@ await page.locator('.logo-area').click(); // Notebook Dashboard (root landing)
 await page.waitForTimeout(500);
 check('root landing opens', await page.locator('#landing-workspace').isVisible());
 check('metrics: pages / completed / pending', await page.evaluate(() =>
-  document.getElementById('metric-pages').innerText === '3' &&
+  // smoke.md, xss.md, deep.md, Projects/alpha.md
+  document.getElementById('metric-pages').innerText === '4' &&
   document.getElementById('metric-completed').innerText === '1' &&
   document.getElementById('metric-pending').innerText === '1'));
 check('pending actions rendered from taskLines', await page.evaluate(() => {
@@ -1678,6 +1694,54 @@ await page.waitForTimeout(500);
 check('close-all clears the tab strip and canvas', await page.evaluate(() =>
   document.querySelectorAll('#tab-strip .note-tab').length === 0 &&
   document.getElementById('tab-strip').style.display === 'none'));
+
+// --- 38a. Opening a note at a line, the way another tool would ---
+// The command line counts from 1 and the payload mirrors src-tauri/src/cli.rs.
+await page.evaluate(() => window.__openAtCb({ fsPath: '/nb/deep.md', line: 11, view: 'preview' }));
+await page.waitForTimeout(600);
+check('the deep link opened the right note', await page.evaluate(() =>
+  document.getElementById('note-title').innerText.includes('Deep Link')));
+check('a requested view is applied', await page.evaluate(() =>
+  document.getElementById('btn-mode-preview').classList.contains('active')));
+check('the targeted line is the one marked', await page.evaluate(() => {
+  const marked = document.querySelector('#preview-pane .line-target');
+  return !!marked && marked.getAttribute('data-source-line') === '11'
+    && marked.textContent.includes('find me');
+}));
+// A line inside a block, rather than at its start, lands on the block.
+await page.evaluate(() => window.__openAtCb({ fsPath: '/nb/deep.md', line: 12, view: 'preview' }));
+await page.waitForTimeout(500);
+check('a second jump re-targets', await page.evaluate(() => {
+  const marked = document.querySelector('#preview-pane .line-target');
+  return !!marked && marked.getAttribute('data-source-line') === '12';
+}));
+// Past the end of the note: the last block, not a crash or a blank pane.
+await page.evaluate(() => window.__openAtCb({ fsPath: '/nb/deep.md', line: 900, view: 'preview' }));
+await page.waitForTimeout(500);
+check('a line past the end still lands somewhere sane', await page.evaluate(() =>
+  !!document.querySelector('#preview-pane .line-target') &&
+  document.getElementById('note-title').innerText.includes('Deep Link')));
+// Edit view puts the caret on the line instead.
+await page.evaluate(() => window.__openAtCb({ fsPath: '/nb/deep.md', line: 11, view: 'edit' }));
+await page.waitForTimeout(500);
+check('an edit-view jump puts the caret on that line', await page.evaluate(() => {
+  const ta = document.getElementById('note-editor');
+  const before = ta.value.slice(0, ta.selectionStart).split('\n').length;
+  return document.getElementById('btn-mode-edit').classList.contains('active') && before === 11;
+}));
+// No line: just open it. Opening any note resets to preview, so that is where
+// a bare path lands — the same as clicking the note in the sidebar.
+await page.evaluate(() => window.setViewMode('split'));
+await page.evaluate(() => window.__openAtCb({ fsPath: '/nb/smoke.md' }));
+await page.waitForTimeout(400);
+check('a path with no line just opens the note', await page.evaluate(() =>
+  document.getElementById('note-title').innerText.includes('Smoke Note') &&
+  document.getElementById('btn-mode-preview').classList.contains('active')));
+check('a malformed request is ignored rather than throwing', await page.evaluate(async () => {
+  await window.handleOpenRequest(null);
+  await window.handleOpenRequest({});
+  return document.getElementById('note-title').innerText.includes('Smoke Note');
+}));
 
 // --- 38b. Tree rows: one inline action, the rest behind a menu ---
 check('a page row carries a single hover action', await page.evaluate(() => {
