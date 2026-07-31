@@ -50,6 +50,49 @@ pub fn app_version(app: AppHandle) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// First-run setup
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupSuggestions {
+    pub tools: Vec<crate::detect::DetectedTool>,
+    pub repo_roots: Vec<String>,
+    /// The notebook Markdown Notebook last opened, if it left a pointer.
+    pub notebook_root: String,
+}
+
+/// What first-run setup can offer without asking: the IDEs and terminals
+/// actually installed, folders that look like they hold checkouts, and the
+/// notebook the sibling app already knows about.
+#[tauri::command]
+pub fn setup_suggestions() -> SetupSuggestions {
+    SetupSuggestions {
+        tools: crate::detect::detect_tools(),
+        repo_roots: crate::detect::detect_repo_roots(),
+        notebook_root: settings::read_notebook_pointer(),
+    }
+}
+
+#[tauri::command]
+pub fn run_at_login() -> bool {
+    crate::startup::is_enabled()
+}
+
+/// Toggle the Run key, then mirror the result into settings.
+///
+/// The registry is the source of truth, not settings.json — the entry can be
+/// removed from Task Manager behind the app's back, and a checkbox that
+/// disagreed with reality would be worse than not having one.
+#[tauri::command]
+pub fn set_run_at_login(state: State<AppState>, enabled: bool) -> Result<bool, String> {
+    crate::startup::set_enabled(enabled)?;
+    let actual = crate::startup::is_enabled();
+    state.update_settings(serde_json::json!({ "runAtLogin": actual }));
+    Ok(actual)
+}
+
+// ---------------------------------------------------------------------------
 // The launcher hotkey
 // ---------------------------------------------------------------------------
 

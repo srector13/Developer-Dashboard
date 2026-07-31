@@ -35,6 +35,11 @@
     saveSettings: (settings) => invoke('save_settings', { settings }),
     getAppVersion: () => invoke('app_version'),
 
+    // First-run setup
+    setupSuggestions: () => invoke('setup_suggestions'),
+    runAtLogin: () => invoke('run_at_login'),
+    setRunAtLogin: (enabled) => invoke('set_run_at_login', { enabled }),
+
     // The hotkey, reported rather than assumed — see commands::shortcut_status.
     shortcutStatus: () => invoke('shortcut_status'),
     shortcutSuggestions: () => invoke('shortcut_suggestions'),

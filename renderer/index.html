@@ -65,11 +65,29 @@
     </section>
   </div>
 
+  <div id="setup-overlay">
+    <section id="setup-panel" role="dialog" aria-label="Set up Dev Hub">
+      <header id="setup-head">
+        <img src="app-icon.png" alt="">
+        <div>
+          <h2>Set up Dev Hub</h2>
+          <p>Two questions, then you're done. Everything here can be changed later in Settings.</p>
+        </div>
+      </header>
+      <div id="setup-body"></div>
+      <footer id="setup-foot">
+        <button class="btn-ghost" id="setup-skip">Skip for now</button>
+        <button class="btn-primary" id="setup-finish">Finish</button>
+      </footer>
+    </section>
+  </div>
+
   <div id="toast"></div>
 
   <script src="icons.js"></script>
   <script src="api-tauri.js"></script>
   <script src="settings.js"></script>
+  <script src="setup.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

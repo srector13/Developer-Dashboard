@@ -33,23 +33,33 @@ impl Probe {
     fn healthy(&self) -> bool {
         self.status_code == Some(self.expect)
     }
+
+    /// Answering correctly but slowly. Reported as a warning rather than an
+    /// error: the service is up, and saying otherwise would cry wolf.
+    fn slow(&self, slow_ms: u64) -> bool {
+        self.healthy() && slow_ms > 0 && self.latency_ms >= slow_ms as u128
+    }
 }
 
-pub fn item_for(probe: &Probe) -> Item {
+pub fn item_for(probe: &Probe, slow_ms: u64) -> Item {
     let subtitle = match (&probe.error, probe.status_code) {
         (Some(error), _) => error.clone(),
         (None, Some(code)) => format!("{code} · {}ms", probe.latency_ms),
         (None, None) => "no response".to_string(),
     };
 
+    let status = if !probe.healthy() {
+        Status::Error
+    } else if probe.slow(slow_ms) {
+        Status::Warn
+    } else {
+        Status::Ok
+    };
+
     let mut item = Item::new(ID, probe.url.clone(), probe.name.clone())
         .subtitle(subtitle)
         .icon("health")
-        .status(if probe.healthy() {
-            Status::Ok
-        } else {
-            Status::Error
-        })
+        .status(status)
         .keyword(probe.url.clone())
         .action(Action::OpenUrl {
             label: "Open in browser".into(),
@@ -67,6 +77,9 @@ pub fn item_for(probe: &Probe) -> Item {
         }
     } else {
         item = item.badge("unreachable");
+    }
+    if probe.slow(slow_ms) {
+        item = item.badge("slow");
     }
     item
 }
@@ -162,7 +175,10 @@ pub async fn check_all(config: &HealthConfig) -> (Vec<Item>, Option<String>) {
     // minute is unreadable.
     probes.sort_by_key(|(index, _)| *index);
 
-    let items = probes.iter().map(|(_, probe)| item_for(probe)).collect();
+    let items = probes
+        .iter()
+        .map(|(_, probe)| item_for(probe, config.slow_ms))
+        .collect();
     let error = (!problems.is_empty()).then(|| problems.join("; "));
     (items, error)
 }
@@ -204,33 +220,64 @@ mod tests {
         }
     }
 
+    /// A threshold no fixture latency can reach, for the tests that aren't
+    /// about slowness.
+    const NEVER_SLOW: u64 = 100_000;
+
+    #[test]
+    fn a_correct_but_slow_response_is_a_warning_not_a_failure() {
+        // 42ms against a 20ms threshold: up, but degraded.
+        let item = item_for(&probe_of(Some(200), 200, None), 20);
+        assert_eq!(item.status, Status::Warn);
+        assert!(item.badges.iter().any(|b| b == "slow"));
+
+        // A service that is already failing is not additionally "slow" — one
+        // problem, one colour.
+        let failing = item_for(&probe_of(Some(500), 200, None), 20);
+        assert_eq!(failing.status, Status::Error);
+        assert!(!failing.badges.iter().any(|b| b == "slow"));
+    }
+
+    #[test]
+    fn a_zero_threshold_switches_the_latency_warning_off() {
+        let item = item_for(&probe_of(Some(200), 200, None), 0);
+        assert_eq!(item.status, Status::Ok);
+        assert!(!item.badges.iter().any(|b| b == "slow"));
+    }
+
     #[test]
     fn the_expected_status_code_is_ok_and_anything_else_is_an_error() {
-        assert_eq!(item_for(&probe_of(Some(200), 200, None)).status, Status::Ok);
         assert_eq!(
-            item_for(&probe_of(Some(503), 200, None)).status,
+            item_for(&probe_of(Some(200), 200, None), NEVER_SLOW).status,
+            Status::Ok
+        );
+        assert_eq!(
+            item_for(&probe_of(Some(503), 200, None), NEVER_SLOW).status,
             Status::Error
         );
         // A non-200 expectation is honoured, not assumed.
-        assert_eq!(item_for(&probe_of(Some(204), 204, None)).status, Status::Ok);
+        assert_eq!(
+            item_for(&probe_of(Some(204), 204, None), NEVER_SLOW).status,
+            Status::Ok
+        );
     }
 
     #[test]
     fn a_healthy_check_shows_its_code_and_latency() {
-        let item = item_for(&probe_of(Some(200), 200, None));
+        let item = item_for(&probe_of(Some(200), 200, None), NEVER_SLOW);
         assert_eq!(item.subtitle.as_deref(), Some("200 · 42ms"));
         assert!(item.badges.iter().any(|b| b == "200"));
     }
 
     #[test]
     fn a_wrong_code_says_what_was_expected() {
-        let item = item_for(&probe_of(Some(500), 200, None));
+        let item = item_for(&probe_of(Some(500), 200, None), NEVER_SLOW);
         assert!(item.badges.iter().any(|b| b == "expected 200"));
     }
 
     #[test]
     fn an_unreachable_host_shows_the_reason_rather_than_an_empty_row() {
-        let item = item_for(&probe_of(None, 200, Some("connection refused")));
+        let item = item_for(&probe_of(None, 200, Some("connection refused")), NEVER_SLOW);
         assert_eq!(item.status, Status::Error);
         assert_eq!(item.subtitle.as_deref(), Some("connection refused"));
         assert!(item.badges.iter().any(|b| b == "unreachable"));
@@ -238,7 +285,7 @@ mod tests {
 
     #[test]
     fn every_check_is_openable_in_a_browser() {
-        let item = item_for(&probe_of(Some(200), 200, None));
+        let item = item_for(&probe_of(Some(200), 200, None), NEVER_SLOW);
         match &item.actions[0] {
             Action::OpenUrl { url, .. } => assert_eq!(url, "https://api.dev.example.com/health"),
             other => panic!("expected an openUrl action, got {other:?}"),
@@ -255,15 +302,15 @@ mod tests {
     #[tokio::test]
     async fn an_unreachable_endpoint_produces_an_error_item_and_no_provider_error() {
         let config = HealthConfig {
-            interval_seconds: 60,
             timeout_ms: 500,
-            // Port 0 is never listening, so this exercises the failure path
+            // Port 1 is never listening, so this exercises the failure path
             // without depending on the network.
             endpoints: vec![HealthEndpoint {
                 name: "nowhere".into(),
                 url: "http://127.0.0.1:1/health".into(),
                 expect: 200,
             }],
+            ..Default::default()
         };
         let (items, error) = check_all(&config).await;
         assert_eq!(

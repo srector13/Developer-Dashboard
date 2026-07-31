@@ -117,6 +117,30 @@ check('rows render a status dot, badges and a subtitle', await page.evaluate(() 
     && row.querySelector('.r-sub').textContent.includes('payments-api');
 }));
 
+check('badges sit in the right-hand column, not between title and subtitle', await page.evaluate(() => {
+  const row = document.querySelector('#results .result');
+  const title = row.querySelector('.r-title').getBoundingClientRect();
+  const badge = row.querySelector('.r-badge').getBoundingClientRect();
+  return badge.left > title.right;
+}));
+
+check('every row starts its title at the same x', await page.evaluate(() => {
+  const lefts = [...document.querySelectorAll('#results .result .r-title')]
+    .map(e => Math.round(e.getBoundingClientRect().left));
+  return new Set(lefts).size === 1;
+}));
+
+check('the selected row names what Enter will do', await page.evaluate(() => {
+  const enter = document.querySelector('#results .result.sel .r-enter');
+  return !!enter && enter.textContent.includes('IntelliJ')
+    && getComputedStyle(enter).display !== 'none';
+}));
+
+check('unselected rows do not show the Enter hint', await page.evaluate(() => {
+  const enter = document.querySelectorAll('#results .result')[1].querySelector('.r-enter');
+  return !enter || getComputedStyle(enter).display === 'none';
+}));
+
 check('the first result is selected', await page.evaluate(() =>
   document.querySelectorAll('#results .result')[0].classList.contains('sel')));
 
@@ -176,6 +200,60 @@ await page.waitForTimeout(200);
 check('Enter re-checks every endpoint and renders the result inline', await page.evaluate(() =>
   window.__calls.some(c => c[0] === 'refresh' && c[1] === 'health') &&
   document.querySelector('#results .result .r-title').textContent === 'API — local'));
+
+// --- Slash commands -------------------------------------------------------
+
+await page.keyboard.press('Control+1');
+await page.waitForTimeout(200);
+await page.fill('#q', '/');
+await page.waitForTimeout(220);
+check('typing / lists every command', await page.evaluate(() =>
+  document.querySelectorAll('#results .cmd').length === 5 &&
+  document.querySelector('#results .cmd .cmd-name').textContent === '/all'));
+
+await page.fill('#q', '/pro');
+await page.waitForTimeout(220);
+check('typing narrows the command list', await page.evaluate(() => {
+  const names = [...document.querySelectorAll('#results .cmd .cmd-name')].map(e => e.textContent);
+  return names.length === 1 && names[0] === '/projects';
+}));
+
+await page.keyboard.press('Enter');
+await page.waitForTimeout(250);
+check('Enter runs the command and switches mode', await page.evaluate(() =>
+  document.querySelectorAll('.orb')[1].classList.contains('active')));
+check('the slash text is consumed, not left in the box', await page.evaluate(() =>
+  document.getElementById('q').value === ''));
+
+await page.keyboard.press('Control+1');
+await page.waitForTimeout(200);
+await page.fill('#q', '/repos');
+await page.waitForTimeout(220);
+check('an alias resolves to the same command', await page.evaluate(() =>
+  document.querySelectorAll('#results .cmd').length === 1));
+await page.keyboard.press('Tab');
+await page.waitForTimeout(250);
+check('Tab completes the command instead of cycling modes', await page.evaluate(() =>
+  document.querySelectorAll('.orb')[1].classList.contains('active')));
+
+await page.keyboard.press('Control+1');
+await page.waitForTimeout(200);
+await page.fill('#q', '/nope');
+await page.waitForTimeout(220);
+check('an unknown command says so rather than searching for it', await page.evaluate(() =>
+  document.querySelector('#results .result.empty') &&
+  document.querySelector('#results .result.empty').textContent.includes('No such command')));
+
+await page.keyboard.press('Escape');
+await page.waitForTimeout(220);
+check('Escape leaves the palette without closing the launcher', await page.evaluate(() =>
+  document.getElementById('q').value === '' &&
+  !window.__calls.slice(-1).some(c => c[0] === 'hide')));
+
+await page.fill('#q', 'payments/api');
+await page.waitForTimeout(220);
+check('a slash inside a query is not a command', await page.evaluate(() =>
+  document.querySelectorAll('#results .cmd').length === 0));
 
 // --- Window sizing and reset ----------------------------------------------
 

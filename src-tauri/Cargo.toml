@@ -50,6 +50,11 @@ async-trait = "0.1"
 git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2"] }
 
 [target.'cfg(windows)'.dependencies]
+# Run-at-login is a value under HKCU\...\CurrentVersion\Run. A safe wrapper
+# beats hand-rolling RegSetValueExW: this crate's code paths can't be compiled
+# from a macOS dev box, and unverifiable `unsafe` is exactly how the last batch
+# of Windows-only defects got in.
+winreg = "0.52"
 # The foreground-stealing workaround for hotkey-summoned windows.
 windows = { version = "0.61", features = [
   "Win32_Foundation",

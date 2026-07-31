@@ -10,33 +10,23 @@ or more trustworthy. Features that just add surface get cut.
 
 ---
 
-## Phase 1 — Make it trustworthy
+## Phase 1 — Make it trustworthy ✅ *shipped*
 
 The things that decide whether you keep the app open after week one.
 
-**Run it at login.** A launcher you have to launch is a launcher you forget.
-A Windows startup shortcut, toggled from Settings, plus `startMinimized` so it
-goes straight to the tray. Small, and it changes the app from "a thing I open"
-to "a thing that's there".
-
-**A first-run screen.** Right now a fresh exe shows four cards, three of them
-empty, and the config that would fill them is a file you have to find. Replace
-that with: pick your repo folder, name one service, done — with everything else
-discoverable later in Settings.
-
-**Detect what's already installed.** On first run, look for `idea64.exe`,
-`code.cmd`, `wt.exe`, `git` in their usual places and offer them as openers
-instead of asking for paths. The single largest source of "I configured it and
-nothing happened" is a typo'd program path.
-
-**Health checks that say more than up/down.** Response-time history as a
-sparkline on the row, and a flip to `Warn` when latency degrades rather than only
-when the endpoint dies. A service that answers in 4s instead of 40ms is broken in
-the way that actually costs you an afternoon.
-
-**Notifications, sparingly.** A tray notification when a watched service goes
-from OK to failing, off by default and rate-limited. This is the feature that
-lets the dashboard stay closed and still be useful.
+- **Run it at login.** ✅ A value under the per-user Run key, toggled from
+  Settings. Starts in the tray, so nothing opens over your desktop.
+- **A first-run screen.** ✅ Two questions — where your repos are, which editor
+  opens them — with everything else filled in from what it can see. Skippable,
+  and never returns uninvited.
+- **Detect what's already installed.** ✅ IntelliJ (including Toolbox layouts),
+  Rider, VS Code, Windows Terminal, found in their usual places and offered as
+  openers rather than asked for as paths.
+- **Health checks that say more than up/down.** ✅ A configurable latency
+  threshold flips a service to `Warn` while it's still returning 200.
+  *Still outstanding:* response-time history as a sparkline on the row.
+- **Notifications, sparingly.** ✅ A desktop notification when a watched service
+  goes from OK to failing, only on the transition, off by default.
 
 ---
 

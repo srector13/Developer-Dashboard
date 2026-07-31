@@ -72,6 +72,31 @@ impl Default for AiSettings {
     }
 }
 
+/// One card's size on the dashboard grid.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CardLayout {
+    /// Columns to span. Clamped against the grid width when it renders.
+    #[serde(default = "one")]
+    pub span: u32,
+    /// Body height in pixels; `None` means size to content.
+    #[serde(default)]
+    pub height: Option<u32>,
+}
+
+fn one() -> u32 {
+    1
+}
+
+impl Default for CardLayout {
+    fn default() -> Self {
+        Self {
+            span: 1,
+            height: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -84,6 +109,21 @@ pub struct AppSettings {
     pub start_minimized: bool,
     pub dashboard_columns: u32,
     pub providers: ProviderToggles,
+    /// Start with Windows. Mirrors the registry Run key rather than owning the
+    /// truth — `startup::is_enabled` is authoritative, since the user can
+    /// remove the entry from Task Manager behind our back.
+    #[serde(default)]
+    pub run_at_login: bool,
+    /// Desktop notification when a watched service changes state. Off by
+    /// default: an app that starts popping toasts unasked is one you mute.
+    #[serde(default)]
+    pub notify_on_failure: bool,
+    /// False until first-run setup has been completed or dismissed.
+    #[serde(default)]
+    pub setup_complete: bool,
+    /// Per-card layout from the dashboard's resize handles, keyed by provider.
+    #[serde(default)]
+    pub card_layout: std::collections::HashMap<String, CardLayout>,
     pub ai: AiSettings,
     /// Card collapse state, keyed by provider id. Written by the dashboard.
     #[serde(default)]
@@ -99,6 +139,10 @@ impl Default for AppSettings {
             start_minimized: false,
             dashboard_columns: 2,
             providers: ProviderToggles::default(),
+            run_at_login: false,
+            notify_on_failure: false,
+            setup_complete: false,
+            card_layout: std::collections::HashMap::new(),
             ai: AiSettings::default(),
             collapsed: Vec::new(),
         }
@@ -211,7 +255,7 @@ pub struct TodoOpener {
     pub args: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TodosConfig {
     /// Empty → auto-discover from the Markdown Notebook pointer file.
@@ -222,6 +266,42 @@ pub struct TodosConfig {
     pub include_tags: Vec<String>,
     #[serde(default)]
     pub open_with: Option<TodoOpener>,
+    /// File names to skip entirely, matched case-insensitively against the file
+    /// name with or without its extension.
+    ///
+    /// Defaults cover the generated directory indexes a notebook app writes:
+    /// those list every todo in the folder, so scanning them reports each one a
+    /// second time.
+    #[serde(default = "default_todo_excludes")]
+    pub exclude_files: Vec<String>,
+    /// Collapse todos whose text is identical, keeping the one in the most
+    /// specific file. This is the belt to `exclude_files`' braces — it catches
+    /// a generated index whatever it happens to be called.
+    #[serde(default = "default_true")]
+    pub deduplicate: bool,
+}
+
+fn default_todo_excludes() -> Vec<String> {
+    ["index", "toc", "_toc", "contents", "_index", "readme"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for TodosConfig {
+    fn default() -> Self {
+        Self {
+            roots: Vec::new(),
+            include_tags: Vec::new(),
+            open_with: None,
+            exclude_files: default_todo_excludes(),
+            deduplicate: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -242,8 +322,17 @@ fn default_expect() -> u16 {
 pub struct HealthConfig {
     pub interval_seconds: u64,
     pub timeout_ms: u64,
+    /// Answering, but slowly enough to be a problem. A service that responds in
+    /// four seconds instead of forty milliseconds is broken in the way that
+    /// actually costs you an afternoon, and "200 OK" hides it completely.
+    #[serde(default = "default_slow_ms")]
+    pub slow_ms: u64,
     #[serde(default)]
     pub endpoints: Vec<HealthEndpoint>,
+}
+
+fn default_slow_ms() -> u64 {
+    1500
 }
 
 impl Default for HealthConfig {
@@ -251,6 +340,7 @@ impl Default for HealthConfig {
         Self {
             interval_seconds: 60,
             timeout_ms: 4000,
+            slow_ms: default_slow_ms(),
             endpoints: Vec::new(),
         }
     }
