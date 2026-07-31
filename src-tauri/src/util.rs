@@ -83,6 +83,69 @@ pub fn branch_web_url(web_url: &str, branch: &str) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Launching programs
+// ---------------------------------------------------------------------------
+
+/// The extensions Windows will append to a bare program name, from PATHEXT.
+#[cfg(windows)]
+fn path_extensions() -> Vec<String> {
+    std::env::var("PATHEXT")
+        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
+        .split(';')
+        .map(|ext| ext.trim().to_lowercase())
+        .filter(|ext| !ext.is_empty())
+        .collect()
+}
+
+/// Resolve a program name to a concrete executable, the way a shell would.
+///
+/// This exists because `CreateProcess` only ever appends `.exe`. A config entry
+/// of `code` or `npm` — really `code.cmd` and `npm.cmd` — would not be found,
+/// and the obvious workaround of routing everything through `cmd /C` is worse
+/// than the disease: `cmd` starts successfully and *then* fails to find the
+/// program, so a fire-and-forget spawn reports success and nothing happens.
+/// Resolving up front turns a bad program name into a message on the card.
+#[cfg(windows)]
+pub fn resolve_program(program: &str) -> Option<std::path::PathBuf> {
+    let raw = Path::new(program);
+    let extensions = path_extensions();
+
+    let probe = |base: &Path| -> Option<std::path::PathBuf> {
+        if base.is_file() {
+            return Some(base.to_path_buf());
+        }
+        extensions.iter().find_map(|ext| {
+            let mut candidate = base.as_os_str().to_os_string();
+            candidate.push(ext);
+            let candidate = std::path::PathBuf::from(candidate);
+            candidate.is_file().then_some(candidate)
+        })
+    };
+
+    // A name with a separator in it is a path, not something to look up.
+    if raw.is_absolute() || program.contains('/') || program.contains('\\') {
+        return probe(raw);
+    }
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).find_map(|dir| probe(&dir.join(raw)))
+}
+
+/// On Unix the kernel does the lookup and `spawn` reports a missing program
+/// honestly, so there is nothing to resolve.
+#[cfg(not(windows))]
+pub fn resolve_program(program: &str) -> Option<std::path::PathBuf> {
+    Some(std::path::PathBuf::from(program))
+}
+
+/// A batch file can't be handed to `CreateProcess` — it has to go through the
+/// command interpreter, even once we know exactly where it lives.
+pub fn needs_command_interpreter(path: &Path) -> bool {
+    path.extension()
+        .map(|ext| ext.eq_ignore_ascii_case("bat") || ext.eq_ignore_ascii_case("cmd"))
+        .unwrap_or(false)
+}
+
 /// A display name for a path: the last component, or the whole thing when
 /// there isn't one (a bare drive root).
 pub fn base_name(path: &Path) -> String {
@@ -165,6 +228,28 @@ mod tests {
             branch_web_url("https://github.com/o/r", ""),
             "https://github.com/o/r"
         );
+    }
+
+    #[test]
+    fn batch_files_are_the_only_thing_that_needs_the_interpreter() {
+        assert!(needs_command_interpreter(Path::new("C:\\bin\\code.cmd")));
+        assert!(needs_command_interpreter(Path::new("C:\\bin\\build.BAT")));
+        assert!(!needs_command_interpreter(Path::new("C:\\bin\\idea64.exe")));
+        assert!(!needs_command_interpreter(Path::new("/usr/bin/code")));
+    }
+
+    #[test]
+    fn an_existing_file_resolves_to_itself_when_given_as_a_path() {
+        // The test binary is the one executable guaranteed to exist here.
+        let exe = std::env::current_exe().unwrap();
+        let resolved = resolve_program(&exe.to_string_lossy()).expect("an existing path resolves");
+        assert_eq!(resolved, exe);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_program_that_is_nowhere_on_path_does_not_resolve() {
+        assert!(resolve_program("dev-hub-definitely-not-installed").is_none());
     }
 
     #[test]
