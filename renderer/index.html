@@ -1039,9 +1039,9 @@
       </div>
       <div class="modal-body">
         <p class="templates-help">
-          Each OneNote page becomes its own note, and OneNote sections become
-          sections here. Pages already imported are not detected, so importing
-          twice creates duplicates.
+          Each OneNote page becomes its own note in the section you choose
+          below. Pages already imported are not detected, so importing twice
+          creates duplicates.
         </p>
         <div id="onenote-status" class="builder-preview-placeholder" style="display: none;"></div>
         <div id="onenote-diag-actions" style="display: none; margin-top: 10px;">
@@ -1061,9 +1061,9 @@
           Into:
           <select id="onenote-dest" style="margin-left: 6px;"></select>
         </label>
-        <label class="check-row templates-help" style="margin: 0;" title="Off by default: pages land directly in the section you chose above.">
-          <input type="checkbox" id="onenote-wrap-notebook">
-          Put each notebook in its own folder
+        <label class="check-row templates-help" style="margin: 0;" title="Off: every page lands directly in the section you chose. On: OneNote's notebook, section groups and sections are recreated as folders under it.">
+          <input type="checkbox" id="onenote-keep-structure">
+          Recreate OneNote's folders
         </label>
         <div class="onenote-footer-actions">
           <button class="btn btn-outline" onclick="hideOneNoteModal()">Cancel</button>

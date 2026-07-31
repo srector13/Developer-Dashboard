@@ -164,29 +164,28 @@ check('ticking the notebook ticks everything', afterBook === 6, `got ${afterBook
 const selection = await page.evaluate(() => window.selectedOneNotePages());
 check('only pages are submitted, not the parent rows', selection.length === 3, `got ${selection.length}`);
 
-// By default the notebook name is NOT a folder: the destination was already
-// chosen in the picker, and wrapping it again was the reported complaint.
-const kickoff = selection.find(s => s.name === 'Kickoff');
-check('a grouped section becomes groups → section, with no notebook folder',
-  JSON.stringify(kickoff.sectionPath) === JSON.stringify(['Projects', 'Archive', 'Apollo']),
-  JSON.stringify(kickoff && kickoff.sectionPath));
+// Flat by default: every page lands directly in the chosen section, so no
+// folders are created and nothing can merge into what is already there.
+check('every page is filed flat by default',
+  selection.every(s => Array.isArray(s.sectionPath) && s.sectionPath.length === 0),
+  JSON.stringify(selection.map(s => s.sectionPath)));
 
-const standup = selection.find(s => s.name === 'Standup');
-check('an ungrouped section is just the section',
-  JSON.stringify(standup.sectionPath) === JSON.stringify(['Meetings']),
-  JSON.stringify(standup && standup.sectionPath));
-
-// Ticking the box puts it back, for importing from several notebooks at once.
-await page.evaluate(() => { document.getElementById('onenote-wrap-notebook').checked = true; });
-const wrapped = await page.evaluate(() => window.selectedOneNotePages());
-check('the notebook folder can be asked for',
-  JSON.stringify(wrapped.find(s => s.name === 'Kickoff').sectionPath) ===
+// Ticking the box rebuilds OneNote's own structure: notebook → groups → section.
+await page.evaluate(() => { document.getElementById('onenote-keep-structure').checked = true; });
+const structured = await page.evaluate(() => window.selectedOneNotePages());
+check('the structure can be asked for, groups included',
+  JSON.stringify(structured.find(s => s.name === 'Kickoff').sectionPath) ===
   JSON.stringify(['Work', 'Projects', 'Archive', 'Apollo']),
-  JSON.stringify(wrapped.find(s => s.name === 'Kickoff').sectionPath));
-check('it is off unless asked for', await page.evaluate(() => {
-  document.getElementById('onenote-wrap-notebook').checked = false;
-  return window.selectedOneNotePages()[0].sectionPath[0] !== 'Work';
+  JSON.stringify(structured.find(s => s.name === 'Kickoff').sectionPath));
+check('an ungrouped section is notebook → section',
+  JSON.stringify(structured.find(s => s.name === 'Standup').sectionPath) ===
+  JSON.stringify(['Work', 'Meetings']),
+  JSON.stringify(structured.find(s => s.name === 'Standup').sectionPath));
+check('unticking returns to flat', await page.evaluate(() => {
+  document.getElementById('onenote-keep-structure').checked = false;
+  return window.selectedOneNotePages().every(s => s.sectionPath.length === 0);
 }));
+const standup = selection.find(s => s.name === 'Standup');
 check('page ids are carried through', standup.id === '{P1}', standup && standup.id);
 
 // --- destination list names the whole chain, not just the leaf -------------

@@ -99,15 +99,35 @@ pub fn unwrap_single_cell_tables(html: &str) -> String {
         // table would otherwise see the inner table's cells as its own and be
         // left in place. Taking the cell's contents — rather than deleting all
         // table tags in the block — is what keeps a nested real table intact.
-        match single_cell_content(&rest[open.end()..end]) {
+        let inner = &rest[open.end()..end];
+        match single_cell_content(inner) {
             // Recurse: the cell may itself hold another layout table.
-            Some(cell) => out.push_str(&unwrap_single_cell_tables(cell)),
-            None => out.push_str(whole),
+            // Unwrapping keeps only the cell, so it is only safe when nothing
+            // else in the table carries text — a caption or a stray row would
+            // otherwise be dropped, and losing content is far worse than
+            // leaving a one-cell table in place.
+            Some(cell) if !has_text_outside(inner, cell) => {
+                out.push_str(&unwrap_single_cell_tables(cell))
+            }
+            _ => out.push_str(whole),
         }
         rest = &rest[end..];
     }
     out.push_str(rest);
     out
+}
+
+/// Does anything in `inner` other than `cell` carry visible text?
+///
+/// `cell` is a slice of `inner`, so the two ends around it are what unwrapping
+/// would throw away.
+fn has_text_outside(inner: &str, cell: &str) -> bool {
+    static TAGS: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?s)<[^>]*>").unwrap());
+    let cell_start = cell.as_ptr() as usize - inner.as_ptr() as usize;
+    let cell_end = cell_start + cell.len();
+    let outside = format!("{}{}", &inner[..cell_start], &inner[cell_end..]);
+    let text = TAGS.replace_all(&outside, "");
+    text.chars().any(|c| !c.is_whitespace() && c != '\u{00A0}')
 }
 
 /// The contents of this table's only cell, or `None` when it has any number of
@@ -319,6 +339,22 @@ mod tests {
         let got = unwrap_single_cell_tables(html);
         assert!(got.contains("keep"), "{got}");
         assert!(got.contains("dangling"), "{got}");
+    }
+
+    #[test]
+    fn a_caption_stops_the_table_being_unwrapped() {
+        // Unwrapping keeps only the cell, so anything else carrying text would
+        // vanish. Losing content is worse than leaving a one-cell table.
+        let html = "<table><caption>Q3 figures</caption><tr><td>body</td></tr></table>";
+        assert_eq!(unwrap_single_cell_tables(html), html);
+    }
+
+    #[test]
+    fn a_stray_empty_row_does_not_block_unwrapping() {
+        // Whitespace and empty markup outside the cell carry nothing, so the
+        // layout wrapper still goes.
+        let html = "<table>\n  <tr>\n  </tr>\n<tr><td><p>body</p></td></tr></table>";
+        assert_eq!(unwrap_single_cell_tables(html), "<p>body</p>");
     }
 
     #[test]

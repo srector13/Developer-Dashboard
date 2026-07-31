@@ -4219,18 +4219,18 @@ function selectedOneNotePages() {
     const section = book && book.sections[Number(box.dataset.section)];
     const page = section && section.pages[Number(box.dataset.page)];
     if (!page) return;
-    // Section groups and the section become real folders. The notebook name
-    // is NOT one of them by default: the destination was already chosen, and
-    // adding a folder on top of it is second-guessing that choice. Tick the
-    // box in the footer when importing from more than one notebook, where the
-    // extra level is what keeps two same-named sections apart.
-    const wrap = document.getElementById('onenote-wrap-notebook');
-    const prefix = wrap && wrap.checked ? [book.name] : [];
-    items.push({
-      id: page.id,
-      name: page.name,
-      sectionPath: [...prefix, ...section.groupPath, section.name],
-    });
+    // Flat by default: every page becomes a note directly in the section that
+    // was picked. Recreating OneNote's folders on top of a destination the
+    // user already chose is what made an import land somewhere unexpected.
+    // Same-named pages are safe — the writer gives each a unique filename.
+    //
+    // Ticking the box rebuilds OneNote's own structure instead: the notebook,
+    // then any section groups, then the section.
+    const keep = document.getElementById('onenote-keep-structure');
+    const sectionPath = keep && keep.checked
+      ? [book.name, ...section.groupPath, section.name]
+      : [];
+    items.push({ id: page.id, name: page.name, sectionPath });
   });
   return items;
 }

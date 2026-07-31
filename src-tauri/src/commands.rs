@@ -996,15 +996,16 @@ fn mhtml_to_markdown(settings: &AppSettings, bytes: &[u8], note_dir: &Path) -> R
     let html = crate::html_clean::clean_onenote_html(&rewritten.html);
 
     // `-native_divs-native_spans` stops pandoc treating OneNote's layout
-    // wrappers as structure it must preserve, and `gfm-raw_html` refuses the
-    // escape hatch of passing HTML through — between them, what comes out is
-    // markdown rather than a web page with markdown around it.
-    let markdown = pandoc::run_stdin(
-        settings,
-        &html,
-        "html-native_divs-native_spans",
-        "gfm-raw_html",
-    )?;
+    // wrappers as structure it must preserve. The output stays plain `gfm`,
+    // WITH raw HTML allowed: turning that off makes pandoc silently discard
+    // anything markdown cannot express, which loses content outright. Cleaning
+    // the input is how the HTML is reduced; dropping it is not.
+    //
+    // The extension-qualified reader is not understood by every pandoc, and a
+    // version that rejects it fails the whole page — so a plain `html` retry
+    // follows, which every pandoc accepts.
+    let markdown = pandoc::run_stdin(settings, &html, "html-native_divs-native_spans", "gfm")
+        .or_else(|_| pandoc::run_stdin(settings, &html, "html", "gfm"))?;
     Ok(crate::html_clean::tidy_markdown(&markdown))
 }
 
