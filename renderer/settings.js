@@ -15,6 +15,7 @@
 
   const SECTIONS = [
     { id: 'general', label: 'General', icon: 'settings' },
+    { id: 'launcher', label: 'Quick Launch', icon: 'search' },
     { id: 'launch', label: 'Apps & links', icon: 'app' },
     { id: 'projects', label: 'Repos', icon: 'git' },
     { id: 'todos', label: 'Todos', icon: 'check' },
@@ -171,9 +172,69 @@
       </div>`;
   }
 
-  function generalSection() {
+  /** The modes the launcher can show, matching ALL_TOOLS in launcher.html. */
+  const LAUNCHER_MODES = [
+    { id: 'all', label: 'All', hint: 'Search every provider at once' },
+    { id: 'projects', label: 'Projects', hint: 'Git repositories' },
+    { id: 'launch', label: 'Launch', hint: 'Apps and links' },
+    { id: 'todos', label: 'Todos', hint: 'Unchecked todos from your notes' },
+    { id: 'health', label: 'Health', hint: 'Re-check services on demand' },
+  ];
+
+  /** The launcher modes currently on, defaulting to all of them. */
+  function currentModes() {
+    const stored = settings.launcher && settings.launcher.modes;
+    return Array.isArray(stored) && stored.length ? stored : LAUNCHER_MODES.map(m => m.id);
+  }
+
+  function launcherSection() {
+    const launcher = settings.launcher || {};
+    const modes = currentModes();
+    const percent = Math.round((launcher.opacity != null ? launcher.opacity : 0.88) * 100);
+
     return `
       ${shortcutBox()}
+      <div class="set-group">
+        <h3>Appearance</h3>
+        <label class="set-field">
+          <span class="set-label">Background opacity — <strong id="opacity-value">${percent}%</strong></span>
+          <input type="range" id="launcher-opacity" min="50" max="100" step="1" value="${percent}">
+          <span class="set-hint">
+            The launcher floats over whatever you summoned it from. Lower is
+            prettier over a desktop; higher is readable over a busy window.
+          </span>
+        </label>
+        ${toggleField('settings', 'launcher.showHints', 'Show the keyboard hints',
+          'The row along the bottom explaining Enter, Tab and Esc. Useful while the keys are new; easy to reclaim once they are not.')}
+      </div>
+      <div class="set-group">
+        <h3>Modes</h3>
+        <p class="set-hint">
+          Which orbs appear, and what <kbd>Tab</kbd> cycles through. Switching one
+          off also removes its slash command.
+        </p>
+        ${LAUNCHER_MODES.map(mode => `
+          <label class="set-toggle">
+            <input type="checkbox" data-mode="${mode.id}" ${modes.includes(mode.id) ? 'checked' : ''}>
+            <span class="set-toggle-body">
+              <span class="set-label">${esc(mode.label)}</span>
+              <span class="set-hint">${esc(mode.hint)}</span>
+            </span>
+          </label>`).join('')}
+      </div>
+      <div class="set-group">
+        <h3>Results</h3>
+        ${textField('settings', 'launcher.maxResults', 'Most matches to show', {
+          type: 'number', min: 5,
+          hint: 'The list scrolls, so this is about how far a search reaches rather than how much fits.',
+        })}
+        ${toggleField('settings', 'launcher.showRecentWhenEmpty', 'Show recent items before you type',
+          'With an empty box, list what you open most instead of nothing.')}
+      </div>`;
+  }
+
+  function generalSection() {
+    return `
       <div class="set-group">
         <h3>Appearance</h3>
         ${selectField('settings', 'theme', 'Theme', [
@@ -451,6 +512,7 @@
   function sectionHtml() {
     switch (active) {
       case 'general': return generalSection();
+      case 'launcher': return launcherSection();
       case 'launch': return launchSection();
       case 'projects': return projectsSection();
       case 'todos': return todosSection();
@@ -609,6 +671,15 @@
       const target = event.target;
       const index = parseInt(target.dataset.index, 10);
 
+      // Live-previewed: the number next to the slider is the point of it.
+      if (target.id === 'launcher-opacity') {
+        const percent = Number(target.value);
+        set(settings, 'launcher.opacity', percent / 100);
+        const readout = document.getElementById('opacity-value');
+        if (readout) readout.textContent = `${percent}%`;
+        markDirty();
+        return;
+      }
       if (target.dataset.path) {
         const root = target.dataset.scope === 'settings' ? settings : config;
         let value = target.type === 'checkbox' ? target.checked : target.value;
@@ -663,6 +734,24 @@
           target.checked = runAtLogin;
           window.DevHubDashboard.toast(String(err), true);
         }
+        return;
+      }
+      // Mode list order follows LAUNCHER_MODES rather than click order, so the
+      // orbs stay in the arrangement the keyboard shortcuts assume.
+      if (target.dataset.mode) {
+        // Same fallback the render uses. Reading a missing list as "none
+        // selected" while the checkboxes show "all selected" made the first
+        // click look like it was switching off the last mode.
+        const wanted = new Set(currentModes());
+        if (target.checked) wanted.add(target.dataset.mode);
+        else wanted.delete(target.dataset.mode);
+        const ordered = LAUNCHER_MODES.map(m => m.id).filter(id => wanted.has(id));
+        set(settings, 'launcher.modes', ordered.length ? ordered : LAUNCHER_MODES.map(m => m.id));
+        if (!ordered.length) {
+          target.checked = true;
+          window.DevHubDashboard.toast('The launcher needs at least one mode.', true);
+        }
+        markDirty();
         return;
       }
       if (target.type === 'checkbox' && target.dataset.path) {

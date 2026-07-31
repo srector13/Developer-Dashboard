@@ -220,6 +220,17 @@ fn position_launcher(app: &AppHandle, window: &WebviewWindow) {
     let _ = window.set_position(tauri::LogicalPosition::new(x.round(), y.round()));
 }
 
+/// Ask an already-built launcher window to re-read its settings.
+///
+/// It reads them once on open, so without this a change to opacity or the mode
+/// list wouldn't show until the next time the window was created — which, since
+/// the window is reused, could be never.
+pub fn refresh_launcher_context(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(LAUNCHER) {
+        let _ = window.emit("launcher-settings-changed", ());
+    }
+}
+
 pub fn hide_launcher_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(LAUNCHER) {
         let _ = window.hide();

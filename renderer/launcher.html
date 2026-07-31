@@ -8,7 +8,11 @@
     /* The launcher's own chrome variables, lifted from Markdown Notebook so
        the two launchers are indistinguishable in feel. Do not redesign. */
     :root {
-      --lg-bg: rgba(28, 30, 38, 0.72);
+      /* Set from settings at open time. The panel sits over whatever window
+         you summoned it from, so how transparent is too transparent depends on
+         what you keep on screen — hence a setting rather than a constant. */
+      --lg-alpha: 0.88;
+      --lg-bg: rgba(28, 30, 38, var(--lg-alpha));
       --lg-border: rgba(255, 255, 255, 0.14);
       --lg-text: #f2f4f8;
       --lg-dim: #a2a8b6;
@@ -20,7 +24,7 @@
       --lg-error: #f85149;
     }
     body.light {
-      --lg-bg: rgba(250, 250, 252, 0.82);
+      --lg-bg: rgba(250, 250, 252, var(--lg-alpha));
       --lg-border: rgba(0, 0, 0, 0.10);
       --lg-text: #1a1c22;
       --lg-dim: #6a7080;
@@ -182,6 +186,7 @@
     #hint {
       padding: 4px 24px 18px; font-size: 12px; color: var(--lg-dim); line-height: 1.5;
     }
+    body.no-hints #hint { display: none; }
     #hint kbd {
       font-family: inherit; font-size: 11px;
       border: 1px solid var(--lg-border); border-radius: 5px; padding: 1px 6px; color: var(--lg-text);
@@ -211,9 +216,11 @@
     const api = window.launcherApi;
     const { iconSvg, ACTION_ICONS } = window.DevHubIcons;
 
-    // The orbs, in Tab order. `input` tools consume the text field and search
-    // their provider; an `action` tool fires on Enter with no text.
-    const TOOLS = [
+    // Every mode the launcher knows, in Tab order. `input` tools consume the
+    // text field and search their provider; an `action` tool fires on Enter
+    // with no text. Which of these actually appear is a setting — see
+    // `applyLauncherSettings`.
+    const ALL_TOOLS = [
       { id: 'all', label: 'All', kind: 'input', provider: null,
         placeholder: 'Search everything…', icon: 'search' },
       { id: 'projects', label: 'Projects', kind: 'input', provider: 'projects',
@@ -226,11 +233,19 @@
         placeholder: 'Re-check every endpoint', icon: 'health' },
     ];
 
+    /// The modes actually shown, narrowed by settings.
+    let TOOLS = ALL_TOOLS.slice();
+    /// Appearance and behaviour, replaced wholesale when settings change.
+    let launcherSettings = {
+      opacity: 0.88, showHints: true,
+      modes: ALL_TOOLS.map(t => t.id), maxResults: 40, showRecentWhenEmpty: true,
+    };
+
     // Slash commands: the same modes as the orbs, reachable without leaving the
     // keyboard or knowing which orb is third. `/` alone lists them all; typing
     // narrows; Tab or Enter picks and the rest of the line stays as the query,
     // so "/pr payments" goes straight to a filtered Projects search.
-    const COMMANDS = [
+    const ALL_COMMANDS = [
       { name: '/all', tool: 'all', desc: 'Search everything' },
       { name: '/projects', tool: 'projects', desc: 'Git repositories', alias: ['/repos', '/p'] },
       { name: '/apps', tool: 'launch', desc: 'Apps and links', alias: ['/launch', '/a'] },
@@ -334,8 +349,10 @@
 
     function matchCommands(fragment) {
       const typed = fragment.toLowerCase();
-      return COMMANDS.filter(c =>
-        c.name.startsWith(typed) || (c.alias || []).some(a => a.startsWith(typed)));
+      // A command for a mode you switched off would be a dead end.
+      return ALL_COMMANDS
+        .filter(c => TOOLS.some(t => t.id === c.tool))
+        .filter(c => c.name.startsWith(typed) || (c.alias || []).some(a => a.startsWith(typed)));
     }
 
     function renderCommands() {
@@ -381,12 +398,20 @@
       if (maybeShowCommands()) return;
       const q = input.value.trim();
       const token = ++searchToken;
+      if (!q && !launcherSettings.showRecentWhenEmpty) {
+        results = [];
+        selResult = 0;
+        renderResults();
+        renderHint();
+        fitHeight();
+        return;
+      }
       let rows = [];
       try {
         // An empty query still ranks: usage recency floats the things this
         // person actually opens to the top, so the launcher is useful before
         // the first keystroke.
-        rows = await api.search(q, t.provider, q ? 40 : 8);
+        rows = await api.search(q, t.provider, q ? launcherSettings.maxResults : 8);
       } catch { rows = []; }
       if (token !== searchToken) return; // superseded by a newer keystroke
       results = rows || [];
@@ -554,8 +579,12 @@
         else setActive(activeIdx + (e.shiftKey ? -1 : 1));
         return;
       }
-      if ((e.metaKey || e.ctrlKey) && /^[1-5]$/.test(e.key)) {
-        e.preventDefault(); setActive(parseInt(e.key, 10) - 1); return;
+      // Numbered against the modes actually shown, so Ctrl+3 is always the
+      // third orb rather than the third of a list you can't see.
+      if ((e.metaKey || e.ctrlKey) && /^[1-9]$/.test(e.key)) {
+        const index = parseInt(e.key, 10) - 1;
+        if (index < TOOLS.length) { e.preventDefault(); setActive(index); }
+        return;
       }
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault(); moveSel(e.key === 'ArrowDown' ? 1 : -1); return;
@@ -586,23 +615,53 @@
       input.focus();
     }
 
-    async function init() {
+    /// Apply a settings block: opacity, hints, and which orbs exist.
+    function applyLauncherSettings(next) {
+      launcherSettings = Object.assign({}, launcherSettings, next || {});
+
+      document.documentElement.style.setProperty('--lg-alpha', String(launcherSettings.opacity));
+      document.body.classList.toggle('no-hints', !launcherSettings.showHints);
+
+      const wanted = Array.isArray(launcherSettings.modes) ? launcherSettings.modes : [];
+      const chosen = wanted
+        .map(id => ALL_TOOLS.find(t => t.id === id))
+        .filter(Boolean);
+      // Never end up with nothing to search, whatever the file says.
+      TOOLS = chosen.length ? chosen : ALL_TOOLS.slice();
+      if (activeIdx >= TOOLS.length) activeIdx = 0;
+    }
+
+    async function loadContext() {
       try {
         const ctx = await api.context();
-        if (ctx) {
-          // "system" resolves here rather than in Rust, because the webview is
-          // the only thing that knows what the OS is currently asking for.
-          const light = ctx.theme === 'light' || (ctx.theme === 'system'
-            && window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
-          document.body.classList.toggle('light', !!light);
-          liveProviders = ctx.providers || [];
-        }
+        if (!ctx) return;
+        // "system" resolves here rather than in Rust, because the webview is
+        // the only thing that knows what the OS is currently asking for.
+        const light = ctx.theme === 'light' || (ctx.theme === 'system'
+          && window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
+        document.body.classList.toggle('light', !!light);
+        liveProviders = ctx.providers || [];
+        applyLauncherSettings(ctx.launcher);
       } catch {}
+    }
+
+    async function init() {
+      await loadContext();
       buildOrbs();
       setActive(0);
       input.focus();
     }
+
     if (api.onReset) api.onReset(resetLauncher);
+    // Settings changed while this window was alive — re-read rather than
+    // waiting for a rebuild that may never happen, since the window is reused.
+    if (api.onSettingsChanged) {
+      api.onSettingsChanged(async () => {
+        await loadContext();
+        buildOrbs();
+        setActive(Math.min(activeIdx, TOOLS.length - 1));
+      });
+    }
     window.addEventListener('focus', () => input.focus());
     init();
   </script>
