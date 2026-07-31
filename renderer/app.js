@@ -14,10 +14,40 @@
   const results = new Map();
   let settings = null;
   let collapsed = new Set();
+  /** Provider ids in display order, rewritten by dragging. */
+  let order = [];
 
   const gridEl = document.getElementById('grid');
   const bannerEl = document.getElementById('banner');
   const toastEl = document.getElementById('toast');
+
+  // Colour per card. Cards of one colour are a wall of grey text — a hue per
+  // provider is what lets you find the one you want without reading anything.
+  const PROVIDER_ACCENTS = {
+    launch: '#58a6ff',
+    projects: '#bc8cff',
+    todos: '#f2c94c',
+    health: '#3fb950',
+  };
+  /** For `command` providers, whose ids aren't known until the config is read. */
+  const FALLBACK_ACCENTS = ['#39c5cf', '#ff7b72', '#7ee787', '#ffa657', '#d2a8ff'];
+
+  const PROVIDER_ICONS = {
+    launch: 'app', projects: 'git', todos: 'check', health: 'health',
+  };
+
+  function accentFor(providerId) {
+    if (PROVIDER_ACCENTS[providerId]) return PROVIDER_ACCENTS[providerId];
+    let hash = 0;
+    for (let i = 0; i < providerId.length; i++) hash = (hash * 31 + providerId.charCodeAt(i)) >>> 0;
+    return FALLBACK_ACCENTS[hash % FALLBACK_ACCENTS.length];
+  }
+
+  function iconForProvider(providerId) {
+    return PROVIDER_ICONS[providerId] || 'command';
+  }
+
+  const SIZES = ['small', 'medium', 'large'];
 
   // --- helpers -------------------------------------------------------------
 
@@ -69,14 +99,36 @@
       const warn = /^(dirty|overdue|unreachable|expected )/i.test(b);
       return `<span class="badge ${warn ? 'warn' : ''}">${esc(b)}</span>`;
     }).join('');
-    // Action 0 is the row click; the rest live in the hover strip, so every
-    // action an item carries is reachable without a context menu. Each carries
-    // its label — a strip of unlabelled glyphs means hovering every one of them
-    // to find out which is which.
-    const extra = (item.actions || []).slice(1).map((a, i) => `
-      <button class="row-btn" data-key="${esc(key)}" data-action="${i + 1}" title="${esc(a.label)}">
-        ${iconSvg(ACTION_ICONS[a.kind] || 'chevron')}<span>${esc(a.label)}</span>
-      </button>`).join('');
+    const actions = item.actions || [];
+    const groups = item.actionGroups || [];
+    // An index that belongs to a group is rendered inside that group's menu,
+    // never also as a loose button.
+    const grouped = new Set(groups.flatMap(g => g.actions || []));
+
+    const groupButtons = groups.map((group, gi) => {
+      const entries = (group.actions || []).map(index => `
+        <button class="menu-item" data-key="${esc(key)}" data-action="${index}">
+          ${iconSvg(ACTION_ICONS[(actions[index] || {}).kind] || 'chevron')}
+          <span>${esc((actions[index] || {}).label || '')}</span>
+        </button>`).join('');
+      return `
+        <span class="row-menu" data-menu="${gi}">
+          <button class="row-btn" data-open-menu="${gi}" title="${esc(group.label)}">
+            ${iconSvg('chevron')}<span>${esc(group.label)}</span>
+          </button>
+          <span class="row-menu-list">${entries}</span>
+        </span>`;
+    }).join('');
+
+    // Anything ungrouped keeps its own labelled button. Index 0 is the row
+    // click, so it isn't repeated — unless a group claims it, in which case the
+    // menu lists it and the row still runs it.
+    const loose = actions.map((a, i) => ({ a, i }))
+      .filter(({ i }) => i !== 0 && !grouped.has(i))
+      .map(({ a, i }) => `
+        <button class="row-btn" data-key="${esc(key)}" data-action="${i}" title="${esc(a.label)}">
+          ${iconSvg(ACTION_ICONS[a.kind] || 'chevron')}<span>${esc(a.label)}</span>
+        </button>`).join('');
 
     return `
       <div class="card-row" tabindex="0" data-key="${esc(key)}" data-action="0" title="${esc(item.title)}">
@@ -86,7 +138,7 @@
           ${item.subtitle ? `<span class="row-sub">${esc(item.subtitle)}</span>` : ''}
           ${badges ? `<span class="row-badges">${badges}</span>` : ''}
         </span>
-        <span class="row-actions">${extra}</span>
+        <span class="row-actions">${groupButtons}${loose}</span>
       </div>`;
   }
 
@@ -103,83 +155,80 @@
     return html;
   }
 
-  /** The stored size for a card, clamped to a grid that may have shrunk. */
-  function layoutFor(providerId) {
-    const columns = (settings && settings.dashboardColumns) || 2;
+  /** A card's size preset. Anything unrecognised reads as medium. */
+  function sizeFor(providerId) {
     const stored = (settings && settings.cardLayout && settings.cardLayout[providerId]) || {};
-    return {
-      span: Math.min(Math.max(Number(stored.span) || 1, 1), columns),
-      height: Number(stored.height) || 0,
-    };
+    return SIZES.includes(stored.size) ? stored.size : 'medium';
+  }
+
+  function setSize(providerId, size) {
+    if (!SIZES.includes(size)) return;
+    settings.cardLayout = Object.assign({}, settings.cardLayout, { [providerId]: { size } });
+    api.saveSettings({ cardLayout: settings.cardLayout }).catch(() => {});
+    renderCard(providerId);
+  }
+
+  /**
+   * Display order: what the user dragged into, then anything new.
+   *
+   * A provider missing from the saved order goes to the end rather than
+   * vanishing — otherwise adding a `command` provider would produce a card that
+   * exists but is never drawn.
+   */
+  function orderedProviders() {
+    const live = [...results.keys()];
+    const known = order.filter(id => live.includes(id));
+    return known.concat(live.filter(id => !known.includes(id)));
   }
 
   function cardHtml(result) {
     const isCollapsed = collapsed.has(result.provider);
-    const layout = layoutFor(result.provider);
+    const size = sizeFor(result.provider);
+    const accent = accentFor(result.provider);
+    // A double-width card in a one-column grid would overflow the row. The
+    // preset is kept — it just can't be honoured until there's a column to
+    // spend on it.
     const columns = (settings && settings.dashboardColumns) || 2;
+    const narrow = columns < 2 ? ' one-column' : '';
+    const sizeButtons = SIZES.map(s => `
+      <button class="size-btn ${s === size ? 'active' : ''}" data-size="${s}"
+              data-provider="${esc(result.provider)}" title="${s[0].toUpperCase()}${s.slice(1)}">
+        ${s[0].toUpperCase()}
+      </button>`).join('');
+
     return `
-      <section class="card ${isCollapsed ? 'collapsed' : ''}" data-provider="${esc(result.provider)}"
-               style="grid-column: span ${layout.span}">
-        <header class="card-header">
+      <section class="card size-${size}${narrow} ${isCollapsed ? 'collapsed' : ''}"
+               data-provider="${esc(result.provider)}" style="--card-accent: ${accent}">
+        <header class="card-header" draggable="true" title="Drag to rearrange">
+          <span class="card-glyph">${iconSvg(iconForProvider(result.provider))}</span>
           <span class="card-chevron">${iconSvg('chevron')}</span>
           <span class="card-title">${esc(result.displayName || result.provider)}</span>
           <span class="card-count">${(result.items || []).length}</span>
           <span class="card-meta">${esc(relativeAge(result.refreshedAt))}</span>
-          ${columns > 1 ? `
-            <button class="card-btn" data-widen="${esc(result.provider)}"
-                    title="${layout.span > 1 ? 'Make this card narrower' : 'Make this card wider'}">
-              ${iconSvg('grid')}
-            </button>` : ''}
+          <span class="size-group">${sizeButtons}</span>
           <button class="card-btn" data-refresh="${esc(result.provider)}" title="Refresh this card">
             ${iconSvg('refresh')}
           </button>
         </header>
-        <div class="card-body" ${layout.height ? `style="max-height:${layout.height}px"` : ''}>${bodyHtml(result)}</div>
-        <div class="card-resize" data-resize="${esc(result.provider)}" title="Drag to resize · double-click to fit"></div>
+        <div class="card-body">${bodyHtml(result)}</div>
       </section>`;
   }
 
-  /** Persist a card's size. Merged, so widening doesn't forget a set height. */
-  function saveLayout(providerId, patch) {
-    const layout = Object.assign({}, layoutFor(providerId), patch);
-    settings.cardLayout = Object.assign({}, settings.cardLayout, { [providerId]: layout });
-    api.saveSettings({ cardLayout: settings.cardLayout }).catch(() => {});
-  }
-
-  function toggleWidth(providerId) {
-    const columns = (settings && settings.dashboardColumns) || 2;
-    const next = layoutFor(providerId).span > 1 ? 1 : Math.min(2, columns);
-    saveLayout(providerId, { span: next });
-    renderCard(providerId);
-  }
-
-  /** Drag the handle at a card's foot to set its height. */
-  function startResize(providerId, event) {
-    const card = gridEl.querySelector(`.card[data-provider="${CSS.escape(providerId)}"]`);
-    const body = card && card.querySelector('.card-body');
-    if (!body) return;
-    event.preventDefault();
-
-    const startY = event.clientY;
-    const startHeight = body.getBoundingClientRect().height;
-    document.body.classList.add('resizing');
-
-    const onMove = (move) => {
-      const height = Math.max(80, Math.round(startHeight + (move.clientY - startY)));
-      body.style.maxHeight = `${height}px`;
-    };
-    const onUp = () => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-      document.body.classList.remove('resizing');
-      saveLayout(providerId, { height: Math.round(body.getBoundingClientRect().height) });
-    };
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  }
-
   function renderGrid() {
-    gridEl.innerHTML = [...results.values()].map(cardHtml).join('');
+    gridEl.innerHTML = orderedProviders()
+      .map(id => cardHtml(results.get(id)))
+      .join('');
+  }
+
+  /** The order as the DOM currently has it — the source of truth while dragging. */
+  function domOrder() {
+    return [...gridEl.querySelectorAll('.card')].map(card => card.dataset.provider);
+  }
+
+  function persistOrder() {
+    order = domOrder();
+    settings.cardOrder = order;
+    api.saveSettings({ cardOrder: order }).catch(() => {});
   }
 
   /** Replace a single card in place, so a refresh doesn't reflow the grid. */
@@ -255,26 +304,86 @@
 
   // --- wiring --------------------------------------------------------------
 
-  function wireGrid() {
-    gridEl.addEventListener('mousedown', (event) => {
-      const handle = event.target.closest('.card-resize');
-      if (handle) startResize(handle.dataset.resize, event);
+  function closeMenus() {
+    gridEl.querySelectorAll('.row-menu.open').forEach(m => m.classList.remove('open'));
+  }
+
+  /**
+   * Drag a card by its header to rearrange the grid.
+   *
+   * The DOM is reordered live during the drag, so the other cards move out of
+   * the way as you go — the layout you see mid-drag is the layout you get. Only
+   * the header starts a drag, so selecting text in a row still works.
+   */
+  function wireDragAndDrop() {
+    let dragging = null;
+
+    gridEl.addEventListener('dragstart', (event) => {
+      const header = event.target.closest('.card-header');
+      if (!header) { event.preventDefault(); return; }
+      dragging = header.closest('.card');
+      dragging.classList.add('dragging');
+      document.body.classList.add('rearranging');
+      event.dataTransfer.effectAllowed = 'move';
+      // Firefox refuses to start a drag without payload; the id is also handy
+      // for debugging a dropped drag.
+      event.dataTransfer.setData('text/plain', dragging.dataset.provider);
     });
 
-    gridEl.addEventListener('dblclick', (event) => {
-      const handle = event.target.closest('.card-resize');
-      if (!handle) return;
-      saveLayout(handle.dataset.resize, { height: 0 });
-      renderCard(handle.dataset.resize);
+    gridEl.addEventListener('dragover', (event) => {
+      if (!dragging) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      const over = event.target.closest('.card');
+      if (!over || over === dragging) return;
+
+      // Insert before or after depending on which half of the card the pointer
+      // is in — measured on both axes, since the grid wraps.
+      const box = over.getBoundingClientRect();
+      const after = (event.clientY - box.top) > box.height / 2
+        || (event.clientX - box.left) > box.width / 2;
+      gridEl.insertBefore(dragging, after ? over.nextSibling : over);
     });
+
+    const finish = () => {
+      if (!dragging) return;
+      dragging.classList.remove('dragging');
+      document.body.classList.remove('rearranging');
+      dragging = null;
+      persistOrder();
+    };
+
+    gridEl.addEventListener('drop', (event) => { event.preventDefault(); finish(); });
+    gridEl.addEventListener('dragend', finish);
+  }
+
+  function wireGrid() {
+    wireDragAndDrop();
 
     gridEl.addEventListener('click', (event) => {
-      const widen = event.target.closest('[data-widen]');
-      if (widen) {
+      const size = event.target.closest('[data-size]');
+      if (size) {
         event.stopPropagation();
-        toggleWidth(widen.dataset.widen);
+        setSize(size.dataset.provider, size.dataset.size);
         return;
       }
+      const openMenu = event.target.closest('[data-open-menu]');
+      if (openMenu) {
+        event.stopPropagation();
+        const menu = openMenu.closest('.row-menu');
+        const wasOpen = menu.classList.contains('open');
+        closeMenus();
+        if (!wasOpen) menu.classList.add('open');
+        return;
+      }
+      const menuItem = event.target.closest('.menu-item');
+      if (menuItem) {
+        event.stopPropagation();
+        closeMenus();
+        runAction(menuItem.dataset.key, parseInt(menuItem.dataset.action, 10));
+        return;
+      }
+      closeMenus();
       const refresh = event.target.closest('[data-refresh]');
       if (refresh) {
         event.stopPropagation();
@@ -374,6 +483,7 @@
       ]);
       settings = loadedSettings;
       collapsed = new Set(settings.collapsed || []);
+      order = Array.isArray(settings.cardOrder) ? settings.cardOrder.slice() : [];
       applyTheme(settings.theme);
       applyColumns();
 
@@ -414,6 +524,7 @@
   window.DevHubDashboard = {
     load, renderGrid, renderCard, results, relativeAge, rowHtml, cardHtml,
     toggleCard, refreshAll, toast, reportShortcut, maybeOpenSetup,
+    setSize, sizeFor, orderedProviders, persistOrder, accentFor,
     collapsedSet: () => collapsed,
   };
 

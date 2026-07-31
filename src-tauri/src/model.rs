@@ -40,6 +40,23 @@ pub struct Item {
     /// `actions[0]` is the default: Enter in the launcher, row click on a card.
     #[serde(default)]
     pub actions: Vec<Action>,
+    /// Actions that belong together behind one menu.
+    ///
+    /// A repo with four configured editors would otherwise put four buttons on
+    /// its row, which is a worse version of a menu. Grouping is advisory — the
+    /// actions stay addressable by index either way, so a renderer that ignores
+    /// this still works.
+    #[serde(default)]
+    pub action_groups: Vec<ActionGroup>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionGroup {
+    /// What the menu button says, e.g. "Open with".
+    pub label: String,
+    /// Indices into `Item::actions`.
+    pub actions: Vec<usize>,
 }
 
 impl Item {
@@ -59,7 +76,21 @@ impl Item {
             badges: Vec::new(),
             keywords: Vec::new(),
             actions: Vec::new(),
+            action_groups: Vec::new(),
         }
+    }
+
+    /// Group the actions added since `from` under one menu label. Called after
+    /// the actions themselves, so the indices are already known.
+    pub fn group_from(mut self, label: &str, from: usize) -> Self {
+        let indices: Vec<usize> = (from..self.actions.len()).collect();
+        if !indices.is_empty() {
+            self.action_groups.push(ActionGroup {
+                label: label.to_string(),
+                actions: indices,
+            });
+        }
+        self
     }
 
     pub fn subtitle(mut self, subtitle: impl Into<String>) -> Self {

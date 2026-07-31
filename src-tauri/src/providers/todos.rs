@@ -118,12 +118,16 @@ fn is_overdue(due: &str, today: &str) -> bool {
     due < today
 }
 
-/// Is this file one of the generated directory indexes we should skip?
+/// Is this file an aggregate note we should skip?
 ///
-/// A notebook app writes a table-of-contents note per folder that repeats every
-/// todo underneath it. Scanning those reports each todo a second time, pointing
-/// at a file you'd never edit — so they are excluded by name, matched with and
-/// without the extension so both `index` and `index.md` work in the config.
+/// A notebook app writes table-of-contents and task-roll-up notes that repeat
+/// every todo underneath them. Scanning those reports each todo a second time,
+/// pointing at a file you'd never edit.
+///
+/// An entry beginning with a dot is a *suffix* — `.toc.md` skips
+/// `sprint.toc.md` and `team.toc.md` but leaves `roadmap.md` alone. Anything
+/// else matches the whole file name, with or without its extension, so both
+/// `index` and `index.md` work in the config.
 pub fn is_excluded(file: &Path, excludes: &[String]) -> bool {
     let Some(name) = file.file_name().map(|n| n.to_string_lossy().to_lowercase()) else {
         return false;
@@ -134,7 +138,13 @@ pub fn is_excluded(file: &Path, excludes: &[String]) -> bool {
         .unwrap_or_default();
     excludes.iter().any(|raw| {
         let wanted = raw.trim().to_lowercase();
-        !wanted.is_empty() && (wanted == name || wanted == stem)
+        if wanted.is_empty() {
+            return false;
+        }
+        if wanted.starts_with('.') {
+            return name.ends_with(&wanted);
+        }
+        wanted == name || wanted == stem
     })
 }
 
@@ -603,6 +613,33 @@ mod tests {
         assert!(is_excluded(
             Path::new("/n/work/summary.md"),
             &["summary.md".to_string()]
+        ));
+    }
+
+    #[test]
+    fn aggregate_files_are_excluded_by_suffix_whatever_they_are_named() {
+        let excludes = TodosConfig::default().exclude_files;
+        assert!(is_excluded(Path::new("/n/work/sprint.toc.md"), &excludes));
+        assert!(is_excluded(Path::new("/n/work/Team.Tasks.md"), &excludes));
+        assert!(is_excluded(
+            Path::new("/n/a/b/anything.tasks.md"),
+            &excludes
+        ));
+        // A note that merely mentions the word is untouched.
+        assert!(!is_excluded(Path::new("/n/work/toc-design.md"), &excludes));
+        assert!(!is_excluded(
+            Path::new("/n/work/tasks-for-friday.md"),
+            &excludes
+        ));
+    }
+
+    #[test]
+    fn a_suffix_pattern_does_not_swallow_the_bare_name() {
+        // ".toc.md" is about `<something>.toc.md`; a file called exactly
+        // "toc.md" is caught by the separate whole-name entry, not this one.
+        assert!(!is_excluded(
+            Path::new("/n/toc.md"),
+            &[".toc.md".to_string()]
         ));
     }
 
