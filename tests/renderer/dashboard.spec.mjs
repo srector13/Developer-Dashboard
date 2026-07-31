@@ -355,21 +355,84 @@ check('a grouped action is not also shown as a loose button', await page.evaluat
 }));
 
 check('the menu is closed until asked for', await page.evaluate(() =>
-  !document.querySelector('.card[data-provider="grouped"] .row-menu.open')));
+  !document.querySelector('.row-menu-popup')));
 
 await page.click('.card[data-provider="grouped"] [data-open-menu]');
 await page.waitForTimeout(150);
 check('opening the menu lists every editor', await page.evaluate(() => {
-  const items = [...document.querySelectorAll('.card[data-provider="grouped"] .row-menu.open .menu-item')];
+  const items = [...document.querySelectorAll('.row-menu-popup .menu-item')];
   return items.map(i => i.textContent.trim()).join(',') === 'IntelliJ,VS Code,Open folder';
 }));
 
-await page.click('.card[data-provider="grouped"] .row-menu.open .menu-item:nth-child(2)');
+// The menu must escape the card, which clips its own overflow and has a fixed
+// height on the grid — an inline dropdown lost its lower half near an edge.
+check('the menu is not clipped by the card it belongs to', await page.evaluate(() => {
+  const popup = document.querySelector('.row-menu-popup');
+  const card = document.querySelector('.card[data-provider="grouped"]');
+  return popup.parentElement === document.body
+    && !card.contains(popup)
+    && getComputedStyle(popup).position === 'fixed';
+}));
+
+check('the menu is fully on screen', await page.evaluate(() => {
+  const box = document.querySelector('.row-menu-popup').getBoundingClientRect();
+  return box.top >= 0 && box.left >= 0
+    && box.bottom <= window.innerHeight && box.right <= window.innerWidth;
+}));
+
+await page.click('.row-menu-popup .menu-item:nth-child(2)');
 await page.waitForTimeout(150);
 check('choosing one runs that action index', await page.evaluate(() =>
   window.__calls.some(c => c[0] === 'runAction' && c[1] === 'grouped::g1' && c[2] === 1)));
 check('the menu closes after choosing', await page.evaluate(() =>
-  !document.querySelector('.card[data-provider="grouped"] .row-menu.open')));
+  !document.querySelector('.row-menu-popup')));
+
+await page.click('.card[data-provider="grouped"] [data-open-menu]');
+await page.waitForTimeout(120);
+await page.keyboard.press('Escape');
+await page.waitForTimeout(120);
+check('Escape dismisses the menu', await page.evaluate(() =>
+  !document.querySelector('.row-menu-popup')));
+
+// --- Markdown titles ------------------------------------------------------
+
+check('a rich title renders its markdown', await page.evaluate(async () => {
+  window.__providerUpdated({
+    provider: 'todos', displayName: 'Todos', refreshedAt: 1, error: null,
+    items: [{
+      id: 't1', provider: 'todos', title: 'ship the **beta** to `prod`',
+      richTitle: true, subtitle: 'work/plan.md:4', status: 'neutral', badges: [],
+      actions: [{ kind: 'openPath', label: 'Open note', path: '/n/plan.md' }],
+    }],
+  });
+  await new Promise(r => setTimeout(r, 80));
+  const title = document.querySelector('.card[data-provider="todos"] .row-title');
+  return !!title.querySelector('strong') && !!title.querySelector('code')
+    && title.textContent === 'ship the beta to prod';
+}));
+
+check('a todo shows no hover actions, because it has exactly one', await page.evaluate(() =>
+  document.querySelectorAll('.card[data-provider="todos"] .row-actions > *').length === 0));
+
+check('markup in a rich title is still escaped, not executed', await page.evaluate(async () => {
+  window.__providerUpdated({
+    provider: 'todos', displayName: 'Todos', refreshedAt: 1, error: null,
+    items: [{
+      id: 't2', provider: 'todos', title: '<img src=x onerror=alert(1)> **b**',
+      richTitle: true, status: 'neutral', badges: [], actions: [],
+    }],
+  });
+  await new Promise(r => setTimeout(r, 80));
+  const card = document.querySelector('.card[data-provider="todos"]');
+  return card.querySelectorAll('img').length === 0
+    && !!card.querySelector('.row-title strong')
+    && card.querySelector('.row-title').textContent.includes('<img src=x onerror=alert(1)>');
+}));
+
+check('a plain title is left alone, so an underscore is not an italic', await page.evaluate(() => {
+  const title = document.querySelector('.card[data-provider="projects"] .row-title');
+  return !title.querySelector('em') && !title.querySelector('strong');
+}));
 
 check('cards carry a per-provider accent colour', await page.evaluate(() => {
   const a = document.querySelector('.card[data-provider="launch"]').style.getPropertyValue('--card-accent');

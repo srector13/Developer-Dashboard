@@ -246,6 +246,7 @@ fn item_for(
         todo.text.clone(),
     )
     .subtitle(format!("{relative_display}:{}", todo.line))
+    .rich_title()
     .icon("check")
     .status(if overdue {
         Status::Warn
@@ -265,14 +266,19 @@ fn item_for(
         });
     }
 
+    // Exactly one action, so a todo row is a single thing you click rather than
+    // a menu of ways to look at it: open the note where the todo lives. The
+    // configured opener wins — point it at Markdown Notebook and clicking a
+    // todo lands you in the note, on the line. Without one, the file goes to
+    // whatever the OS associates with .md.
     let path_str = file.to_string_lossy().into_owned();
-    if let Some(opener) = config
+    let open = match config
         .open_with
         .as_ref()
         .filter(|o| !o.program.trim().is_empty())
     {
-        item = item.action(Action::Run {
-            label: "Open at line".into(),
+        Some(opener) => Action::Run {
+            label: "Open in Markdown Notebook".into(),
             program: opener.program.clone(),
             args: opener
                 .args
@@ -281,20 +287,13 @@ fn item_for(
                 .collect(),
             cwd: None,
             capture: false,
-        });
-    }
-    item.action(Action::OpenPath {
-        label: "Open note".into(),
-        path: path_str.clone(),
-    })
-    .action(Action::Reveal {
-        label: "Reveal in Explorer".into(),
-        path: path_str,
-    })
-    .action(Action::CopyText {
-        label: "Copy todo".into(),
-        text: todo.text.clone(),
-    })
+        },
+        None => Action::OpenPath {
+            label: "Open note".into(),
+            path: path_str,
+        },
+    };
+    item.action(open)
 }
 
 fn scan(config: &TodosConfig) -> (Vec<Item>, Option<String>) {
@@ -560,6 +559,49 @@ mod tests {
             }
             other => panic!("expected the configured opener, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_todo_offers_exactly_one_action_so_the_row_is_a_single_thing_to_click() {
+        let todo = ParsedTodo {
+            line: 3,
+            text: "ship it".into(),
+            tags: vec![],
+            due: None,
+        };
+        let configured = TodosConfig {
+            open_with: Some(TodoOpener {
+                program: "markdown-notebook.exe".into(),
+                args: vec!["{path}".into()],
+            }),
+            ..Default::default()
+        };
+        for config in [TodosConfig::default(), configured] {
+            let item = item_for(
+                Path::new("/notes"),
+                Path::new("/notes/a.md"),
+                &todo,
+                &config,
+                "2026-07-30",
+            );
+            assert_eq!(item.actions.len(), 1, "{:?}", item.actions);
+            assert!(item.action_groups.is_empty());
+        }
+    }
+
+    #[test]
+    fn todo_titles_are_flagged_as_markdown_so_bold_text_renders() {
+        let todos = parse_todos("- [ ] ship the **beta** to `prod`\n");
+        assert_eq!(todos[0].text, "ship the **beta** to `prod`");
+
+        let item = item_for(
+            Path::new("/notes"),
+            Path::new("/notes/a.md"),
+            &todos[0],
+            &TodosConfig::default(),
+            "2026-07-30",
+        );
+        assert!(item.rich_title, "the renderer needs to know to parse it");
     }
 
     #[test]

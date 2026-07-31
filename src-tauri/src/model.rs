@@ -22,6 +22,13 @@ pub struct Item {
     #[serde(default)]
     pub provider: String,
     pub title: String,
+    /// Render `title` as inline markdown rather than plain text.
+    ///
+    /// A todo written `- [ ] **ship** the beta` should read as it does in the
+    /// note. Off by default: a repo name containing an underscore is a repo
+    /// name, not an italic.
+    #[serde(default)]
+    pub rich_title: bool,
     #[serde(default)]
     pub subtitle: Option<String>,
     /// A token from the renderer's fixed icon set — never raw SVG, which would
@@ -70,6 +77,7 @@ impl Item {
             id: id.into(),
             provider: provider.to_string(),
             title: title.into(),
+            rich_title: false,
             subtitle: None,
             icon: None,
             status: Status::Neutral,
@@ -95,6 +103,12 @@ impl Item {
 
     pub fn subtitle(mut self, subtitle: impl Into<String>) -> Self {
         self.subtitle = Some(subtitle.into());
+        self
+    }
+
+    /// Mark the title as inline markdown — see `Item::rich_title`.
+    pub fn rich_title(mut self) -> Self {
+        self.rich_title = true;
         self
     }
 

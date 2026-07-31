@@ -19,16 +19,13 @@
       <span>Dev Hub</span>
     </div>
 
-    <!-- Deliberately a button, not an input: there is one search surface in
-         this app and it is the launcher. Two search boxes with different
-         ranking is how a tool starts feeling arbitrary. -->
-    <button id="search-wrap" type="button" title="Open the quick launcher">
-      <span id="search-icon"></span>
-      <span id="search-label">Search everything…</span>
-      <span id="search-kbd"></span>
-    </button>
-
     <span class="topbar-spacer"></span>
+
+    <!-- An icon, not a search field. It never accepted text — all it did was
+         open the launcher — and a box you can't type into is a small lie. -->
+    <button class="icon-btn" id="search-wrap" type="button" title="Search (opens the quick launcher)">
+      <span id="search-icon"></span><span id="search-kbd"></span>
+    </button>
 
     <button class="icon-btn" id="refresh-all" title="Refresh every provider">
       <span data-icon="refresh"></span><span>Refresh</span>
@@ -85,6 +82,7 @@
   <div id="toast"></div>
 
   <script src="icons.js"></script>
+  <script src="inline-markdown.js"></script>
   <script src="api-tauri.js"></script>
   <script src="settings.js"></script>
   <script src="setup.js"></script>
