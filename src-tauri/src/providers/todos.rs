@@ -12,8 +12,12 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use std::path::{Path, PathBuf};
 
+/// The provider id stays `todos`: it keys `itemOverrides`, `cardLayout` and
+/// `cardOrder` in an existing settings.json, and renaming it would silently
+/// discard every customisation and card size someone had set. The *name* is
+/// what people read, and that is "Tasks".
 pub const ID: &str = "todos";
-pub const NAME: &str = "Todos";
+pub const NAME: &str = "Tasks";
 
 /// The notebook's own ignore list, so Dev Hub sees exactly the notes Markdown
 /// Notebook shows.
@@ -36,6 +40,9 @@ pub struct ParsedTodo {
     pub tags: Vec<String>,
     /// `YYYY-MM-DD`, when the line carried one.
     pub due: Option<String>,
+    /// "high" | "medium" | "low", from a `!!!`/`!!`/`!` marker or a `#p1`-style
+    /// tag. A priority set in the app overrides whatever the note says.
+    pub priority: Option<String>,
 }
 
 static UNCHECKED: Lazy<Regex> =
@@ -46,6 +53,8 @@ static DUE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?:^|\s)@(?:due[:(]?\s*)?(\d{4}-\d{2}-\d{2})\)?").unwrap());
 static WIKILINK: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]").unwrap());
+/// `!`, `!!` or `!!!` standing on their own — not the tail of "ship it!!".
+static BANG: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?:^|\s)(!{1,3})(?:\s|$)").unwrap());
 
 /// Strip the syntax that is markup rather than content: wikilinks collapse to
 /// their display text, and the trailing metadata tokens come off the end.
@@ -58,10 +67,45 @@ fn clean_title(raw: &str) -> String {
     });
     let without_due = DUE.replace_all(&unlinked, " ");
     let without_tags = TAG.replace_all(&without_due, " ");
-    without_tags
+    let without_bangs = BANG.replace_all(&without_tags, " ");
+    without_bangs
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// The priority a task line is asking for.
+///
+/// Two spellings, because both are things people already write: `!!!`/`!!`/`!`
+/// as a standalone token, and a `#p1`/`#p2`/`#p3` or `#high`/`#urgent` tag.
+/// Neither is invented notation — a task that uses neither simply has none.
+pub fn parse_priority(body: &str, tags: &[String]) -> Option<String> {
+    for tag in tags {
+        match tag.to_lowercase().as_str() {
+            "p1" | "urgent" | "high" | "critical" => return Some("high".into()),
+            "p2" | "medium" | "soon" => return Some("medium".into()),
+            "p3" | "low" | "later" => return Some("low".into()),
+            _ => {}
+        }
+    }
+    BANG.captures(body).map(|caps| {
+        match caps[1].len() {
+            3 => "high",
+            2 => "medium",
+            _ => "low",
+        }
+        .to_string()
+    })
+}
+
+/// Sort key: high first, then medium, low, then anything unmarked.
+pub fn priority_rank(priority: Option<&str>) -> usize {
+    match priority {
+        Some("high") => 0,
+        Some("medium") => 1,
+        Some("low") => 2,
+        _ => 3,
+    }
 }
 
 /// Parse one markdown document. Fenced code blocks are skipped entirely — a
@@ -96,11 +140,13 @@ pub fn parse_todos(text: &str) -> Vec<ParsedTodo> {
             continue; // a line that was nothing but tags
         }
 
+        let priority = parse_priority(body, &tags);
         todos.push(ParsedTodo {
             line: index + 1,
             text: title,
             tags,
             due,
+            priority,
         });
     }
     todos
@@ -248,6 +294,7 @@ fn item_for(
     .subtitle(format!("{relative_display}:{}", todo.line))
     .rich_title()
     .icon("check")
+    .priority(todo.priority.clone())
     .status(if overdue {
         Status::Warn
     } else {
@@ -375,13 +422,17 @@ fn scan(config: &TodosConfig) -> (Vec<Item>, Option<String>) {
     }
     let mut items: Vec<Item> = candidates.into_iter().map(|(_, item)| item).collect();
 
-    // Overdue first, then by due date, then by title — "what should I do next"
-    // is the question, so undated work sinks below dated work.
+    // "What should I do next" is the question, so: marked priority first, then
+    // overdue, then by due date, then by title. Priority outranks overdue
+    // because a thing you flagged is a thing you decided about.
     items.sort_by(|a, b| {
-        let a_warn = a.status == Status::Warn;
-        let b_warn = b.status == Status::Warn;
-        b_warn
-            .cmp(&a_warn)
+        priority_rank(a.priority.as_deref())
+            .cmp(&priority_rank(b.priority.as_deref()))
+            .then_with(|| {
+                let a_warn = a.status == Status::Warn;
+                let b_warn = b.status == Status::Warn;
+                b_warn.cmp(&a_warn)
+            })
             .then_with(|| due_key(a).cmp(&due_key(b)))
             .then_with(|| a.title.cmp(&b.title))
     });
@@ -530,6 +581,7 @@ mod tests {
             text: "ship the beta".into(),
             tags: vec!["release".into()],
             due: Some("2020-01-01".into()),
+            priority: None,
         };
         let item = item_for(
             Path::new("/notes"),
@@ -551,6 +603,7 @@ mod tests {
             text: "fix it".into(),
             tags: vec![],
             due: None,
+            priority: None,
         };
         let config = TodosConfig {
             open_with: Some(TodoOpener {
@@ -590,12 +643,91 @@ mod tests {
     }
 
     #[test]
+    fn bang_markers_set_a_priority_and_come_off_the_title() {
+        for (line, expected) in [
+            ("- [ ] !!! ship the beta", "high"),
+            ("- [ ] !! write the runbook", "medium"),
+            ("- [ ] ! tidy the logs", "low"),
+            ("- [ ] ship the beta !!!", "high"),
+        ] {
+            let todos = parse_todos(line);
+            assert_eq!(todos[0].priority.as_deref(), Some(expected), "{line}");
+            assert!(!todos[0].text.contains('!'), "{}", todos[0].text);
+        }
+    }
+
+    #[test]
+    fn an_exclamation_that_is_part_of_a_word_is_not_a_priority() {
+        let todos = parse_todos("- [ ] ship it!! before friday\n");
+        assert_eq!(todos[0].priority, None);
+        assert_eq!(todos[0].text, "ship it!! before friday");
+    }
+
+    #[test]
+    fn priority_tags_are_recognised_in_the_spellings_people_use() {
+        for (tag, expected) in [
+            ("p1", "high"),
+            ("urgent", "high"),
+            ("p2", "medium"),
+            ("p3", "low"),
+            ("later", "low"),
+        ] {
+            let todos = parse_todos(&format!("- [ ] do the thing #{tag}\n"));
+            assert_eq!(todos[0].priority.as_deref(), Some(expected), "#{tag}");
+            assert_eq!(todos[0].text, "do the thing");
+        }
+        assert_eq!(parse_todos("- [ ] plain #ops\n")[0].priority, None);
+    }
+
+    #[test]
+    fn a_tag_beats_a_bang_when_a_line_carries_both() {
+        let todos = parse_todos("- [ ] ! quiet one #p1\n");
+        assert_eq!(todos[0].priority.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn flagged_tasks_sort_above_everything_else() {
+        let root = std::env::temp_dir().join(format!("dev-hub-priority-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("a.md"),
+            "- [ ] zzz overdue thing @due(2000-01-01)\n- [ ] aaa plain thing\n- [ ] ! low thing\n- [ ] !!! urgent thing\n",
+        )
+        .unwrap();
+
+        let config = TodosConfig {
+            roots: vec![root.to_string_lossy().into_owned()],
+            ..Default::default()
+        };
+        let titles: Vec<String> = scan(&config).0.into_iter().map(|i| i.title).collect();
+        // Priority first — a thing you flagged is a thing you decided about —
+        // then overdue, then the rest.
+        assert_eq!(
+            titles,
+            vec![
+                "urgent thing",
+                "low thing",
+                "zzz overdue thing",
+                "aaa plain thing"
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_card_is_called_tasks() {
+        assert_eq!(NAME, "Tasks");
+    }
+
+    #[test]
     fn a_todo_offers_exactly_one_action_so_the_row_is_a_single_thing_to_click() {
         let todo = ParsedTodo {
             line: 3,
             text: "ship it".into(),
             tags: vec![],
             due: None,
+            priority: None,
         };
         let configured = TodosConfig {
             open_with: Some(TodoOpener {
@@ -639,6 +771,7 @@ mod tests {
             text: "x".into(),
             tags: vec![],
             due: None,
+            priority: None,
         };
         let item = item_for(
             Path::new("/notes"),

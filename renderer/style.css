@@ -764,6 +764,74 @@ body.rearranging .card-body { pointer-events: none; }
 
 .accent-choice.active { outline: 2px solid var(--text-heading); outline-offset: 1px; }
 
+.custom-icon-row { display: flex; gap: 8px; align-items: center; }
+
+.custom-icon-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--inset-bg);
+  color: var(--text-muted);
+  overflow: hidden;
+}
+
+/* A picked image, wherever it appears. `contain` so a wide logo isn't cropped
+   into nonsense, and the box keeps the same footprint as a glyph. */
+.custom-icon {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.row-glyph .custom-icon { width: 16px; height: 16px; }
+.tile-glyph .custom-icon { width: 22px; height: 22px; }
+
+.priority-row { display: flex; gap: 4px; }
+
+.priority-choice {
+  flex: 1;
+  padding: 6px 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--inset-bg);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.priority-choice:hover { color: var(--text-heading); }
+.priority-choice.active { color: var(--text-heading); border-color: currentColor; }
+.priority-choice.high.active { color: var(--accent-red); background: rgba(248, 81, 73, 0.14); }
+.priority-choice.medium.active { color: var(--mark-text); background: var(--mark-bg); }
+.priority-choice.low.active { color: var(--accent-blue); background: var(--accent-glow); }
+
+/* The marker on a row or tile. Colour carries the level; the flag carries the
+   fact that there is one at all, for anyone who can't tell them apart. */
+.row-priority, .tile-priority {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.row-priority { margin-top: 1px; }
+.row-priority svg, .tile-priority svg {
+  width: 12px; height: 12px; stroke: currentColor; fill: currentColor; stroke-width: 1.5;
+}
+
+.row-priority.high, .tile-priority.high { color: var(--accent-red); }
+.row-priority.medium, .tile-priority.medium { color: var(--mark-text); }
+.row-priority.low, .tile-priority.low { color: var(--accent-blue); }
+
+.tile-priority { position: absolute; top: 7px; right: 22px; }
+
 .item-menu-actions { display: flex; gap: 6px; align-items: center; }
 .item-menu-actions .btn-primary { margin-left: auto; padding: 7px 14px; }
 

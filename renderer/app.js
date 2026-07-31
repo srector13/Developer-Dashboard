@@ -8,7 +8,7 @@
   'use strict';
 
   const api = window.hubApi;
-  const { iconSvg, ACTION_ICONS } = window.DevHubIcons;
+  const { iconSvg, itemIcon, ACTION_ICONS } = window.DevHubIcons;
   const { renderInline } = window.DevHubMarkdown;
 
   /** provider id → ProviderResult, in the order the backend returned them. */
@@ -133,12 +133,16 @@
     const accent = item.accent ? ` style="--row-accent: ${esc(item.accent)}"` : '';
     // Dot *and* glyph: the dot is the status, the glyph is what kind of thing
     // it is. Replacing one with the other would trade a signal for a decoration.
-    const glyph = item.icon ? `<span class="row-glyph">${iconSvg(item.icon)}</span>` : '';
+    const glyph = (item.icon || item.iconData)
+      ? `<span class="row-glyph">${itemIcon(item)}</span>` : '';
+    const priority = item.priority
+      ? `<span class="row-priority ${esc(item.priority)}" title="Priority: ${esc(item.priority)}">${iconSvg('flag')}</span>`
+      : '';
 
     return `
       <div class="card-row" tabindex="0" data-key="${esc(key)}" data-action="0"${accent}
            title="${esc(item.title)}">
-        <span class="row-dot ${statusClass(item.status)}"></span>${glyph}
+        <span class="row-dot ${statusClass(item.status)}"></span>${priority}${glyph}
         <span class="row-main">
           <span class="row-title">${renderInline(item.title, item.richTitle)}</span>
           ${item.subtitle ? `<span class="row-sub">${esc(item.subtitle)}</span>` : ''}
@@ -155,7 +159,8 @@
     return `
       <div class="card-tile" tabindex="0" data-key="${esc(key)}" data-action="0"${accent}
            title="${esc(item.title)}${item.subtitle ? ` — ${esc(item.subtitle)}` : ''}">
-        <span class="tile-glyph">${iconSvg(item.icon || 'dot')}</span>
+        <span class="tile-glyph">${itemIcon(item)}</span>
+        ${item.priority ? `<span class="tile-priority ${esc(item.priority)}" title="Priority: ${esc(item.priority)}">${iconSvg('flag')}</span>` : ''}
         <span class="tile-title">${renderInline(item.title, item.richTitle)}</span>
         <span class="tile-dot ${statusClass(item.status)}"></span>
         <button class="tile-more" data-customise="${esc(key)}" title="Customise this item">
@@ -298,7 +303,15 @@
     const resolved = theme === 'system'
       ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
       : theme;
-    document.body.dataset.theme = resolved === 'light' ? 'light' : 'dark';
+    const dark = resolved !== 'light';
+    document.body.dataset.theme = dark ? 'dark' : 'light';
+
+    // The glyph shows what the button will *do*, not what is currently on: a
+    // sun while it's dark, because pressing it brings the light one.
+    const button = document.getElementById('toggle-theme');
+    const icon = document.getElementById('theme-icon');
+    if (icon) icon.innerHTML = iconSvg(dark ? 'sun' : 'moon');
+    if (button) button.title = dark ? 'Switch to the light theme' : 'Switch to the dark theme';
   }
 
   // --- actions -------------------------------------------------------------

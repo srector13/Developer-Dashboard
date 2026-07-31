@@ -58,6 +58,7 @@
     revealConfigFile: () => invoke('reveal_config_file'),
     pickFolder: () => invoke('pick_folder'),
     pickProgram: () => invoke('pick_program'),
+    pickIcon: () => invoke('pick_icon'),
 
     listProviders: () => invoke('list_providers'),
     getResults: () => invoke('get_results'),

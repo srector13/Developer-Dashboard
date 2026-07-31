@@ -11,7 +11,7 @@
 (function () {
   'use strict';
 
-  const { iconSvg, ICONS } = window.DevHubIcons;
+  const { iconSvg, ICONS, itemIcon } = window.DevHubIcons;
 
   /** Offered colours. A named set beats a colour picker for staying coherent. */
   const ACCENTS = [
@@ -23,6 +23,14 @@
     { value: '#f2c94c', label: 'Amber' },
     { value: '#ff7b72', label: 'Red' },
     { value: '#ffa657', label: 'Orange' },
+  ];
+
+  /** Priorities, most urgent first, plus a way back to none. */
+  const PRIORITIES = [
+    { value: '', label: 'None' },
+    { value: 'high', label: 'High' },
+    { value: 'medium', label: 'Medium' },
+    { value: 'low', label: 'Low' },
   ];
 
   /** Icon tokens worth offering, from the fixed set in icons.js. */
@@ -92,6 +100,24 @@
             </button>`).join('')}
         </div>
       </div>
+      <div class="item-menu-field">
+        <span>Your own image</span>
+        <div class="custom-icon-row">
+          <span class="custom-icon-preview" id="item-icon-preview">
+            ${current.iconData ? itemIcon({ iconData: current.iconData }) : '<span class="icon-none">–</span>'}
+          </span>
+          <button class="btn-ghost" id="item-pick-icon">Choose…</button>
+          <button class="btn-ghost" id="item-clear-icon">Clear</button>
+        </div>
+      </div>
+      <div class="item-menu-field">
+        <span>Priority</span>
+        <div class="priority-row">
+          ${PRIORITIES.map(p => `
+            <button class="priority-choice ${p.value} ${(current.priority || '') === p.value ? 'active' : ''}"
+                    data-priority="${p.value}">${esc(p.label)}</button>`).join('')}
+        </div>
+      </div>
       <div class="item-menu-actions">
         <button class="btn-ghost" id="item-hide">Hide this item</button>
         <button class="btn-ghost" id="item-reset">Reset</button>
@@ -104,6 +130,8 @@
       nickname: current.nickname || '',
       icon: current.icon || '',
       accent: current.accent || '',
+      iconData: current.iconData || '',
+      priority: current.priority || '',
       hidden: false,
     };
 
@@ -115,6 +143,13 @@
           b.classList.toggle('active', b.dataset.icon === draft.icon));
         return;
       }
+      const priority = event.target.closest('[data-priority]');
+      if (priority) {
+        draft.priority = priority.dataset.priority;
+        menuEl.querySelectorAll('[data-priority]').forEach(b =>
+          b.classList.toggle('active', b.dataset.priority === draft.priority));
+        return;
+      }
       const accent = event.target.closest('[data-accent]');
       if (accent) {
         draft.accent = accent.dataset.accent;
@@ -122,6 +157,12 @@
           b.classList.toggle('active', b.dataset.accent === draft.accent));
         return;
       }
+      if (event.target.closest('#item-clear-icon')) {
+        draft.iconData = '';
+        menuEl.querySelector('#item-icon-preview').innerHTML = '<span class="icon-none">–</span>';
+        return;
+      }
+      if (event.target.closest('#item-pick-icon')) { pickIcon(draft); return; }
       if (event.target.closest('#item-hide')) { commit(key, { hidden: true }); return; }
       if (event.target.closest('#item-reset')) { commit(key, {}); return; }
       if (event.target.closest('#item-save')) {
@@ -130,6 +171,8 @@
           nickname: nickname.trim() || null,
           icon: draft.icon || null,
           accent: draft.accent || null,
+          iconData: draft.iconData || null,
+          priority: draft.priority || null,
           hidden: false,
         });
       }
@@ -154,9 +197,24 @@
         nickname: patch.nickname != null ? patch.nickname : null,
         icon: patch.icon != null ? patch.icon : null,
         accent: patch.accent != null ? patch.accent : null,
+        iconData: patch.iconData != null ? patch.iconData : null,
+        priority: patch.priority != null ? patch.priority : null,
         hidden: !!patch.hidden,
       });
       onChanged();
+    } catch (err) {
+      window.DevHubDashboard.toast(String(err), true);
+    }
+  }
+
+  /** Ask the backend for an image file, inlined as a data URI. */
+  async function pickIcon(draft) {
+    try {
+      const data = await api.pickIcon();
+      if (!data) return;
+      draft.iconData = data;
+      const preview = menuEl && menuEl.querySelector('#item-icon-preview');
+      if (preview) preview.innerHTML = itemIcon({ iconData: data });
     } catch (err) {
       window.DevHubDashboard.toast(String(err), true);
     }
@@ -191,5 +249,5 @@
     });
   }
 
-  window.DevHubItemMenu = { init, open, close, isOpen, ACCENTS, ICON_CHOICES };
+  window.DevHubItemMenu = { init, open, close, isOpen, ACCENTS, ICON_CHOICES, PRIORITIES };
 })();

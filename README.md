@@ -43,9 +43,14 @@ whichever suits what's on them.
 ### Making items yours
 
 Right-click any item, or use its **⋯** button, to give it a nickname, an icon,
-a colour, or to hide it. Left-click still runs it — that's the point of the app,
-and a click that sometimes launches and sometimes opens a menu would make the
-primary action feel unreliable.
+a colour, a priority, or to hide it. Left-click still runs it — that's the point
+of the app, and a click that sometimes launches and sometimes opens a menu would
+make the primary action feel unreliable.
+
+Icons can be one of the built-in glyphs or **an image of your own**. A picked
+image is inlined into settings.json rather than referenced by path, so your
+icons travel with the app instead of breaking the moment the exe moves to
+another machine.
 
 A nickname is searched as well as displayed, so renaming something to what you
 actually call it makes it findable by that name. Hidden items are listed in
@@ -69,7 +74,7 @@ in the other.
 | --- | --- | --- |
 | `launch` | Static apps, URLs and folders from your config | On config change |
 | `projects` | Git repos found under your roots — branch, dirty flag, ahead/behind, last-commit age | 120s |
-| `todos` | Unchecked `- [ ]` lines in your markdown notes, with `#tags` and `@due` dates | On note change, 300s floor |
+| `todos` | Unchecked `- [ ]` lines in your markdown notes — shown as **Tasks** — with `#tags`, `@due` dates and priorities | On note change, 300s floor |
 | `health` | HTTP checks against endpoints you list — status code, latency, and a warning when a service answers but slowly | Configurable, 60s default |
 | `command` | **The escape hatch.** Runs any command on an interval and reads stdout as JSON items | Configurable |
 
@@ -153,7 +158,16 @@ refresh interval. The watcher ignores everything the provider wouldn't read —
 `.git`, `attachments`, `templates`, non-markdown files — so a `git status` in
 your notes repo doesn't trigger a rescan.
 
-Clicking a todo opens its note **on the line**. Dev Hub looks for Markdown
+### Task priorities
+
+A task can carry a priority, and flagged tasks sort above everything else — a
+thing you flagged is a thing you decided about. Set it from the item menu, or
+write it in the note: `!!!`, `!!` and `!` as a standalone token, or a `#p1` /
+`#p2` / `#p3` / `#urgent` / `#later` tag. The marker comes off the title, so the
+task still reads as a sentence. A priority set in the app wins over one in the
+note.
+
+Clicking a task opens its note **on the line**. Dev Hub looks for Markdown
 Notebook on disk — beside its own exe first, since the two ship as portable
 siblings — and calls it as
 `Markdown-Notebook.exe --line 42 --view edit "C:\notes\alpha.md"`. Set

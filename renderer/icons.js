@@ -25,6 +25,11 @@
     settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
     chevron: '<path d="M9 18l6-6-6-6"/>',
     grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+    // Light and dark, for the theme toggle: a sun for "switch to light", a
+    // moon for "switch to dark". A grid glyph said nothing about either.
+    sun: '<circle cx="12" cy="12" r="4.2"/><line x1="12" y1="1.5" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="22.5"/><line x1="1.5" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22.5" y2="12"/><line x1="4.6" y1="4.6" x2="6.4" y2="6.4"/><line x1="17.6" y1="17.6" x2="19.4" y2="19.4"/><line x1="4.6" y1="19.4" x2="6.4" y2="17.6"/><line x1="17.6" y1="6.4" x2="19.4" y2="4.6"/>',
+    moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
+    flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V4s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/>',
     copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
     external: '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>',
     play: '<polygon points="5 3 19 12 5 21 5 3"/>',
@@ -47,5 +52,31 @@
     return `<svg viewBox="0 0 24 24"${cls}>${body}</svg>`;
   }
 
-  window.DevHubIcons = { ICONS, ACTION_ICONS, iconSvg };
+  /** Data URIs an item's custom icon may use, mirroring the backend's list. */
+  const ICON_DATA_PREFIXES = [
+    'data:image/png;base64,',
+    'data:image/jpeg;base64,',
+    'data:image/gif;base64,',
+    'data:image/webp;base64,',
+    'data:image/x-icon;base64,',
+    'data:image/bmp;base64,',
+  ];
+
+  /**
+   * An item's glyph: the user's own image when there is one, else a token.
+   *
+   * The data URI is re-checked here as well as in Rust. It goes into an
+   * `<img src>`, and something that reaches a src attribute should be verified
+   * by whoever is about to use it rather than on trust.
+   */
+  function itemIcon(item, extraClass) {
+    const data = item && item.iconData;
+    if (data && ICON_DATA_PREFIXES.some(prefix => data.startsWith(prefix))) {
+      const cls = extraClass ? ` ${extraClass}` : '';
+      return `<img class="custom-icon${cls}" src="${data}" alt="">`;
+    }
+    return iconSvg((item && item.icon) || 'dot', extraClass);
+  }
+
+  window.DevHubIcons = { ICONS, ACTION_ICONS, iconSvg, itemIcon, ICON_DATA_PREFIXES };
 })();
