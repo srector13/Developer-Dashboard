@@ -39,6 +39,12 @@ pub struct Item {
     /// a hex literal before it is stored — it ends up in a style attribute.
     #[serde(default)]
     pub accent: Option<String>,
+    /// A user-supplied image as a `data:` URI, shown instead of `icon`.
+    #[serde(default)]
+    pub icon_data: Option<String>,
+    /// "high" | "medium" | "low". Drives the marker and the sort order.
+    #[serde(default)]
+    pub priority: Option<String>,
     /// Drives the dashboard's status dot.
     #[serde(default)]
     pub status: Status,
@@ -85,6 +91,8 @@ impl Item {
             subtitle: None,
             icon: None,
             accent: None,
+            icon_data: None,
+            priority: None,
             status: Status::Neutral,
             badges: Vec::new(),
             keywords: Vec::new(),
@@ -119,6 +127,11 @@ impl Item {
 
     pub fn icon(mut self, icon: &str) -> Self {
         self.icon = Some(icon.to_string());
+        self
+    }
+
+    pub fn priority(mut self, priority: Option<String>) -> Self {
+        self.priority = priority;
         self
     }
 

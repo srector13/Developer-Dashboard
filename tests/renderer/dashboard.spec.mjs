@@ -129,6 +129,8 @@ await page.addInitScript(() => {
       return window.__settings;
     },
     hiddenItems: async () => [],
+    // A 1x1 PNG, enough to exercise the preview and the round trip.
+    pickIcon: async () => 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
     onItemsChanged: () => {},
     onProviderUpdated: (cb) => { window.__providerUpdated = cb; },
     onConfigChanged: (cb) => { window.__configChanged = cb; },
@@ -421,14 +423,21 @@ check('the menu escapes the card and stays on screen', await page.evaluate(() =>
     && box.bottom <= window.innerHeight && box.right <= window.innerWidth;
 }));
 
-check('it offers a nickname, icons and colours', await page.evaluate(() =>
+check('it offers a nickname, icons, colours, a custom image and a priority', await page.evaluate(() =>
   !!document.querySelector('#item-nickname')
   && document.querySelectorAll('.icon-choice').length > 4
-  && document.querySelectorAll('.accent-choice').length > 4));
+  && document.querySelectorAll('.accent-choice').length > 4
+  && !!document.querySelector('#item-pick-icon')
+  && document.querySelectorAll('[data-priority]').length === 4));
 
 await page.fill('#item-nickname', 'Payments API');
 await page.click('.accent-choice[data-accent="#bc8cff"]');
 await page.click('.icon-choice[data-icon="star"]');
+await page.click('[data-priority="high"]');
+await page.click('#item-pick-icon');
+await page.waitForTimeout(150);
+check('a picked image previews before you save it', await page.evaluate(() =>
+  !!document.querySelector('#item-icon-preview img.custom-icon')));
 await page.click('#item-save');
 await page.waitForTimeout(250);
 
@@ -439,6 +448,8 @@ check('saving sends the nickname, icon and accent for that item', await page.eva
     && patch.nickname === 'Payments API'
     && patch.accent === '#bc8cff'
     && patch.icon === 'star'
+    && patch.priority === 'high'
+    && patch.iconData.startsWith('data:image/png;base64,')
     && patch.hidden === false;
 }));
 
@@ -491,6 +502,25 @@ check('a per-item accent reaches the row', await page.evaluate(async () => {
     && !!row.querySelector('.row-dot');
 }));
 
+// A customised item must survive a refresh and a view switch. The backend
+// applies overrides on the way out of the cache, including on the
+// provider-updated event — emitting the raw result was the bug behind
+// "my nicknames vanish when a card refreshes".
+check('customisations survive a refresh', await page.evaluate(async () => {
+  window.__providerUpdated({
+    provider: 'launch', displayName: 'Launch', refreshedAt: 2, error: null,
+    items: [{
+      id: 'a', provider: 'launch', title: 'Renamed', accent: '#bc8cff',
+      icon: 'star', priority: 'high', status: 'neutral', badges: [], actions: [],
+    }],
+  });
+  await new Promise(r => setTimeout(r, 80));
+  const row = document.querySelector('.card[data-provider="launch"] .card-row');
+  return row.querySelector('.row-title').textContent === 'Renamed'
+    && row.style.getPropertyValue('--row-accent') === '#bc8cff'
+    && !!row.querySelector('.row-priority.high');
+}));
+
 // --- View modes -----------------------------------------------------------
 
 await page.click('.card[data-provider="launch"] [data-view="grid"]');
@@ -505,6 +535,13 @@ check('grid view renders tiles instead of rows', await page.evaluate(() => {
 check('the view choice is persisted alongside the size', await page.evaluate(() => {
   const patch = JSON.parse(window.__calls.filter(c => c[0] === 'saveSettings').pop()[1]);
   return patch.cardLayout.launch.view === 'grid' && !!patch.cardLayout.launch.size;
+}));
+
+check('switching view keeps the customisations', await page.evaluate(() => {
+  const tile = document.querySelector('.card[data-provider="launch"] .card-tile');
+  return tile.querySelector('.tile-title').textContent === 'Renamed'
+    && tile.style.getPropertyValue('--row-accent') === '#bc8cff'
+    && !!tile.querySelector('.tile-priority.high');
 }));
 
 check('a tile runs the item when clicked', await page.evaluate(async () => {

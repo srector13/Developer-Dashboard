@@ -292,7 +292,7 @@ check('hiding the hints hides the row', await page.evaluate(() =>
 
 check('only the chosen modes get an orb', await page.evaluate(() => {
   const labels = [...document.querySelectorAll('#orbs .orb .label')].map(e => e.textContent);
-  return labels.join(',') === 'Projects,Todos';
+  return labels.join(',') === 'Projects,Tasks';
 }));
 
 check('Ctrl+N is numbered against the visible orbs', await page.evaluate(() => {
@@ -309,7 +309,7 @@ await page.fill('#q', '/');
 await page.waitForTimeout(220);
 check('commands for hidden modes are not offered', await page.evaluate(() => {
   const names = [...document.querySelectorAll('#results .cmd .cmd-name')].map(e => e.textContent);
-  return names.join(',') === '/projects,/todos';
+  return names.join(',') === '/projects,/tasks';
 }));
 
 await page.fill('#q', '');

@@ -246,6 +246,105 @@ pub async fn pick_folder(app: AppHandle) -> Option<String> {
         .map(|path| path.to_string())
 }
 
+/// The largest image we'll inline. Icons render at 34px; anything past this is
+/// a photograph someone picked by accident, and settings.json is not the place
+/// for it.
+const MAX_ICON_BYTES: usize = 256 * 1024;
+
+/// Pick an image to use as an item's icon, returned as a `data:` URI.
+///
+/// Inlined rather than referenced by path, for two reasons: the renderer has no
+/// filesystem access (the asset protocol is off, deliberately), and a portable
+/// app that pointed at a picture elsewhere on disk would lose its icons the
+/// moment the exe moved to another machine. The cost is a few KB in
+/// settings.json, which travels with the app the same way everything else does.
+#[tauri::command]
+pub async fn pick_icon(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let picked = app
+        .dialog()
+        .file()
+        .set_title("Choose an icon")
+        .add_filter(
+            "Images",
+            &["png", "jpg", "jpeg", "gif", "webp", "ico", "bmp"],
+        )
+        .blocking_pick_file();
+    let Some(path) = picked else {
+        return Ok(None);
+    };
+
+    let path = path.into_path().map_err(|e| e.to_string())?;
+    let bytes = std::fs::read(&path).map_err(|e| format!("Could not read that file: {e}"))?;
+    if bytes.len() > MAX_ICON_BYTES {
+        return Err(format!(
+            "That image is {} KB. Icons are drawn at 34 pixels — pick something under {} KB.",
+            bytes.len() / 1024,
+            MAX_ICON_BYTES / 1024
+        ));
+    }
+
+    // Sniffed from the content, not the extension: what gets inlined is decided
+    // by what the bytes actually are.
+    let mime = image_mime(&bytes)
+        .ok_or_else(|| "That doesn't look like an image Dev Hub can show.".to_string())?;
+    Ok(Some(format!(
+        "data:{mime};base64,{}",
+        base64_encode(&bytes)
+    )))
+}
+
+/// Identify an image by its magic bytes. SVG is deliberately absent: it is a
+/// document format, and this app has no business inlining one.
+fn image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
+        return Some("image/png");
+    }
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Some("image/jpeg");
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some("image/gif");
+    }
+    if bytes.len() > 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    if bytes.starts_with(&[0x00, 0x00, 0x01, 0x00]) {
+        return Some("image/x-icon");
+    }
+    if bytes.starts_with(b"BM") {
+        return Some("image/bmp");
+    }
+    None
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(ALPHABET[(n >> 18 & 63) as usize] as char);
+        out.push(ALPHABET[(n >> 12 & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(n >> 6 & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[(n & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
 #[tauri::command]
 pub async fn pick_program(app: AppHandle) -> Option<String> {
     use tauri_plugin_dialog::DialogExt;

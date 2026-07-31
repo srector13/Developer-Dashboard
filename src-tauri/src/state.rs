@@ -213,6 +213,13 @@ impl AppState {
                 if let Some(accent) = patch.accent.clone() {
                     item.accent = Some(accent);
                 }
+                if let Some(icon_data) = patch.icon_data.clone() {
+                    item.icon_data = Some(icon_data);
+                }
+                // A priority set by hand beats one parsed out of the note.
+                if let Some(priority) = patch.priority.clone() {
+                    item.priority = Some(priority);
+                }
                 Some(item)
             })
             .collect()
@@ -290,4 +297,139 @@ fn load_usage() -> UsageMap {
         .ok()
         .and_then(|text| serde_json::from_str::<HashMap<String, Usage>>(&text).ok())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::model::Item;
+    use crate::settings::ItemOverride;
+    use std::collections::HashMap;
+
+    /// `apply_overrides` reads from `AppState`, which needs a real app to build.
+    /// The logic under test is the mapping itself, so it is exercised directly
+    /// against the same override map.
+    fn apply(items: Vec<Item>, overrides: &HashMap<String, ItemOverride>) -> Vec<Item> {
+        items
+            .into_iter()
+            .filter_map(|mut item| {
+                let Some(patch) = overrides.get(&item.key()) else {
+                    return Some(item);
+                };
+                if patch.hidden {
+                    return None;
+                }
+                if let Some(nickname) = patch.nickname.as_deref() {
+                    item.title = nickname.to_string();
+                    item.rich_title = false;
+                }
+                if let Some(icon) = patch.icon.clone() {
+                    item.icon = Some(icon);
+                }
+                if let Some(accent) = patch.accent.clone() {
+                    item.accent = Some(accent);
+                }
+                if let Some(icon_data) = patch.icon_data.clone() {
+                    item.icon_data = Some(icon_data);
+                }
+                if let Some(priority) = patch.priority.clone() {
+                    item.priority = Some(priority);
+                }
+                Some(item)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_override_renames_recolours_and_reicons_its_item() {
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            "projects::repo".to_string(),
+            ItemOverride {
+                nickname: Some("Payments".into()),
+                icon: Some("star".into()),
+                accent: Some("#bc8cff".into()),
+                priority: Some("high".into()),
+                ..Default::default()
+            },
+        );
+
+        let items = vec![
+            Item::new("projects", "repo", "payments-api"),
+            Item::new("projects", "other", "orders"),
+        ];
+        let out = apply(items, &overrides);
+
+        assert_eq!(out[0].title, "Payments");
+        assert_eq!(out[0].icon.as_deref(), Some("star"));
+        assert_eq!(out[0].accent.as_deref(), Some("#bc8cff"));
+        assert_eq!(out[0].priority.as_deref(), Some("high"));
+        // Untouched items are exactly what the provider produced.
+        assert_eq!(out[1].title, "orders");
+        assert_eq!(out[1].accent, None);
+    }
+
+    #[test]
+    fn a_nickname_is_never_reparsed_as_markdown() {
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            "todos::t1".to_string(),
+            ItemOverride {
+                nickname: Some("ship **it**".into()),
+                ..Default::default()
+            },
+        );
+        let mut item = Item::new("todos", "t1", "original");
+        item.rich_title = true;
+
+        let out = apply(vec![item], &overrides);
+        assert_eq!(out[0].title, "ship **it**");
+        assert!(
+            !out[0].rich_title,
+            "a nickname is typed into a field, not lifted from a note"
+        );
+    }
+
+    #[test]
+    fn a_hidden_item_is_dropped_entirely() {
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            "launch::jenkins".to_string(),
+            ItemOverride {
+                hidden: true,
+                ..Default::default()
+            },
+        );
+        let out = apply(
+            vec![
+                Item::new("launch", "jenkins", "Jenkins"),
+                Item::new("launch", "docs", "Docs"),
+            ],
+            &overrides,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].title, "Docs");
+    }
+
+    #[test]
+    fn an_override_for_another_provider_does_not_leak_across() {
+        // Ids are only unique within a provider, which is why the key is
+        // namespaced — this guards that it stays that way.
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            "launch::shared".to_string(),
+            ItemOverride {
+                nickname: Some("Renamed".into()),
+                ..Default::default()
+            },
+        );
+        let out = apply(
+            vec![
+                Item::new("launch", "shared", "Launch one"),
+                Item::new("projects", "shared", "Project one"),
+            ],
+            &overrides,
+        );
+        assert_eq!(out[0].title, "Renamed");
+        assert_eq!(out[1].title, "Project one");
+    }
 }

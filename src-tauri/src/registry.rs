@@ -53,8 +53,18 @@ pub fn build(settings: &AppSettings, config: &HubConfig) -> Vec<Arc<dyn Provider
     providers
 }
 
+/// Send a result to both windows with the user's per-item edits applied.
+///
+/// The cache holds what the provider produced; every way *out* of it applies
+/// overrides. Emitting the raw result was the bug behind "my nicknames vanish
+/// when a card refreshes" — `get_results` applied them, this didn't, so the
+/// renderer's copy was replaced with un-customised items on every refresh and
+/// anything re-rendering from that copy (the view toggle, say) showed them too.
 fn emit_result(app: &AppHandle, result: &ProviderResult) {
-    let _ = app.emit("provider-updated", result);
+    let state = app.state::<AppState>();
+    let mut display = result.clone();
+    display.items = state.apply_overrides(display.items);
+    let _ = app.emit("provider-updated", &display);
 }
 
 /// Refresh one provider now and cache the result. Returns the result so
@@ -67,10 +77,16 @@ pub async fn refresh_one(
     let result = provider.items(config).await;
     let state = app.state::<AppState>();
     let previous = state.result(provider.id());
+    // Raw into the cache, so an override can be changed or removed later
+    // without re-running the provider.
     state.set_result(result.clone());
     notify_new_failures(app, previous.as_ref(), &result);
     emit_result(app, &result);
-    result
+
+    // What the caller gets back is what it will display.
+    let mut display = result;
+    display.items = state.apply_overrides(display.items);
+    display
 }
 
 /// Tell the user when something that was fine has broken.

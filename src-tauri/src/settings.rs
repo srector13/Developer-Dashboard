@@ -132,10 +132,32 @@ pub struct ItemOverride {
     /// attribute, so anything else is refused rather than sanitised.
     #[serde(default)]
     pub accent: Option<String>,
+    /// A picked image as a `data:` URI. Only the image types Dev Hub sniffed on
+    /// the way in survive validation.
+    #[serde(default)]
+    pub icon_data: Option<String>,
+    /// "high" | "medium" | "low", or none.
+    #[serde(default)]
+    pub priority: Option<String>,
     /// Hidden from every surface until unhidden from Settings.
     #[serde(default)]
     pub hidden: bool,
 }
+
+/// The priorities a task can carry, most urgent first.
+pub const PRIORITIES: &[&str] = &["high", "medium", "low"];
+
+/// Data URIs we are willing to put in an `<img src>`. Deliberately no SVG: it
+/// is a document format, and inlining one is a different risk to inlining a
+/// raster.
+const ALLOWED_ICON_PREFIXES: &[&str] = &[
+    "data:image/png;base64,",
+    "data:image/jpeg;base64,",
+    "data:image/gif;base64,",
+    "data:image/webp;base64,",
+    "data:image/x-icon;base64,",
+    "data:image/bmp;base64,",
+];
 
 impl ItemOverride {
     /// Is this override doing anything? An empty one is dropped rather than
@@ -145,6 +167,8 @@ impl ItemOverride {
             && self.nickname.as_deref().unwrap_or("").trim().is_empty()
             && self.icon.is_none()
             && self.accent.is_none()
+            && self.icon_data.is_none()
+            && self.priority.is_none()
     }
 
     /// Drop anything malformed. The accent lands in a style attribute, so it is
@@ -156,6 +180,15 @@ impl ItemOverride {
             .filter(|n| !n.is_empty());
         self.icon = self.icon.filter(|i| !i.trim().is_empty());
         self.accent = self.accent.filter(|a| is_hex_colour(a));
+        // Re-checked here even though `pick_icon` produced it: settings.json is
+        // hand-editable, and this string goes straight into an <img src>.
+        self.icon_data = self
+            .icon_data
+            .filter(|d| ALLOWED_ICON_PREFIXES.iter().any(|p| d.starts_with(p)));
+        self.priority = self
+            .priority
+            .filter(|p| PRIORITIES.contains(&p.to_lowercase().as_str()))
+            .map(|p| p.to_lowercase());
         self
     }
 }

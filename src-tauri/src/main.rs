@@ -64,6 +64,7 @@ fn main() {
             commands::reveal_config_file,
             commands::pick_folder,
             commands::pick_program,
+            commands::pick_icon,
             // providers + items
             commands::list_providers,
             commands::get_results,

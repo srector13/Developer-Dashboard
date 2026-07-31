@@ -18,7 +18,7 @@
     { id: 'launcher', label: 'Quick Launch', icon: 'search' },
     { id: 'launch', label: 'Apps & links', icon: 'app' },
     { id: 'projects', label: 'Repos', icon: 'git' },
-    { id: 'todos', label: 'Todos', icon: 'check' },
+    { id: 'todos', label: 'Tasks', icon: 'check' },
     { id: 'health', label: 'Services', icon: 'health' },
     { id: 'command', label: 'Custom', icon: 'command' },
     { id: 'advanced', label: 'Advanced', icon: 'file' },
@@ -177,7 +177,7 @@
     { id: 'all', label: 'All', hint: 'Search every provider at once' },
     { id: 'projects', label: 'Projects', hint: 'Git repositories' },
     { id: 'launch', label: 'Launch', hint: 'Apps and links' },
-    { id: 'todos', label: 'Todos', hint: 'Unchecked todos from your notes' },
+    { id: 'todos', label: 'Tasks', hint: 'Unchecked tasks from your notes' },
     { id: 'health', label: 'Health', hint: 'Re-check services on demand' },
   ];
 
@@ -296,7 +296,7 @@
         <h3>Cards</h3>
         ${toggleField('settings', 'providers.launch', 'Apps & links', null)}
         ${toggleField('settings', 'providers.projects', 'Repos', null)}
-        ${toggleField('settings', 'providers.todos', 'Todos', null)}
+        ${toggleField('settings', 'providers.todos', 'Tasks', null)}
         ${toggleField('settings', 'providers.health', 'Services', null)}
       </div>
       ${hiddenSection()}`;
@@ -432,14 +432,14 @@
       <div class="set-group">
         <h3>Filter</h3>
         ${stringList('todos.includeTags', {
-          placeholder: 'ops', empty: 'No filter — every unchecked todo shows.',
-          add: 'Only show todos with this tag',
+          placeholder: 'ops', empty: 'No filter — every unchecked task shows.',
+          add: 'Only show tasks with this tag',
         })}
       </div>
       <div class="set-group">
         <h3>Duplicates</h3>
-        ${toggleField('config', 'todos.deduplicate', 'Collapse repeated todos',
-          'A generated folder index lists every todo underneath it, so without this each one shows twice. The copy kept is the one in the note you would actually edit.')}
+        ${toggleField('config', 'todos.deduplicate', 'Collapse repeated tasks',
+          'A generated folder index lists every task underneath it, so without this each one shows twice. The copy kept is the one in the note you would actually edit.')}
         <p class="set-hint">Files skipped entirely, by name:</p>
         ${stringList('todos.excludeFiles', {
           placeholder: 'index', empty: 'Nothing skipped.',
@@ -447,7 +447,7 @@
         })}
       </div>
       <div class="set-group">
-        <h3>Open a todo with…</h3>
+        <h3>Open a task with…</h3>
         <p class="set-hint">Use <code>{path}</code> and <code>{line}</code> to jump to the right line.</p>
         ${textField('config', 'todos.openWith.program', 'Program', { browse: 'program', placeholder: 'code' })}
         ${textField('config', 'todos.openWith.argsText', 'Arguments', { placeholder: '-g {path}:{line}' })}
@@ -629,7 +629,18 @@
     button.disabled = true;
     try {
       await api.saveConfigJson(normalisedConfig());
-      settings = await api.saveSettings(settings);
+      // Only the fields this screen owns. Sending the whole object would write
+      // back the copy taken when the panel opened, undoing anything changed
+      // since — an item you renamed while Settings sat open, for instance.
+      settings = await api.saveSettings({
+        theme: settings.theme,
+        dashboardColumns: settings.dashboardColumns,
+        keepInTray: settings.keepInTray,
+        startMinimized: settings.startMinimized,
+        notifyOnFailure: settings.notifyOnFailure,
+        providers: settings.providers,
+        launcher: settings.launcher,
+      });
       dirty = false;
       onSaved({ settings });
       close();
