@@ -672,7 +672,11 @@ mod com {
         Ok(xml)
     }
 
-    pub fn publish_page_in_process(page_id: &str, target: &std::path::Path) -> Result<(), String> {
+    pub fn publish_page_in_process(
+        page_id: &str,
+        target: &std::path::Path,
+        format: i32,
+    ) -> Result<(), String> {
         let (dispatch, clsid) = connect()?;
         // Publish refuses to overwrite, so clear any leftover first.
         let _ = std::fs::remove_file(target);
@@ -683,7 +687,7 @@ mod com {
             vec![
                 variant_bstr(page_id),
                 variant_bstr(&target.to_string_lossy()),
-                variant_i32(PUBLISH_FORMAT_MHTML),
+                variant_i32(format),
                 variant_bstr(""),
             ],
         )?;
@@ -711,7 +715,11 @@ mod com {
         Err(UNSUPPORTED.into())
     }
 
-    pub fn publish_page_in_process(_page_id: &str, _target: &std::path::Path) -> Result<(), String> {
+    pub fn publish_page_in_process(
+        _page_id: &str,
+        _target: &std::path::Path,
+        _format: i32,
+    ) -> Result<(), String> {
         Err(UNSUPPORTED.into())
     }
 }
@@ -776,13 +784,21 @@ pub fn hierarchy_xml() -> Result<String, String> {
     Ok(xml)
 }
 
+/// Export one page. `format` is a OneNote `PublishFormat` — Word for the
+/// import, since a .docx converts to far better markdown than a web page does.
 #[cfg(windows)]
-pub fn publish_page(page_id: &str, target: &std::path::Path) -> Result<(), String> {
+pub fn publish_page(page_id: &str, target: &std::path::Path, format: i32) -> Result<(), String> {
     // Publish refuses to overwrite, so clear any leftover first.
     let _ = std::fs::remove_file(target);
     with_fallback(
-        || com::publish_page_in_process(page_id, target),
-        |host| onenote_shell::run_script(host, &onenote_shell::publish_script(page_id, target)).map(|_| ()),
+        || com::publish_page_in_process(page_id, target, format),
+        |host| {
+            onenote_shell::run_script(
+                host,
+                &onenote_shell::publish_script(page_id, target, format),
+            )
+            .map(|_| ())
+        },
     )?;
     if !target.exists() {
         return Err("OneNote reported success but wrote no file.".into());
@@ -792,6 +808,8 @@ pub fn publish_page(page_id: &str, target: &std::path::Path) -> Result<(), Strin
 
 #[cfg(not(windows))]
 pub use com::{hierarchy_xml_in_process as hierarchy_xml, publish_page_in_process as publish_page};
+
+pub use crate::onenote_shell::{PUBLISH_FORMAT_MHTML as MHTML, PUBLISH_FORMAT_WORD as WORD};
 
 /// The notebooks OneNote currently has open.
 pub fn notebooks() -> Result<Vec<OneNotebook>, String> {

@@ -42,41 +42,40 @@ OneNote must be running, or able to start; the import launches it if needed.
 - **`GetHierarchy`** returns an XML tree of notebooks, section groups, sections
   and pages. Recycle bins and deleted pages are filtered out — restoring
   someone's deleted pages during a migration would be a nasty surprise.
-- **`Publish`** exports one page to a file. The import asks for **MHTML**,
-  because that format carries the page's images inline; `src-tauri/src/mhtml.rs`
-  then unwraps it into HTML plus image attachments, and pandoc converts the
-  HTML to markdown.
+- **`Publish`** exports one page to a file. The import asks for **Word
+  (`.docx`)**, and pandoc converts that to markdown.
 
-### Getting readable markdown out of it
+### Why Word, and not the web-page export
 
-OneNote publishes HTML meant for a browser: nested absolutely-positioned
-`<div>`s, every run of text inside a `<span style="font-family:…">`, and a
-single-cell `<table>` used to place the body on the canvas. Handed that
-directly, pandoc does the only thing it can with what markdown cannot express —
-passes it through as raw HTML — which is why early imports arrived full of tags.
+MHTML was the obvious choice at first — it carries images inline — and it
+produced badly mangled notes. OneNote's MHTML is layout for a browser: nested
+absolutely-positioned `<div>`s, every run of text inside a styled `<span>`, and
+a single-cell `<table>` placing the body on the canvas. There is no amount of
+cleaning that reliably turns that back into structure, because the structure was
+thrown away on the way out.
 
-`src-tauri/src/html_clean.rs` strips the presentation first: conditional
-comments, `<style>`/`<script>` blocks, Office's `<o:p>`-style tags, every
-presentation attribute, and single-cell layout tables. A table with more than
-one cell is one the user made and is left alone, and so is one where anything
-outside the cell carries text — unwrapping keeps only the cell, so a caption or
-a stray row would otherwise be lost.
+A `.docx` keeps it. Headings are headings, lists are lists with their nesting,
+tables are tables — so pandoc's docx reader produces markdown that reads like
+markdown. This is the approach
+[ConvertOneNote2MarkDown](https://github.com/theohbrothers/ConvertOneNote2MarkDown)
+takes, and it is right.
 
-pandoc then runs with `-f html-native_divs-native_spans`, which stops it
-treating those wrappers as structure to preserve. Output is plain `gfm`, **with
-raw HTML still allowed**: `gfm-raw_html` looks tempting because it forbids HTML
-in the result, but what pandoc cannot express it then discards, which loses
-content outright. Reducing the HTML is the input cleaning's job; dropping it is
-not an acceptable substitute. Not every pandoc understands the qualified reader
-name, and one that rejects it fails the whole page, so a plain `html` retry
-follows. The markdown is tidied afterwards — trailing spaces dropped, runs of
-blank lines collapsed.
+Images come with it: `--extract-media` has pandoc unpack every embedded image
+and rewrite the links itself, which deletes the entire problem of matching an
+image reference to the right part of the file. The app then moves each extracted
+file into the notebook's attachments folder and points the link there.
 
-Images are matched to their MHTML part by source string, `cid:`, bare filename
-and percent-decoded name; anything still unmatched falls back to the saved
-attachments in document order, so an image referenced by a spelling this does
-not recognise still lands on the right file. Attachment extensions follow the
-part's own media type, so a JPEG is not saved as `.png`.
+One wrinkle, confirmed by running the real conversion: a Word export always
+carries image dimensions, which pandoc's gfm writer can only express by falling
+back to a raw `<img>` tag. Those are turned back into `![alt](src)` afterwards.
+
+`src-tauri/tests/docx_pipeline.rs` runs this end to end against a real `.docx`
+with a real embedded image, and asserts what comes out — headings, nested lists,
+a pipe table, a blockquote, the extracted image, and no layout tags. It is
+skipped where pandoc is not installed.
+
+MHTML remains as a fallback for a OneNote that will not publish Word, and is
+still the path used when importing a `.mht` file by hand.
 
 ### Where the pages land
 

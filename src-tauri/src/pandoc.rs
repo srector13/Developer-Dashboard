@@ -105,6 +105,32 @@ pub fn run_file(
     finish(wait_with_timeout(child, Duration::from_secs(30))?)
 }
 
+/// Convert a file to markdown, unpacking its embedded images into `media_dir`.
+///
+/// This is the path OneNote pages take. `--extract-media` writes every image
+/// the document carries into a directory and rewrites the links to point at
+/// them, which removes the entire problem of matching an image reference to the
+/// right part of the file — pandoc already knows which is which.
+pub fn run_file_extract_media(
+    settings: &AppSettings,
+    file_path: &Path,
+    from: &str,
+    to: &str,
+    media_dir: &Path,
+) -> Result<String, String> {
+    let child = base_command(settings)
+        .arg(file_path)
+        .args(["-f", from, "-t", to, "--wrap=none"])
+        .arg(format!("--extract-media={}", media_dir.display()))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(missing_pandoc)?;
+
+    // A page with many large images takes longer than a text conversion.
+    finish(wait_with_timeout(child, Duration::from_secs(120))?)
+}
+
 /// Convert an on-disk markdown file to another format, writing straight to
 /// `out_path`. `cwd` is the note's folder so relative image links resolve.
 pub fn run_to_file(

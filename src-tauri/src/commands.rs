@@ -950,6 +950,81 @@ pub async fn import_clipboard(
 /// losing them the way a plain pandoc conversion would. `note_dir` is the
 /// folder the note itself will live in, which is what the returned relative
 /// links are resolved against.
+/// Convert a published `.docx` page to markdown, moving the images pandoc
+/// unpacked into the notebook's attachments folder.
+///
+/// `--extract-media` does the hard part: pandoc knows which image belongs to
+/// which reference, so nothing here has to match a source string to a file.
+/// What is left is to move each extracted file somewhere permanent and point
+/// the link at it.
+fn docx_to_markdown(
+    settings: &AppSettings,
+    docx: &Path,
+    media_dir: &Path,
+    note_dir: &Path,
+) -> Res<String> {
+    let markdown = pandoc::run_file_extract_media(settings, docx, "docx", "gfm", media_dir)?;
+    // A Word export always carries image dimensions, which pandoc can only
+    // express by falling back to a raw <img> tag. Put those back into markdown
+    // before the links are rewritten.
+    let markdown = crate::html_clean::html_images_to_markdown(&markdown);
+
+    let placeholder = note_dir.join("imported.md");
+    let mut edits: Vec<(std::ops::Range<usize>, String)> = Vec::new();
+    // One attachment per extracted file, however many links point at it.
+    let mut moved: HashMap<String, String> = HashMap::new();
+
+    for (target, range) in crate::html_clean::image_targets(&markdown) {
+        // pandoc writes the path it extracted to, which may be absolute or
+        // relative to the working directory.
+        let decoded = percent_decode_path(&target);
+        let candidate = Path::new(&decoded);
+        let source = if candidate.is_absolute() {
+            candidate.to_path_buf()
+        } else {
+            // Relative to the media directory's parent, which is where pandoc
+            // resolves `--extract-media` output against.
+            media_dir.parent().unwrap_or(Path::new(".")).join(candidate)
+        };
+        if !source.is_file() {
+            continue; // not something extracted — leave the link alone
+        }
+
+        let key = source.to_string_lossy().into_owned();
+        if let Some(rel) = moved.get(&key) {
+            edits.push((range, rel.clone()));
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&source) else {
+            continue;
+        };
+        let name = source
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "image.png".to_string());
+        let ext = source
+            .extension()
+            .map(|e| e.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "png".to_string());
+        let stored = store_attachment(settings, &bytes, &name, &ext, &placeholder);
+        let Some(rel) = stored.rel_path.filter(|_| stored.success) else {
+            continue;
+        };
+        moved.insert(key, rel.clone());
+        edits.push((range, rel));
+    }
+
+    let markdown = crate::html_clean::replace_ranges(&markdown, edits);
+    Ok(crate::html_clean::tidy_markdown(&markdown))
+}
+
+/// pandoc percent-encodes spaces and the like in the paths it writes.
+fn percent_decode_path(raw: &str) -> String {
+    urlencoding::decode(raw)
+        .map(|s| s.into_owned())
+        .unwrap_or_else(|_| raw.to_string())
+}
+
 fn mhtml_to_markdown(settings: &AppSettings, bytes: &[u8], note_dir: &Path) -> Res<String> {
     let parsed = crate::mhtml::parse(bytes)?;
 
@@ -1189,11 +1264,29 @@ pub async fn onenote_import(
             continue;
         }
 
-        let export = temp.join(format!("mdnb-onenote-{}.mht", crate::notebook::now_ms() + index as i64));
-        let outcome = crate::onenote::publish_page(&item.id, &export)
-            .and_then(|_| std::fs::read(&export).map_err(|e| e.to_string()))
-            .and_then(|bytes| mhtml_to_markdown(&settings, &bytes, &dir));
-        let _ = std::fs::remove_file(&export);
+        // Word first. A .docx carries real headings, lists and tables, so
+        // pandoc's docx reader produces markdown that reads like markdown —
+        // where OneNote's MHTML is browser layout and converts badly however
+        // hard it is cleaned. MHTML stays as the fallback for a OneNote that
+        // will not publish Word (it needs Word's converter present).
+        let stamp = crate::notebook::now_ms() + index as i64;
+        let docx = temp.join(format!("mdnb-onenote-{stamp}.docx"));
+        let media = temp.join(format!("mdnb-onenote-media-{stamp}"));
+        let outcome = crate::onenote::publish_page(&item.id, &docx, crate::onenote::WORD)
+            .and_then(|_| docx_to_markdown(&settings, &docx, &media, &dir))
+            .or_else(|word_err| {
+                let export = temp.join(format!("mdnb-onenote-{stamp}.mht"));
+                let via_mhtml =
+                    crate::onenote::publish_page(&item.id, &export, crate::onenote::MHTML)
+                        .and_then(|_| std::fs::read(&export).map_err(|e| e.to_string()))
+                        .and_then(|bytes| mhtml_to_markdown(&settings, &bytes, &dir));
+                let _ = std::fs::remove_file(&export);
+                // Report the Word failure, since that is the path that should
+                // have worked; the fallback's own error is the less useful one.
+                via_mhtml.map_err(|mht_err| format!("{word_err} (and as a web page: {mht_err})"))
+            });
+        let _ = std::fs::remove_file(&docx);
+        let _ = std::fs::remove_dir_all(&media);
 
         match outcome {
             Ok(body) => {

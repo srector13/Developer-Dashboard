@@ -205,6 +205,112 @@ fn matching_table_end(html: &str, from: usize) -> Option<usize> {
     None
 }
 
+/// Turn `<img>` tags in markdown output back into `![alt](src)`.
+///
+/// pandoc's gfm writer falls back to raw HTML for an image whenever it carries
+/// anything markdown cannot say — and a Word export always carries width and
+/// height, so *every* image from a OneNote page arrives as an `<img>` tag with
+/// an inline style. The dimensions are worth nothing in a note; the link is
+/// worth everything.
+pub fn html_images_to_markdown(markdown: &str) -> String {
+    static IMG: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?is)<img\b([^>]*?)/?>").unwrap());
+    static ATTR: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r#"(?i)\b(src|alt|title)\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))"#).unwrap()
+    });
+
+    IMG.replace_all(markdown, |caps: &regex::Captures| {
+        let attrs = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+        let mut src = String::new();
+        let mut alt = String::new();
+        let mut title = String::new();
+        for attr in ATTR.captures_iter(attrs) {
+            let value = attr
+                .get(3)
+                .or_else(|| attr.get(4))
+                .or_else(|| attr.get(5))
+                .map(|m| m.as_str())
+                .unwrap_or("");
+            match attr.get(1).map(|m| m.as_str().to_ascii_lowercase()).as_deref() {
+                Some("src") => src = value.to_string(),
+                Some("alt") => alt = value.to_string(),
+                Some("title") => title = value.to_string(),
+                _ => {}
+            }
+        }
+        // Without a source there is no image to write, so keep the tag rather
+        // than silently deleting it.
+        if src.is_empty() {
+            return caps.get(0).map(|m| m.as_str()).unwrap_or("").to_string();
+        }
+        if title.is_empty() {
+            format!("![{alt}]({src})")
+        } else {
+            format!("![{alt}]({src} \"{title}\")")
+        }
+    })
+    .into_owned()
+}
+
+/// Every local file a markdown document points at through an image link.
+///
+/// Returns each `(whole link target, byte range)` so a caller can swap the
+/// target for something else. Both `![alt](path)` and a surviving `<img src>`
+/// are covered; remote URLs and data URIs are skipped, since there is no local
+/// file to relocate.
+pub fn image_targets(markdown: &str) -> Vec<(String, std::ops::Range<usize>)> {
+    static MD_IMAGE: Lazy<Regex> = Lazy::new(|| Regex::new(r"!\[[^\]]*\]\(([^)]+)\)").unwrap());
+    static HTML_IMAGE: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r#"(?i)<img\b[^>]*?\ssrc\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))"#).unwrap()
+    });
+
+    let mut found = Vec::new();
+    let mut push = |m: regex::Match| {
+        let raw = m.as_str();
+        // A markdown target may carry a title: ![](path "Caption").
+        let path = raw.split_whitespace().next().unwrap_or(raw);
+        if path.is_empty() || is_remote(path) {
+            return;
+        }
+        found.push((path.to_string(), m.start()..m.start() + path.len()));
+    };
+
+    for caps in MD_IMAGE.captures_iter(markdown) {
+        if let Some(m) = caps.get(1) {
+            push(m);
+        }
+    }
+    for caps in HTML_IMAGE.captures_iter(markdown) {
+        if let Some(m) = caps.get(2).or_else(|| caps.get(3)).or_else(|| caps.get(4)) {
+            push(m);
+        }
+    }
+    found.sort_by_key(|(_, range)| range.start);
+    found
+}
+
+fn is_remote(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("data:")
+        || lower.starts_with("//")
+}
+
+/// Replace image targets with new ones, given as `(range, replacement)`.
+///
+/// Applied back to front so an earlier replacement cannot shift the offsets of
+/// a later one.
+pub fn replace_ranges(text: &str, mut edits: Vec<(std::ops::Range<usize>, String)>) -> String {
+    edits.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
+    let mut out = text.to_string();
+    for (range, replacement) in edits {
+        if range.end <= out.len() {
+            out.replace_range(range, &replacement);
+        }
+    }
+    out
+}
+
 /// Tidy what pandoc produced.
 pub fn tidy_markdown(md: &str) -> String {
     // Trailing spaces are invisible and become accidental hard line breaks.
@@ -355,6 +461,112 @@ mod tests {
         // layout wrapper still goes.
         let html = "<table>\n  <tr>\n  </tr>\n<tr><td><p>body</p></td></tr></table>";
         assert_eq!(unwrap_single_cell_tables(html), "<p>body</p>");
+    }
+
+    // --- pandoc's raw <img> fallback -------------------------------------
+
+    #[test]
+    fn a_word_export_image_becomes_a_markdown_image() {
+        // Verbatim from `pandoc page.docx -t gfm`: the inline style is why
+        // pandoc could not write markdown in the first place.
+        let got = html_images_to_markdown(
+            r#"<img src="mediaout/media/rId21.png" style="width:0.11111in;height:0.11111in" alt="A diagram" />"#,
+        );
+        assert_eq!(got, "![A diagram](mediaout/media/rId21.png)");
+    }
+
+    #[test]
+    fn an_image_with_no_alt_text_still_converts() {
+        assert_eq!(
+            html_images_to_markdown(r#"<img src="a.png" width="30" />"#),
+            "![](a.png)"
+        );
+    }
+
+    #[test]
+    fn a_title_is_carried_across() {
+        assert_eq!(
+            html_images_to_markdown(r#"<img src="a.png" alt="A" title="T">"#),
+            r#"![A](a.png "T")"#
+        );
+    }
+
+    #[test]
+    fn several_images_in_one_document_all_convert() {
+        let got = html_images_to_markdown(
+            r#"one <img src="a.png" alt="A"/> two <img src="b.png" alt="B"/>"#,
+        );
+        assert_eq!(got, "one ![A](a.png) two ![B](b.png)");
+    }
+
+    #[test]
+    fn a_tag_with_no_source_is_left_alone_rather_than_deleted() {
+        let html = r#"<img alt="broken" />"#;
+        assert_eq!(html_images_to_markdown(html), html);
+    }
+
+    // --- image targets, for relocating what pandoc extracted ---------------
+
+    #[test]
+    fn a_markdown_image_target_is_found() {
+        let got = image_targets("text ![a shot](media/image1.png) more");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, "media/image1.png");
+    }
+
+    #[test]
+    fn a_title_after_the_path_is_not_part_of_it() {
+        let got = image_targets(r#"![](media/i.png "A caption")"#);
+        assert_eq!(got[0].0, "media/i.png");
+    }
+
+    #[test]
+    fn a_surviving_html_image_is_found_too() {
+        let got = image_targets(r#"<img src="media/i.png" alt="x">"#);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, "media/i.png");
+    }
+
+    #[test]
+    fn remote_and_inline_images_are_left_alone() {
+        // There is no local file to relocate for any of these.
+        assert!(image_targets("![](https://example.com/a.png)").is_empty());
+        assert!(image_targets("![](http://example.com/a.png)").is_empty());
+        assert!(image_targets("![](data:image/png;base64,AAAA)").is_empty());
+        assert!(image_targets("![](//cdn/a.png)").is_empty());
+    }
+
+    #[test]
+    fn a_plain_link_is_not_mistaken_for_an_image() {
+        assert!(image_targets("[a page](other.md)").is_empty());
+    }
+
+    #[test]
+    fn the_reported_range_covers_exactly_the_path() {
+        let text = "![alt](media/image1.png)";
+        let (target, range) = image_targets(text).remove(0);
+        assert_eq!(&text[range], target);
+    }
+
+    #[test]
+    fn replacing_several_targets_keeps_them_all_correct() {
+        // Back-to-front application is what stops an earlier edit shifting a
+        // later one's offsets.
+        let text = "![](a.png) and ![](bb.png) and ![](c.png)";
+        let edits: Vec<_> = image_targets(text)
+            .into_iter()
+            .map(|(t, r)| (r, format!("attachments/{}", t.to_uppercase())))
+            .collect();
+        assert_eq!(
+            replace_ranges(text, edits),
+            "![](attachments/A.PNG) and ![](attachments/BB.PNG) and ![](attachments/C.PNG)"
+        );
+    }
+
+    #[test]
+    fn an_out_of_bounds_range_is_skipped_rather_than_panicking() {
+        let got = replace_ranges("short", vec![(100..200, "x".into())]);
+        assert_eq!(got, "short");
     }
 
     #[test]

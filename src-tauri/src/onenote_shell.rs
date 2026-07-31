@@ -31,6 +31,12 @@ use std::path::{Path, PathBuf};
 
 /// OneNote's `PublishFormat::pfMHTML`.
 pub const PUBLISH_FORMAT_MHTML: i32 = 2;
+/// OneNote's `PublishFormat::pfWord`. Word is what the page should be asked
+/// for: unlike the browser-layout HTML in an MHTML export, a .docx carries real
+/// headings, lists and tables, which is what pandoc needs to produce markdown
+/// that reads like markdown. (pfOneNote 0, pfOneNotePackage 1, pfMHTML 2,
+/// pfPDF 3, pfXPS 4, pfWord 5.)
+pub const PUBLISH_FORMAT_WORD: i32 = 5;
 /// OneNote's `HierarchyScope::hsPages`.
 pub const HIERARCHY_SCOPE_PAGES: i32 = 4;
 
@@ -108,15 +114,14 @@ pub fn hierarchy_script() -> String {
     )
 }
 
-/// The script that exports one page to an MHTML file.
-pub fn publish_script(page_id: &str, target: &Path) -> String {
+/// The script that exports one page to a file, in the given `PublishFormat`.
+pub fn publish_script(page_id: &str, target: &Path, format: i32) -> String {
     format!(
         "$ErrorActionPreference='Stop'\n\
          $app = New-Object -ComObject OneNote.Application\n\
          $app.Publish({id}, {path}, {format}, '')\n",
         id = ps_quote(page_id),
         path = ps_quote(&target.to_string_lossy()),
-        format = PUBLISH_FORMAT_MHTML,
     )
 }
 
@@ -472,7 +477,11 @@ mod tests {
     #[test]
     fn a_page_id_cannot_break_out_of_its_quotes() {
         // A hostile-looking id has to stay one string literal.
-        let script = publish_script("'; Remove-Item C:\\ -Recurse; '", Path::new("C:\\out.mht"));
+        let script = publish_script(
+            "'; Remove-Item C:\\ -Recurse; '",
+            Path::new("C:\\out.mht"),
+            PUBLISH_FORMAT_MHTML,
+        );
         assert!(script.contains("''; Remove-Item C:\\ -Recurse; ''"));
         // One Publish call, and the injected text never starts a new statement.
         assert_eq!(script.matches("$app.Publish(").count(), 1);
@@ -480,9 +489,11 @@ mod tests {
     }
 
     #[test]
-    fn the_publish_script_asks_for_mhtml() {
-        let script = publish_script("{ID}", Path::new(r"C:\tmp\page.mht"));
-        assert!(script.contains("$app.Publish('{ID}', 'C:\\tmp\\page.mht', 2, '')"));
+    fn the_publish_script_carries_the_format_it_was_given() {
+        let word = publish_script("{ID}", Path::new(r"C:\tmp\page.docx"), PUBLISH_FORMAT_WORD);
+        assert!(word.contains("$app.Publish('{ID}', 'C:\\tmp\\page.docx', 5, '')"), "{word}");
+        let mht = publish_script("{ID}", Path::new(r"C:\tmp\page.mht"), PUBLISH_FORMAT_MHTML);
+        assert!(mht.contains("$app.Publish('{ID}', 'C:\\tmp\\page.mht', 2, '')"), "{mht}");
     }
 
     #[test]
