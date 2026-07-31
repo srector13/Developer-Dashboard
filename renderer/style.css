@@ -456,11 +456,287 @@ select:focus-visible {
 .row-btn svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; }
 
 /* ---------------------------------------------------------------------------
+   Settings
+   --------------------------------------------------------------------------- */
+
+#settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay-bg);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 900;
+  padding: 24px;
+}
+
+#settings-overlay.visible { display: flex; }
+
+#settings-panel {
+  width: min(920px, 100%);
+  height: min(720px, 100%);
+  display: flex;
+  flex-direction: column;
+  background: var(--menu-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-xl);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+#settings-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+#settings-head h2 {
+  flex: 1;
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-heading);
+}
+
+#settings-main { flex: 1; display: flex; min-height: 0; }
+
+#settings-nav {
+  width: 178px;
+  flex-shrink: 0;
+  padding: 12px 10px;
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+
+.set-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.set-nav-item svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2; flex-shrink: 0; }
+.set-nav-item:hover { background: var(--surface-hover); color: var(--text-heading); }
+.set-nav-item.active { background: var(--surface-active); color: var(--text-heading); font-weight: 500; }
+
+#settings-body { flex: 1; padding: 18px 22px; overflow-y: auto; min-width: 0; }
+
+#settings-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border-color);
+}
+
+#settings-foot .set-hint { flex: 1; margin: 0; }
+
+.btn-primary {
+  padding: 8px 20px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--accent-blue);
+  color: var(--text-inverse);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-primary:disabled { opacity: 0.4; cursor: default; }
+.btn-primary:not(:disabled):hover { filter: brightness(1.12); }
+
+.set-group { margin-bottom: 26px; }
+
+.set-group h3 {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-strong);
+  margin-bottom: 8px;
+}
+
+.set-hint {
+  display: block;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+.set-hint code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+  background: var(--chip-bg);
+}
+
+.set-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 10px 0;
+}
+
+.set-field { display: block; margin-bottom: 12px; }
+.set-label { display: block; font-size: 12.5px; color: var(--text-primary); margin-bottom: 5px; }
+.set-input-row { display: flex; gap: 8px; align-items: center; }
+
+#settings-body input[type="text"],
+#settings-body input[type="number"],
+#settings-body select,
+#settings-body textarea {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--inset-bg);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+
+#settings-body textarea { font-family: var(--font-mono); font-size: 11.5px; line-height: 1.55; width: 100%; resize: vertical; }
+#settings-body input:focus, #settings-body select:focus, #settings-body textarea:focus { border-color: var(--accent-blue); }
+#settings-body input.narrow { flex: 0 0 78px; }
+#settings-body input.narrow-id { flex: 0 0 130px; }
+#settings-body input.grow { flex: 2; }
+#settings-body select { flex: 0 0 auto; min-width: 150px; cursor: pointer; }
+#settings-body select.icon-select { flex: 0 0 110px; min-width: 0; }
+
+.set-toggle { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 12px; cursor: pointer; }
+.set-toggle input { margin-top: 2px; accent-color: var(--accent-blue); }
+.set-toggle-body .set-hint { margin-bottom: 0; }
+
+.set-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+
+/* A filled input loses its placeholder, so anything whose meaning isn't
+   obvious from its value gets a standing label instead. */
+.set-mini-label {
+  flex: 0 0 76px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.btn-ghost {
+  padding: 7px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.btn-ghost:hover { background: var(--surface-hover); color: var(--text-heading); }
+.btn-ghost.danger:hover { color: var(--accent-red); border-color: var(--accent-red); }
+.btn-ghost.add { margin-top: 4px; color: var(--accent-blue); border-style: dashed; }
+
+.set-card {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-tertiary);
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+
+.set-card-head { display: flex; gap: 8px; align-items: center; padding: 10px; border-bottom: 1px solid var(--border-color); }
+.set-card-body { padding: 10px; }
+.set-title-input { font-weight: 500; }
+
+.kind-tabs { display: flex; gap: 4px; margin-bottom: 10px; }
+
+.kind-tab {
+  padding: 5px 11px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.kind-tab.active { background: var(--accent-glow); border-color: var(--accent-blue); color: var(--text-heading); }
+
+/* The hotkey box — the one control that reports back, because a hotkey that
+   didn't register is otherwise indistinguishable from one that did. */
+.shortcut-box {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--inset-bg);
+  margin-bottom: 10px;
+}
+
+.shortcut-box.ok { border-color: var(--accent-green); }
+.shortcut-box.error { border-color: var(--accent-red); }
+
+.shortcut-key {
+  flex-shrink: 0;
+  min-width: 168px;
+  padding: 9px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--chip-bg);
+  color: var(--text-heading);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.shortcut-key:hover { border-color: var(--accent-blue); }
+.shortcut-msg { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+.shortcut-box.error .shortcut-msg { color: var(--text-strong); }
+
+.set-actions-row { display: flex; gap: 8px; margin-bottom: 10px; }
+.shortcut-suggestions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.shortcut-suggestions .set-hint { margin-bottom: 0; }
+
+.chip-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--chip-bg);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.chip-btn:hover { border-color: var(--accent-blue); color: var(--text-heading); }
+
+/* ---------------------------------------------------------------------------
    Toast
    --------------------------------------------------------------------------- */
 
 #toast {
   position: fixed;
+  /* Above the settings overlay: the settings screen is exactly where a save
+     failure needs to be readable. */
+  z-index: 1000;
   bottom: 18px;
   left: 50%;
   transform: translateX(-50%) translateY(12px);

@@ -12,6 +12,19 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
 
+/// The live state of the global launcher hotkey, as the settings screen and the
+/// startup banner report it.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortcutStatus {
+    pub accelerator: String,
+    /// Defaults to false: until `apply_shortcut` has run and said otherwise,
+    /// claiming a working hotkey is exactly the lie this type exists to stop.
+    pub registered: bool,
+    /// Present only when registration failed, phrased for a person to act on.
+    pub error: Option<String>,
+}
+
 pub struct AppState {
     settings: RwLock<AppSettings>,
     config: RwLock<HubConfig>,
@@ -23,6 +36,14 @@ pub struct AppState {
     results: RwLock<HashMap<String, ProviderResult>>,
     usage: Mutex<UsageMap>,
     pub shortcut: Mutex<Option<tauri_plugin_global_shortcut::Shortcut>>,
+    /// Whether the launcher hotkey actually registered with the OS.
+    ///
+    /// This is *stored*, not just emitted, because `apply_shortcut` runs in
+    /// `setup()` — before the dashboard's webview exists, let alone before it
+    /// has attached an event listener. An emit at that point goes nowhere, so a
+    /// hotkey that failed to register looked identical to one that worked:
+    /// press it, nothing happens, no explanation anywhere.
+    shortcut_status: RwLock<ShortcutStatus>,
     /// Mirrored from settings so the synchronous window-close handler can read
     /// it without touching the settings lock.
     pub keep_in_tray: AtomicBool,
@@ -49,6 +70,7 @@ impl AppState {
             results: RwLock::new(HashMap::new()),
             usage: Mutex::new(load_usage()),
             shortcut: Mutex::new(None),
+            shortcut_status: RwLock::new(ShortcutStatus::default()),
             keep_in_tray: AtomicBool::new(keep),
             quitting: AtomicBool::new(false),
             generation: AtomicU64::new(0),
@@ -80,6 +102,16 @@ impl AppState {
             eprintln!("Failed to write settings: {err}");
         }
         merged
+    }
+
+    // --- shortcut ---------------------------------------------------------
+
+    pub fn shortcut_status(&self) -> ShortcutStatus {
+        self.shortcut_status.read().unwrap().clone()
+    }
+
+    pub fn set_shortcut_status(&self, status: ShortcutStatus) {
+        *self.shortcut_status.write().unwrap() = status;
     }
 
     // --- config -----------------------------------------------------------

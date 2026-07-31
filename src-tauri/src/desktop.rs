@@ -326,42 +326,89 @@ pub fn normalize_accelerator(accelerator: &str) -> String {
         .join("+")
 }
 
-/// (Re-)register the launcher shortcut. A shortcut already taken by another app
-/// surfaces in the dashboard rather than failing silently.
-pub fn apply_shortcut(app: &AppHandle, settings: &AppSettings) {
+/// Combinations worth offering when the configured one won't register. Ordered
+/// by how rarely they collide with something else on a Windows desktop.
+pub const FALLBACK_SHORTCUTS: &[&str] = &[
+    "Alt+Space",
+    "CommandOrControl+Alt+Space",
+    "CommandOrControl+Shift+D",
+    "CommandOrControl+Alt+J",
+    "Alt+Shift+Space",
+];
+
+/// (Re-)register the launcher shortcut, recording what happened.
+///
+/// The result is stored in `AppState` as well as emitted. During startup this
+/// runs before the dashboard webview exists, so an emit alone reaches nobody —
+/// which is how a hotkey that never registered ended up indistinguishable from
+/// one that worked.
+pub fn apply_shortcut(app: &AppHandle, settings: &AppSettings) -> crate::state::ShortcutStatus {
     use std::str::FromStr;
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
     let state = app.state::<AppState>();
-    let mut registered = state.shortcut.lock().unwrap();
-    if let Some(previous) = registered.take() {
-        let _ = app.global_shortcut().unregister(previous);
-    }
+    let raw = settings.launcher_shortcut.trim().to_string();
 
-    let raw = settings.launcher_shortcut.trim();
-    if raw.is_empty() {
-        return; // switched off deliberately
-    }
+    let status = {
+        let mut registered = state.shortcut.lock().unwrap();
+        if let Some(previous) = registered.take() {
+            let _ = app.global_shortcut().unregister(previous);
+        }
 
-    // The parsed Shortcut — not the accelerator text — is what gets stored, so
-    // the handler can compare it by value. Comparing rendered strings does not
-    // work: `Shortcut`'s Display writes "shift+control+Space", which never
-    // equals the "CommandOrControl+Shift+Space" that settings.json holds.
-    let parsed = match Shortcut::from_str(&normalize_accelerator(raw)) {
-        Ok(shortcut) => shortcut,
-        Err(err) => {
-            eprintln!("Could not parse the shortcut {raw}: {err}");
-            let _ = app.emit("shortcut-failed", raw);
-            return;
+        if raw.is_empty() {
+            // Switched off deliberately: not an error, but say so plainly
+            // rather than reporting a working hotkey that doesn't exist.
+            crate::state::ShortcutStatus {
+                accelerator: String::new(),
+                registered: false,
+                error: None,
+            }
+        } else {
+            // The parsed Shortcut — not the accelerator text — is what gets
+            // stored, so the handler can compare it by value. Comparing
+            // rendered strings does not work: `Shortcut`'s Display writes
+            // "shift+control+Space", which never equals the
+            // "CommandOrControl+Shift+Space" that settings.json holds.
+            match Shortcut::from_str(&normalize_accelerator(&raw)) {
+                Err(err) => {
+                    eprintln!("Could not parse the shortcut {raw}: {err}");
+                    crate::state::ShortcutStatus {
+                        accelerator: raw.clone(),
+                        registered: false,
+                        error: Some(format!(
+                            "{raw} isn't a combination Dev Hub understands. Use modifiers plus one \
+                             key, like Alt+Space."
+                        )),
+                    }
+                }
+                Ok(parsed) => match app.global_shortcut().register(parsed) {
+                    Ok(_) => {
+                        *registered = Some(parsed);
+                        crate::state::ShortcutStatus {
+                            accelerator: raw.clone(),
+                            registered: true,
+                            error: None,
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("Could not register {raw}: {err}");
+                        crate::state::ShortcutStatus {
+                            accelerator: raw.clone(),
+                            registered: false,
+                            error: Some(format!(
+                                "Windows refused {raw} — another application already owns it. Pick \
+                                 a different combination in Settings."
+                            )),
+                        }
+                    }
+                },
+            }
         }
     };
-    match app.global_shortcut().register(parsed) {
-        Ok(_) => *registered = Some(parsed),
-        Err(err) => {
-            eprintln!("Could not register {raw}: {err}");
-            let _ = app.emit("shortcut-failed", raw);
-        }
-    }
+
+    state.set_shortcut_status(status.clone());
+    let _ = app.emit("shortcut-status", &status);
+    status
 }
 
 pub fn handle_shortcut(app: &AppHandle, pressed: &tauri_plugin_global_shortcut::Shortcut) {

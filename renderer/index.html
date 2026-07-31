@@ -33,8 +33,8 @@
     <button class="icon-btn" id="refresh-all" title="Refresh every provider">
       <span data-icon="refresh"></span><span>Refresh</span>
     </button>
-    <button class="icon-btn" id="edit-config" title="Open hub.config.json">
-      <span data-icon="settings"></span><span>Config</span>
+    <button class="icon-btn" id="open-settings" title="Settings">
+      <span data-icon="settings"></span><span>Settings</span>
     </button>
     <button class="icon-btn" id="toggle-theme" title="Switch theme">
       <span data-icon="grid"></span>
@@ -43,15 +43,33 @@
 
   <div id="banner">
     <span class="banner-text"></span>
-    <button class="icon-btn" id="banner-action">Open config</button>
+    <button class="icon-btn" id="banner-action">Fix it</button>
   </div>
 
   <main id="grid"></main>
+
+  <div id="settings-overlay">
+    <section id="settings-panel" role="dialog" aria-label="Settings">
+      <header id="settings-head">
+        <h2>Settings</h2>
+        <button class="icon-btn" id="settings-close" title="Close">Close</button>
+      </header>
+      <div id="settings-main">
+        <nav id="settings-nav"></nav>
+        <div id="settings-body"></div>
+      </div>
+      <footer id="settings-foot">
+        <span class="set-hint">Changes apply when you save. Cards reload straight away.</span>
+        <button class="btn-primary" id="settings-save" disabled>Save</button>
+      </footer>
+    </section>
+  </div>
 
   <div id="toast"></div>
 
   <script src="icons.js"></script>
   <script src="api-tauri.js"></script>
+  <script src="settings.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

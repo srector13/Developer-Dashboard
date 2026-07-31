@@ -43,10 +43,18 @@ fn main() {
             commands::get_settings,
             commands::save_settings,
             commands::app_version,
+            // launcher hotkey
+            commands::shortcut_status,
+            commands::shortcut_suggestions,
+            commands::set_launcher_shortcut,
             // config
             commands::get_config,
+            commands::get_config_json,
             commands::save_config,
+            commands::save_config_json,
             commands::reveal_config_file,
+            commands::pick_folder,
+            commands::pick_program,
             // providers + items
             commands::list_providers,
             commands::get_results,
