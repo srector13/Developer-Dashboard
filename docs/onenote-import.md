@@ -10,8 +10,8 @@ Pick whole notebooks, whole sections, or individual pages. Each OneNote page
 becomes its own markdown note, and the structure is preserved:
 
 ```
-OneNote                                Notebook
-  Work                                   Work/
+OneNote                                the section you picked
+  Work                                     (no folder unless you ask)
     Meetings                               Meetings/
       Standup                                standup.md
       Retro                                  retro.md
@@ -46,6 +46,37 @@ OneNote must be running, or able to start; the import launches it if needed.
   because that format carries the page's images inline; `src-tauri/src/mhtml.rs`
   then unwraps it into HTML plus image attachments, and pandoc converts the
   HTML to markdown.
+
+### Getting readable markdown out of it
+
+OneNote publishes HTML meant for a browser: nested absolutely-positioned
+`<div>`s, every run of text inside a `<span style="font-family:…">`, and a
+single-cell `<table>` used to place the body on the canvas. Handed that
+directly, pandoc does the only thing it can with what markdown cannot express —
+passes it through as raw HTML — which is why early imports arrived full of tags.
+
+`src-tauri/src/html_clean.rs` strips the presentation first: conditional
+comments, `<style>`/`<script>` blocks, Office's `<o:p>`-style tags, every
+presentation attribute, and single-cell layout tables (a table with more than
+one cell is one the user made, and is left alone). pandoc is then run with
+`-f html-native_divs-native_spans -t gfm-raw_html`, which stops it preserving
+those wrappers and removes the raw-HTML escape hatch entirely. The markdown is
+tidied afterwards — trailing spaces dropped, runs of blank lines collapsed.
+
+Images are matched to their MHTML part by source string, `cid:`, bare filename
+and percent-decoded name; anything still unmatched falls back to the saved
+attachments in document order, so an image referenced by a spelling this does
+not recognise still lands on the right file. Attachment extensions follow the
+part's own media type, so a JPEG is not saved as `.png`.
+
+### Where the pages land
+
+Pages go into the section chosen in the picker, with OneNote's section groups
+and section recreated beneath it. The notebook's own name is **not** a folder by
+default — the destination was already chosen, and adding a level on top of it
+second-guesses that. Tick **Put each notebook in its own folder** when importing
+from several notebooks at once, where that level is what keeps two same-named
+sections apart.
 
 Section and notebook names become folder names, so they are sanitised first:
 OneNote allows `\ / : * ? " < > |` and trailing dots in names and Windows does

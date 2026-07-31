@@ -9,6 +9,7 @@ mod cli;
 mod commands;
 mod desktop;
 mod exports;
+mod html_clean;
 mod mhtml;
 mod notebook;
 mod onenote;

@@ -164,15 +164,29 @@ check('ticking the notebook ticks everything', afterBook === 6, `got ${afterBook
 const selection = await page.evaluate(() => window.selectedOneNotePages());
 check('only pages are submitted, not the parent rows', selection.length === 3, `got ${selection.length}`);
 
+// By default the notebook name is NOT a folder: the destination was already
+// chosen in the picker, and wrapping it again was the reported complaint.
 const kickoff = selection.find(s => s.name === 'Kickoff');
-check('a grouped section becomes notebook → groups → section',
-  JSON.stringify(kickoff.sectionPath) === JSON.stringify(['Work', 'Projects', 'Archive', 'Apollo']),
+check('a grouped section becomes groups → section, with no notebook folder',
+  JSON.stringify(kickoff.sectionPath) === JSON.stringify(['Projects', 'Archive', 'Apollo']),
   JSON.stringify(kickoff && kickoff.sectionPath));
 
 const standup = selection.find(s => s.name === 'Standup');
-check('an ungrouped section becomes notebook → section',
-  JSON.stringify(standup.sectionPath) === JSON.stringify(['Work', 'Meetings']),
+check('an ungrouped section is just the section',
+  JSON.stringify(standup.sectionPath) === JSON.stringify(['Meetings']),
   JSON.stringify(standup && standup.sectionPath));
+
+// Ticking the box puts it back, for importing from several notebooks at once.
+await page.evaluate(() => { document.getElementById('onenote-wrap-notebook').checked = true; });
+const wrapped = await page.evaluate(() => window.selectedOneNotePages());
+check('the notebook folder can be asked for',
+  JSON.stringify(wrapped.find(s => s.name === 'Kickoff').sectionPath) ===
+  JSON.stringify(['Work', 'Projects', 'Archive', 'Apollo']),
+  JSON.stringify(wrapped.find(s => s.name === 'Kickoff').sectionPath));
+check('it is off unless asked for', await page.evaluate(() => {
+  document.getElementById('onenote-wrap-notebook').checked = false;
+  return window.selectedOneNotePages()[0].sectionPath[0] !== 'Work';
+}));
 check('page ids are carried through', standup.id === '{P1}', standup && standup.id);
 
 // --- destination list names the whole chain, not just the leaf -------------
@@ -211,8 +225,10 @@ check('import is called with the chosen destination', call && call.destDir === '
   call && call.destDir);
 check('import is called with the selected pages', call && call.items.length === 3,
   call && String(call.items.length));
-check('modal closes after a successful import', !(await modalOpen()),
+check('the picker closes once the import starts', !(await modalOpen()),
   dialogs.length ? `alert fired: ${dialogs.join(' / ')}` : 'no alert fired');
+check('the progress screen is dismissed when the import finishes', await page.evaluate(() =>
+  !document.getElementById('onenote-progress-modal').classList.contains('active')));
 
 // --- OneNote missing --------------------------------------------------------
 

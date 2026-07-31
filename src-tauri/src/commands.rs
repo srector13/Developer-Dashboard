@@ -957,21 +957,29 @@ fn mhtml_to_markdown(settings: &AppSettings, bytes: &[u8], note_dir: &Path) -> R
     // relative path, so a placeholder is enough to compute the links.
     let placeholder = note_dir.join("imported.md");
     let mut replacements: HashMap<String, String> = HashMap::new();
+    // The saved images in the order the MHTML listed them, which is document
+    // order — the fallback for any `<img>` whose source matches nothing.
+    let mut ordered: Vec<String> = Vec::new();
 
     for (index, resource) in parsed.resources.iter().enumerate() {
         if !resource.mime.starts_with("image/") {
             continue;
         }
+        let name = resource.suggested_name(index);
+        // The fallback extension has to follow the part's own media type. A
+        // JPEG saved as .png is a file nothing will open.
+        let fallback_ext = name.rsplit('.').next().filter(|e| !e.is_empty() && *e != name);
         let stored = store_attachment(
             settings,
             &resource.bytes,
-            &resource.suggested_name(index),
-            "png",
+            &name,
+            fallback_ext.unwrap_or("png"),
             &placeholder,
         );
         let Some(rel) = stored.rel_path.filter(|_| stored.success) else {
             continue; // an unsaveable image just keeps its original src
         };
+        ordered.push(rel.clone());
         // The HTML may name the image by URL, by bare filename, or by cid.
         if !resource.location.is_empty() {
             replacements.insert(resource.location.clone(), rel.clone());
@@ -984,10 +992,20 @@ fn mhtml_to_markdown(settings: &AppSettings, bytes: &[u8], note_dir: &Path) -> R
         }
     }
 
-    let html = crate::mhtml::rewrite_sources(&parsed.html, &replacements);
-    Ok(pandoc::run_stdin(settings, &html, "html", "gfm")?
-        .trim()
-        .to_string())
+    let rewritten = crate::mhtml::rewrite_sources_ordered(&parsed.html, &replacements, &ordered);
+    let html = crate::html_clean::clean_onenote_html(&rewritten.html);
+
+    // `-native_divs-native_spans` stops pandoc treating OneNote's layout
+    // wrappers as structure it must preserve, and `gfm-raw_html` refuses the
+    // escape hatch of passing HTML through — between them, what comes out is
+    // markdown rather than a web page with markdown around it.
+    let markdown = pandoc::run_stdin(
+        settings,
+        &html,
+        "html-native_divs-native_spans",
+        "gfm-raw_html",
+    )?;
+    Ok(crate::html_clean::tidy_markdown(&markdown))
 }
 
 #[tauri::command]

@@ -359,24 +359,69 @@ pub fn parse(bytes: &[u8]) -> Result<Mhtml, String> {
 /// `replacements` maps whatever the HTML might use to name a resource — the
 /// full Content-Location, its bare filename, or `cid:<Content-ID>` — onto the
 /// note-relative path the attachment was written to.
-pub fn rewrite_sources(html: &str, replacements: &HashMap<String, String>) -> String {
-    static SRC_RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r#"(?i)(<img\b[^>]*?\ssrc\s*=\s*)("([^"]*)"|'([^']*)')"#).unwrap());
+/// What `rewrite_sources_ordered` did, so the import can report it.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RewriteOutcome {
+    pub html: String,
+    /// Images now pointing at a saved attachment.
+    pub linked: usize,
+    /// Images whose source could not be matched to any part of the MHTML.
+    pub unresolved: usize,
+}
 
-    SRC_RE
+pub fn rewrite_sources(html: &str, replacements: &HashMap<String, String>) -> String {
+    rewrite_sources_ordered(html, replacements, &[]).html
+}
+
+/// Point every `<img>` at its saved attachment.
+///
+/// Matching is by source string first — location, `cid:`, bare filename,
+/// percent-decoded — and `ordered` is the safety net: the saved attachments in
+/// the order the MHTML listed them, handed out to any image whose source
+/// matched nothing. OneNote writes its parts in document order, so an image
+/// referenced by some spelling this does not recognise still lands on the right
+/// file rather than staying broken.
+pub fn rewrite_sources_ordered(
+    html: &str,
+    replacements: &HashMap<String, String>,
+    ordered: &[String],
+) -> RewriteOutcome {
+    // The value may be double-quoted, single-quoted, or bare — Office writes
+    // all three, and a quoted-only pattern silently skips the rest.
+    static SRC_RE: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r#"(?i)(<img\b[^>]*?\ssrc\s*=\s*)("([^"]*)"|'([^']*)'|([^\s>]+))"#).unwrap()
+    });
+
+    let mut linked = 0usize;
+    let mut unresolved = 0usize;
+    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    let html = SRC_RE
         .replace_all(html, |caps: &regex::Captures| {
             let prefix = caps.get(1).map(|m| m.as_str()).unwrap_or("");
             let raw = caps
                 .get(3)
                 .or_else(|| caps.get(4))
+                .or_else(|| caps.get(5))
                 .map(|m| m.as_str())
                 .unwrap_or("");
-            match lookup(raw, replacements) {
-                Some(path) => format!(r#"{prefix}"{path}""#),
-                None => caps.get(0).map(|m| m.as_str()).unwrap_or("").to_string(),
+
+            if let Some(path) = lookup(raw, replacements) {
+                used.insert(path.clone());
+                linked += 1;
+                return format!(r#"{prefix}"{path}""#);
             }
+            if let Some(next) = ordered.iter().find(|p| !used.contains(*p)) {
+                used.insert(next.clone());
+                linked += 1;
+                return format!(r#"{prefix}"{next}""#);
+            }
+            unresolved += 1;
+            caps.get(0).map(|m| m.as_str()).unwrap_or("").to_string()
         })
-        .into_owned()
+        .into_owned();
+
+    RewriteOutcome { html, linked, unresolved }
 }
 
 fn lookup(reference: &str, replacements: &HashMap<String, String>) -> Option<String> {
@@ -555,5 +600,75 @@ mod tests {
     #[test]
     fn empty_input_is_an_error_not_a_panic() {
         assert!(parse(b"").is_err());
+    }
+
+    // --- image sources -----------------------------------------------------
+
+    fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn a_single_quoted_source_is_rewritten() {
+        let out = rewrite_sources("<img src='shot.png'>", &map(&[("shot.png", "att/a.png")]));
+        assert!(out.contains(r#"src="att/a.png""#), "{out}");
+    }
+
+    #[test]
+    fn an_unquoted_source_is_rewritten() {
+        // Office emits these; the old pattern matched quoted values only, so
+        // every image written this way stayed broken.
+        let out = rewrite_sources("<img src=shot.png >", &map(&[("shot.png", "att/a.png")]));
+        assert!(out.contains(r#"src="att/a.png""#), "{out}");
+    }
+
+    #[test]
+    fn an_unmatched_source_falls_back_to_document_order() {
+        let ordered = vec!["att/one.png".to_string(), "att/two.png".to_string()];
+        let got = rewrite_sources_ordered(
+            r#"<img src="cid:unknown-1"><img src="cid:unknown-2">"#,
+            &HashMap::new(),
+            &ordered,
+        );
+        assert!(got.html.contains(r#"src="att/one.png""#), "{}", got.html);
+        assert!(got.html.contains(r#"src="att/two.png""#), "{}", got.html);
+        assert_eq!(got.linked, 2);
+        assert_eq!(got.unresolved, 0);
+    }
+
+    #[test]
+    fn the_fallback_never_reuses_an_image_already_placed_by_name() {
+        // First image matches by name and consumes one.png; the second must
+        // fall back to two.png, not hand out one.png a second time.
+        let ordered = vec!["att/one.png".to_string(), "att/two.png".to_string()];
+        let got = rewrite_sources_ordered(
+            r#"<img src="known.png"><img src="cid:mystery">"#,
+            &map(&[("known.png", "att/one.png")]),
+            &ordered,
+        );
+        assert!(got.html.contains(r#"src="att/one.png""#), "{}", got.html);
+        assert!(got.html.contains(r#"src="att/two.png""#), "{}", got.html);
+        assert_eq!(got.html.matches("att/one.png").count(), 1, "{}", got.html);
+    }
+
+    #[test]
+    fn an_image_with_nothing_left_to_fall_back_to_is_counted_not_mangled() {
+        let got = rewrite_sources_ordered(r#"<img src="gone.png">"#, &HashMap::new(), &[]);
+        assert_eq!(got.unresolved, 1);
+        assert_eq!(got.linked, 0);
+        // The original tag survives, so the note still shows something is there.
+        assert!(got.html.contains(r#"src="gone.png""#), "{}", got.html);
+    }
+
+    #[test]
+    fn other_attributes_on_the_tag_survive_the_rewrite() {
+        let got = rewrite_sources_ordered(
+            r#"<img alt="A chart" src="shot.png" width="300">"#,
+            &map(&[("shot.png", "att/a.png")]),
+            &[],
+        );
+        assert!(got.html.contains(r#"alt="A chart""#), "{}", got.html);
+        assert!(got.html.contains(r#"width="300""#), "{}", got.html);
+        assert!(got.html.contains(r#"src="att/a.png""#), "{}", got.html);
     }
 }

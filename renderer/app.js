@@ -4102,7 +4102,6 @@ async function openOneNoteImport() {
   tree.innerHTML = '';
   oneNoteDiagFindings = [];
   document.getElementById('onenote-diag').style.display = 'none';
-  document.getElementById('onenote-progress').style.display = 'none';
   status.style.display = 'block';
   setStatus('Looking for OneNote…', false);
   importBtn.disabled = true;
@@ -4220,11 +4219,17 @@ function selectedOneNotePages() {
     const section = book && book.sections[Number(box.dataset.section)];
     const page = section && section.pages[Number(box.dataset.page)];
     if (!page) return;
+    // Section groups and the section become real folders. The notebook name
+    // is NOT one of them by default: the destination was already chosen, and
+    // adding a folder on top of it is second-guessing that choice. Tick the
+    // box in the footer when importing from more than one notebook, where the
+    // extra level is what keeps two same-named sections apart.
+    const wrap = document.getElementById('onenote-wrap-notebook');
+    const prefix = wrap && wrap.checked ? [book.name] : [];
     items.push({
       id: page.id,
       name: page.name,
-      // Notebook → any section groups → section, mirrored as real folders
-      sectionPath: [book.name, ...section.groupPath, section.name],
+      sectionPath: [...prefix, ...section.groupPath, section.name],
     });
   });
   return items;
@@ -4238,22 +4243,27 @@ async function runOneNoteImport() {
   }
 
   const dest = document.getElementById('onenote-dest').value || notebookRoot;
-  const importBtn = document.getElementById('onenote-import-btn');
-  const progress = document.getElementById('onenote-progress');
   const label = document.getElementById('onenote-progress-label');
+  const fill = document.getElementById('onenote-progress-fill');
 
-  importBtn.disabled = true;
-  progress.style.display = 'block';
-  label.innerText = `Importing 0 of ${items.length}…`;
+  // The picker has done its job — swap it for the import's own screen rather
+  // than leaving a wall of ticked checkboxes behind a progress line.
+  hideOneNoteModal();
+  document.getElementById('onenote-progress-modal').classList.add('active');
+  label.innerText = `Preparing ${items.length} page${items.length === 1 ? '' : 's'}…`;
+  fill.style.width = '0%';
 
   const stopProgress = window.api.onOneNoteImportProgress(({ done, total, name }) => {
     label.innerText = name
-      ? `Importing ${done + 1} of ${total} — ${name}`
+      ? `Page ${done + 1} of ${total} — ${name}`
       : `Finishing ${total} page${total === 1 ? '' : 's'}…`;
+    fill.style.width = `${total ? Math.round((done / total) * 100) : 0}%`;
   });
 
   try {
     const result = await window.api.oneNoteImport(items, dest);
+    fill.style.width = '100%';
+    label.innerText = 'Rebuilding the notebook…';
     await refreshNotebook();
     if (result.firstPath) await openNote(result.firstPath);
 
@@ -4265,13 +4275,12 @@ async function runOneNoteImport() {
     } else {
       showToast(`Imported ${result.imported} page${result.imported === 1 ? '' : 's'} from OneNote.`);
     }
-    hideOneNoteModal();
   } catch (err) {
     alert(`OneNote import failed: ${err}`);
   } finally {
     stopProgress();
-    progress.style.display = 'none';
-    importBtn.disabled = false;
+    document.getElementById('onenote-progress-modal').classList.remove('active');
+    document.getElementById('onenote-import-btn').disabled = false;
   }
 }
 

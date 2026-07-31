@@ -2568,6 +2568,56 @@ label.check-row {
   white-space: pre-wrap;
 }
 
+/* OneNote picker footer: destination, the notebook-folder choice, buttons. */
+.onenote-footer {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.onenote-footer-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+/* The import's own screen. */
+.onenote-progress-spinner {
+  width: 34px;
+  height: 34px;
+  margin: 0 auto;
+  border: 3px solid var(--border-color);
+  border-top-color: var(--accent-blue);
+  border-radius: 50%;
+  animation: onenote-spin 0.9s linear infinite;
+}
+
+@keyframes onenote-spin {
+  to { transform: rotate(360deg); }
+}
+
+.onenote-progress-track {
+  height: 6px;
+  margin-top: 18px;
+  border-radius: 999px;
+  background-color: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.onenote-progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background-color: var(--accent-blue);
+  transition: width 0.25s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .onenote-progress-spinner { animation-duration: 2.4s; }
+  .onenote-progress-fill { transition: none; }
+}
+
 /* OneNote diagnostics: label on the left, what came back on the right. */
 .onenote-diag-table {
   width: 100%;

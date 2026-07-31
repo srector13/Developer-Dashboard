@@ -1055,18 +1055,37 @@
         <div id="onenote-tree" class="template-list" style="max-height: 46vh; overflow: auto;">
           <!-- Notebook / section / page checkboxes injected here -->
         </div>
-        <div id="onenote-progress" style="display: none; margin-top: 12px;">
-          <div class="app-loading-sub" id="onenote-progress-label">Importing…</div>
-        </div>
       </div>
-      <div class="modal-footer" style="justify-content: space-between;">
+      <div class="modal-footer onenote-footer">
         <label class="templates-help" style="margin: 0;">
           Into:
           <select id="onenote-dest" style="margin-left: 6px;"></select>
         </label>
-        <div>
+        <label class="check-row templates-help" style="margin: 0;" title="Off by default: pages land directly in the section you chose above.">
+          <input type="checkbox" id="onenote-wrap-notebook">
+          Put each notebook in its own folder
+        </label>
+        <div class="onenote-footer-actions">
           <button class="btn btn-outline" onclick="hideOneNoteModal()">Cancel</button>
           <button class="btn btn-primary" id="onenote-import-btn" onclick="runOneNoteImport()">Import selected</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- OneNote import progress: its own screen, because the picker's job is
+       done once the import starts and an import can run for a long while. -->
+  <div id="onenote-progress-modal" class="modal-overlay">
+    <div class="glass-card modal-card" style="max-width: 460px;">
+      <div class="modal-body" style="text-align: center; padding: 32px 28px;">
+        <div class="onenote-progress-spinner" aria-hidden="true"></div>
+        <h3 id="onenote-progress-title" style="margin: 18px 0 6px;">Importing from OneNote</h3>
+        <div class="app-loading-sub" id="onenote-progress-label">Starting…</div>
+        <div class="onenote-progress-track" role="progressbar" aria-labelledby="onenote-progress-title">
+          <div class="onenote-progress-fill" id="onenote-progress-fill"></div>
+        </div>
+        <div class="form-hint" id="onenote-progress-note" style="margin-top: 14px;">
+          OneNote is exporting each page. Leave this open — it may take a moment for pages with a lot of images.
         </div>
       </div>
     </div>
