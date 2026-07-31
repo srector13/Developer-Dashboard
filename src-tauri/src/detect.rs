@@ -157,6 +157,69 @@ pub fn detect_tools() -> Vec<DetectedTool> {
         .collect()
 }
 
+/// The arguments that make Markdown Notebook open a file on a line.
+///
+/// The explicit-flag form rather than the `path:line` suffix: a Windows path
+/// already contains a colon, so the flags leave nothing to parse ambiguously.
+pub const NOTEBOOK_ARGS: &[&str] = &["--line", "{line}", "--view", "edit", "{path}"];
+
+/// Find Markdown Notebook.
+///
+/// Checked next to our own exe first, because these two ship as portable
+/// siblings and land in the same folder more often than not — the same instinct
+/// as following the notebook pointer file. Cached: this runs once per todo
+/// scan and the answer doesn't change while the app is up.
+pub fn markdown_notebook() -> Option<PathBuf> {
+    static FOUND: once_cell::sync::Lazy<Option<PathBuf>> =
+        once_cell::sync::Lazy::new(find_markdown_notebook);
+    FOUND.clone()
+}
+
+fn find_markdown_notebook() -> Option<PathBuf> {
+    // Both spellings: the release artefact is capitalised, a `cargo build` is
+    // not, and on a case-sensitive filesystem that matters.
+    const NAMES: &[&str] = &[
+        "Markdown-Notebook.exe",
+        "markdown-notebook.exe",
+        "Markdown Notebook.exe",
+        "markdown-notebook",
+    ];
+
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            roots.push(dir.to_path_buf());
+            // A folder of portable tools, one directory per app.
+            if let Some(parent) = dir.parent() {
+                roots.push(parent.to_path_buf());
+                roots.push(parent.join("Markdown Notebook"));
+                roots.push(parent.join("markdown-notebook"));
+            }
+        }
+    }
+    for base in program_files() {
+        roots.push(base.join("Markdown Notebook"));
+        roots.push(base.join("Programs").join("Markdown Notebook"));
+    }
+    if let Some(home) = crate::settings::dirs_home() {
+        roots.push(home.join("Downloads"));
+    }
+
+    for root in roots {
+        for name in NAMES {
+            let candidate = root.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    // Last resort: on the PATH.
+    NAMES
+        .iter()
+        .find_map(|name| util::resolve_program(name))
+        .filter(|path| path.is_file())
+}
+
 /// Folders that look like somewhere repositories live, offered as starting
 /// points for the projects provider.
 pub fn detect_repo_roots() -> Vec<String> {

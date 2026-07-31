@@ -37,7 +37,19 @@ where there are two to take. Drag a card by its header to rearrange, and the
 rest close up around it. Both are remembered.
 
 Each provider has its own colour, so a card is identifiable before you've read
-its title.
+its title. Cards show their items as a **list** or a **grid** of tiles —
+whichever suits what's on them.
+
+### Making items yours
+
+Right-click any item, or use its **⋯** button, to give it a nickname, an icon,
+a colour, or to hide it. Left-click still runs it — that's the point of the app,
+and a click that sometimes launches and sometimes opens a menu would make the
+primary action feel unreliable.
+
+A nickname is searched as well as displayed, so renaming something to what you
+actually call it makes it findable by that name. Hidden items are listed in
+Settings → General, with a button to bring each one back.
 
 ## The idea
 
@@ -140,6 +152,13 @@ updates the Todos card within a second or two rather than waiting out the
 refresh interval. The watcher ignores everything the provider wouldn't read —
 `.git`, `attachments`, `templates`, non-markdown files — so a `git status` in
 your notes repo doesn't trigger a rescan.
+
+Clicking a todo opens its note **on the line**. Dev Hub looks for Markdown
+Notebook on disk — beside its own exe first, since the two ship as portable
+siblings — and calls it as
+`Markdown-Notebook.exe --line 42 --view edit "C:\notes\alpha.md"`. Set
+`todos.openWith` only to override that; leaving it unset is what lets the
+lookup keep working if either app moves.
 
 Aggregate notes — `*.toc.md`, `*.tasks.md`, and generated folder indexes — are
 skipped, because they list todos that live in other files and would otherwise

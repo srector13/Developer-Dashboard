@@ -43,6 +43,7 @@ await page.addInitScript(() => {
       ],
       repoRoots: ['C:\\dev'],
       notebookRoot: 'C:\\notes',
+      notebookApp: window.__notebookApp || null,
     }),
     runAtLogin: async () => false,
     setRunAtLogin: async (enabled) => { window.__calls.push(['setRunAtLogin', String(enabled)]); return enabled; },
@@ -90,6 +91,19 @@ check('the detected program path is shown, not just the name', await page.evalua
 
 check('the notebook found by the sibling app is mentioned', await page.evaluate(() =>
   document.getElementById('setup-body').textContent.includes('C:\\notes')));
+
+check('with Markdown Notebook on disk, setup says so and leaves the opener unset', await page.evaluate(async () => {
+  window.__notebookApp = 'C:\\tools\\Markdown-Notebook.exe';
+  await window.DevHubSetup.open();
+  await new Promise(r => setTimeout(r, 150));
+  const mentioned = document.getElementById('setup-body').textContent.includes('Markdown-Notebook.exe');
+  const built = window.DevHubSetup.buildConfig({});
+  // Left unset on purpose: the backend keeps finding it, so it survives a move.
+  window.__notebookApp = null;
+  await window.DevHubSetup.open();
+  await new Promise(r => setTimeout(r, 150));
+  return mentioned && !(built.todos && built.todos.openWith);
+}));
 
 // --- Choices reach the config ---------------------------------------------
 

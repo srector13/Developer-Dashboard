@@ -35,6 +35,12 @@
     saveSettings: (settings) => invoke('save_settings', { settings }),
     getAppVersion: () => invoke('app_version'),
 
+    // Per-item customisation. `itemOverride` rather than `override`, which is
+    // a reserved word in strict mode.
+    setItemOverride: (key, itemOverride) => invoke('set_item_override', { key, itemOverride }),
+    hiddenItems: () => invoke('hidden_items'),
+    onItemsChanged: (cb) => on('items-changed', () => cb()),
+
     // First-run setup
     setupSuggestions: () => invoke('setup_suggestions'),
     runAtLogin: () => invoke('run_at_login'),

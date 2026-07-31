@@ -123,6 +123,13 @@ await page.addInitScript(() => {
     },
     openExternal: async () => {},
     showLauncher: () => window.__calls.push(['showLauncher']),
+    setItemOverride: async (key, itemOverride) => {
+      window.__calls.push(['setItemOverride', key, JSON.stringify(itemOverride)]);
+      window.__settings.itemOverrides = Object.assign({}, window.__settings.itemOverrides, { [key]: itemOverride });
+      return window.__settings;
+    },
+    hiddenItems: async () => [],
+    onItemsChanged: () => {},
     onProviderUpdated: (cb) => { window.__providerUpdated = cb; },
     onConfigChanged: (cb) => { window.__configChanged = cb; },
     onShortcutStatus: (cb) => { window.__shortcutStatus = cb; },
@@ -173,8 +180,12 @@ await page.waitForTimeout(100);
 check('a hover action button runs the matching action index', await page.evaluate(() =>
   window.__calls.some(c => c[0] === 'runAction' && c[1] === 'projects::C:/dev/api' && c[2] === 1)));
 
-check('the hover strip holds every action except the default', await page.evaluate(() =>
-  document.querySelector('.card[data-provider="projects"] .card-row').querySelectorAll('.row-btn').length === 1));
+check('the hover strip holds every action except the default', await page.evaluate(() => {
+  // One action button, plus the always-present customise button.
+  const row = document.querySelector('.card[data-provider="projects"] .card-row');
+  return row.querySelectorAll('.row-btn:not([data-customise])').length === 1
+    && row.querySelectorAll('[data-customise]').length === 1;
+}));
 
 await page.evaluate(() => { window.__runResult = { success: false, message: 'IntelliJ — could not run idea64.exe' }; });
 await page.click('.card[data-provider="launch"] .card-row .row-main');
@@ -278,7 +289,7 @@ check('choosing Small applies too, and drops back to one column', await page.eva
     && Math.abs(card.getBoundingClientRect().width - single.getBoundingClientRect().width) < 2;
 }));
 check('the active size is the one marked in the control', await page.evaluate(() => {
-  const active = document.querySelector('.card[data-provider="launch"] .size-btn.active');
+  const active = document.querySelector('.card[data-provider="launch"] .size-btn[data-size].active');
   return active && active.dataset.size === 'small';
 }));
 
@@ -340,7 +351,7 @@ check('a rearrangement is persisted as the new order', await page.evaluate(() =>
 
 check('grouped actions collapse into one menu button', await page.evaluate(() => {
   const row = document.querySelector('.card[data-provider="grouped"] .card-row');
-  const buttons = [...row.querySelectorAll('.row-actions > .row-btn, .row-actions > .row-menu > .row-btn')];
+  const buttons = [...row.querySelectorAll('.row-actions > .row-btn:not([data-customise])')];
   // Three editors behind "Open with", plus the ungrouped "Copy path" — two
   // buttons where the old layout would have shown four.
   return buttons.length === 2
@@ -349,7 +360,7 @@ check('grouped actions collapse into one menu button', await page.evaluate(() =>
 }));
 
 check('a grouped action is not also shown as a loose button', await page.evaluate(() => {
-  const labels = [...document.querySelectorAll('.card[data-provider="grouped"] .row-actions > .row-btn')]
+  const labels = [...document.querySelectorAll('.card[data-provider="grouped"] .row-actions > .row-btn:not([data-customise])')]
     .map(b => b.textContent.trim());
   return !labels.includes('IntelliJ') && !labels.includes('VS Code');
 }));
@@ -394,6 +405,122 @@ await page.waitForTimeout(120);
 check('Escape dismisses the menu', await page.evaluate(() =>
   !document.querySelector('.row-menu-popup')));
 
+// --- Item customisation ---------------------------------------------------
+
+await page.click('.card[data-provider="projects"] [data-customise]');
+await page.waitForTimeout(200);
+check('the ⋯ button opens the customisation menu', await page.evaluate(() =>
+  !!document.querySelector('.item-menu')));
+
+check('the menu escapes the card and stays on screen', await page.evaluate(() => {
+  const menu = document.querySelector('.item-menu');
+  const box = menu.getBoundingClientRect();
+  return menu.parentElement === document.body
+    && getComputedStyle(menu).position === 'fixed'
+    && box.top >= 0 && box.left >= 0
+    && box.bottom <= window.innerHeight && box.right <= window.innerWidth;
+}));
+
+check('it offers a nickname, icons and colours', await page.evaluate(() =>
+  !!document.querySelector('#item-nickname')
+  && document.querySelectorAll('.icon-choice').length > 4
+  && document.querySelectorAll('.accent-choice').length > 4));
+
+await page.fill('#item-nickname', 'Payments API');
+await page.click('.accent-choice[data-accent="#bc8cff"]');
+await page.click('.icon-choice[data-icon="star"]');
+await page.click('#item-save');
+await page.waitForTimeout(250);
+
+check('saving sends the nickname, icon and accent for that item', await page.evaluate(() => {
+  const call = window.__calls.filter(c => c[0] === 'setItemOverride').pop();
+  const patch = JSON.parse(call[2]);
+  return call[1] === 'projects::C:/dev/api'
+    && patch.nickname === 'Payments API'
+    && patch.accent === '#bc8cff'
+    && patch.icon === 'star'
+    && patch.hidden === false;
+}));
+
+check('the menu closes after saving', await page.evaluate(() =>
+  !document.querySelector('.item-menu')));
+
+// Right-click is the fast route to the same menu.
+await page.click('.card[data-provider="launch"] .card-row', { button: 'right' });
+await page.waitForTimeout(200);
+check('right-clicking a row opens the menu too', await page.evaluate(() =>
+  !!document.querySelector('.item-menu')));
+
+await page.click('#item-hide');
+await page.waitForTimeout(250);
+check('Hide sends hidden without inventing a nickname', await page.evaluate(() => {
+  const call = window.__calls.filter(c => c[0] === 'setItemOverride').pop();
+  const patch = JSON.parse(call[2]);
+  return call[1] === 'launch::0:Jenkins' && patch.hidden === true && patch.nickname === null;
+}));
+
+await page.click('.card[data-provider="projects"] [data-customise]');
+await page.waitForTimeout(200);
+await page.click('#item-reset');
+await page.waitForTimeout(250);
+check('Reset clears every field rather than only the one you see', await page.evaluate(() => {
+  const patch = JSON.parse(window.__calls.filter(c => c[0] === 'setItemOverride').pop()[2]);
+  return patch.nickname === null && patch.icon === null && patch.accent === null && patch.hidden === false;
+}));
+
+check('left-clicking a row still runs it rather than opening the menu', await page.evaluate(async () => {
+  const before = window.__calls.filter(c => c[0] === 'runAction').length;
+  document.querySelector('.card[data-provider="projects"] .card-row .row-main').click();
+  await new Promise(r => setTimeout(r, 120));
+  return window.__calls.filter(c => c[0] === 'runAction').length === before + 1
+    && !document.querySelector('.item-menu');
+}));
+
+check('a per-item accent reaches the row', await page.evaluate(async () => {
+  window.__providerUpdated({
+    provider: 'launch', displayName: 'Launch', refreshedAt: 1, error: null,
+    items: [{
+      id: 'a', provider: 'launch', title: 'Coloured', accent: '#bc8cff', icon: 'star',
+      status: 'neutral', badges: [], actions: [],
+    }],
+  });
+  await new Promise(r => setTimeout(r, 80));
+  const row = document.querySelector('.card[data-provider="launch"] .card-row');
+  return row.style.getPropertyValue('--row-accent') === '#bc8cff'
+    && !!row.querySelector('.row-glyph')
+    && !!row.querySelector('.row-dot');
+}));
+
+// --- View modes -----------------------------------------------------------
+
+await page.click('.card[data-provider="launch"] [data-view="grid"]');
+await page.waitForTimeout(200);
+check('grid view renders tiles instead of rows', await page.evaluate(() => {
+  const card = document.querySelector('.card[data-provider="launch"]');
+  return !!card.querySelector('.tile-grid')
+    && card.querySelectorAll('.card-tile').length === 1
+    && card.querySelectorAll('.card-row').length === 0;
+}));
+
+check('the view choice is persisted alongside the size', await page.evaluate(() => {
+  const patch = JSON.parse(window.__calls.filter(c => c[0] === 'saveSettings').pop()[1]);
+  return patch.cardLayout.launch.view === 'grid' && !!patch.cardLayout.launch.size;
+}));
+
+check('a tile runs the item when clicked', await page.evaluate(async () => {
+  const before = window.__calls.filter(c => c[0] === 'runAction').length;
+  document.querySelector('.card[data-provider="launch"] .card-tile').click();
+  await new Promise(r => setTimeout(r, 120));
+  return window.__calls.filter(c => c[0] === 'runAction').length === before + 1;
+}));
+
+await page.click('.card[data-provider="launch"] [data-view="list"]');
+await page.waitForTimeout(200);
+check('switching back gives rows again', await page.evaluate(() => {
+  const card = document.querySelector('.card[data-provider="launch"]');
+  return card.querySelectorAll('.card-row').length === 1 && !card.querySelector('.tile-grid');
+}));
+
 // --- Markdown titles ------------------------------------------------------
 
 check('a rich title renders its markdown', await page.evaluate(async () => {
@@ -411,8 +538,8 @@ check('a rich title renders its markdown', await page.evaluate(async () => {
     && title.textContent === 'ship the beta to prod';
 }));
 
-check('a todo shows no hover actions, because it has exactly one', await page.evaluate(() =>
-  document.querySelectorAll('.card[data-provider="todos"] .row-actions > *').length === 0));
+check('a todo shows no action buttons, because it has exactly one action', await page.evaluate(() =>
+  document.querySelectorAll('.card[data-provider="todos"] .row-actions > .row-btn:not([data-customise])').length === 0));
 
 check('markup in a rich title is still escaped, not executed', await page.evaluate(async () => {
   window.__providerUpdated({

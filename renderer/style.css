@@ -594,6 +594,196 @@ body.rearranging .card-body { pointer-events: none; }
 .row-title mark { background: var(--mark-bg); color: var(--mark-text); border-radius: 3px; padding: 0 3px; }
 
 /* ---------------------------------------------------------------------------
+   Grid view — tiles instead of rows
+   --------------------------------------------------------------------------- */
+
+.tile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+  gap: 6px;
+  padding: 4px;
+}
+
+.card-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 12px 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-tertiary);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.card-tile:hover { border-color: var(--row-accent, var(--card-accent, var(--accent-blue))); }
+
+.tile-glyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-lg);
+  color: var(--row-accent, var(--card-accent, var(--accent-blue)));
+  background: color-mix(in srgb, var(--row-accent, var(--card-accent, var(--accent-blue))) 15%, transparent);
+}
+
+.tile-glyph svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2; }
+
+.tile-title {
+  font-size: 11.5px;
+  color: var(--text-primary);
+  text-align: center;
+  line-height: 1.35;
+  /* Two lines, then ellipsis — a tile grid only works if the tiles agree on a
+     height. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.card-tile:hover .tile-title { color: var(--text-heading); }
+
+.tile-dot {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: transparent;
+}
+.tile-dot.ok { background: var(--accent-green); }
+.tile-dot.warn { background: var(--mark-text); }
+.tile-dot.error { background: var(--accent-red); }
+.tile-dot.pending { background: var(--accent-blue); opacity: 0.45; }
+
+.tile-more {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  padding: 3px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.card-tile:hover .tile-more,
+.card-tile:focus-within .tile-more { opacity: 1; }
+.tile-more:hover { color: var(--text-heading); background: var(--surface-hover); }
+.tile-more svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; }
+
+/* ---------------------------------------------------------------------------
+   Item customisation menu
+   --------------------------------------------------------------------------- */
+
+.item-menu {
+  position: fixed;
+  z-index: 1300;
+  width: 300px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-xl);
+  background: var(--menu-bg);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+}
+
+.item-menu-head { border-bottom: 1px solid var(--border-color); padding-bottom: 8px; }
+
+.item-menu-title {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-heading);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.item-menu-field { display: flex; flex-direction: column; gap: 6px; }
+.item-menu-field > span { font-size: 11.5px; color: var(--text-secondary); }
+
+.item-menu input[type="text"] {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--control-bg);
+  color: var(--control-text);
+  font-family: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+
+.item-menu input[type="text"]:focus { border-color: var(--accent-blue); }
+
+.icon-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+
+.icon-choice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--inset-bg);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.icon-choice:hover { color: var(--text-heading); }
+.icon-choice.active { border-color: var(--accent-blue); color: var(--accent-blue); background: var(--accent-glow); }
+.icon-choice svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; }
+.icon-none { font-size: 13px; }
+
+.accent-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; }
+
+.accent-choice {
+  height: 24px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--swatch, var(--inset-bg));
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.accent-choice.active { outline: 2px solid var(--text-heading); outline-offset: 1px; }
+
+.item-menu-actions { display: flex; gap: 6px; align-items: center; }
+.item-menu-actions .btn-primary { margin-left: auto; padding: 7px 14px; }
+
+/* A per-item colour, when one is set. */
+.card-row { border-left: 2px solid transparent; }
+.card-row[style*="--row-accent"] { border-left-color: var(--row-accent); }
+.row-glyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--row-accent, var(--text-muted));
+}
+.row-glyph svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; }
+
+.row-btn-icon { padding: 0 6px; }
+
+/* ---------------------------------------------------------------------------
    Settings
    --------------------------------------------------------------------------- */
 
@@ -794,6 +984,17 @@ body.rearranging .card-body { pointer-events: none; }
 
 /* A filled input loses its placeholder, so anything whose meaning isn't
    obvious from its value gets a standing label instead. */
+.hidden-key {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .set-mini-label {
   flex: 0 0 76px;
   font-size: 11.5px;

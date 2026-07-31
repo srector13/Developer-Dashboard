@@ -67,14 +67,20 @@
           </p>`}
       </div>
 
-      ${suggestions.notebookRoot ? `
+      ${suggestions.notebookRoot || suggestions.notebookApp ? `
         <div class="setup-step">
           <h3>Your notes</h3>
-          <p class="set-hint">
-            Markdown Notebook last opened <code>${esc(suggestions.notebookRoot)}</code>.
-            Dev Hub will follow it for todos — no configuration needed, and it
-            keeps following if you switch notebooks.
-          </p>
+          ${suggestions.notebookRoot ? `
+            <p class="set-hint">
+              Markdown Notebook last opened <code>${esc(suggestions.notebookRoot)}</code>.
+              Dev Hub will follow it for todos — no configuration needed, and it
+              keeps following if you switch notebooks.
+            </p>` : ''}
+          ${suggestions.notebookApp ? `
+            <p class="set-hint">
+              Found Markdown Notebook at <code>${esc(suggestions.notebookApp)}</code>,
+              so clicking a todo will open its note on the right line.
+            </p>` : ''}
         </div>` : ''}
 
       <div class="setup-step">
@@ -98,14 +104,18 @@
       .filter(tool => chosenTools.has(tool.id))
       .map(tool => ({ label: tool.label, program: tool.program, args: tool.args }));
 
-    // The first chosen editor doubles as the todo opener, so clicking a todo
-    // lands on its line without a second round of configuration.
-    const editor = suggestions.tools.find(t => chosenTools.has(t.id) && t.id !== 'terminal' && t.id !== 'explorer');
-    if (editor) {
-      config.todos = config.todos || {};
-      config.todos.openWith = editor.id === 'vscode'
-        ? { program: editor.program, args: ['-g', '{path}:{line}'] }
-        : { program: editor.program, args: ['{path}'] };
+    // Todos open in Markdown Notebook when it's there — leaving openWith unset
+    // is what lets the backend keep finding it if it moves. Only when it isn't
+    // installed does the chosen editor stand in, so clicking a todo still lands
+    // on its line.
+    if (!suggestions.notebookApp) {
+      const editor = suggestions.tools.find(t => chosenTools.has(t.id) && t.id !== 'terminal' && t.id !== 'explorer');
+      if (editor) {
+        config.todos = config.todos || {};
+        config.todos.openWith = editor.id === 'vscode'
+          ? { program: editor.program, args: ['-g', '{path}:{line}'] }
+          : { program: editor.program, args: ['{path}'] };
+      }
     }
     return config;
   }
