@@ -1073,6 +1073,13 @@ pub async fn onenote_probe() -> Res<crate::onenote::OneNoteStatus> {
     Ok(crate::onenote::probe())
 }
 
+/// Everything known about why OneNote automation is or is not working, for the
+/// "Run a check" button in the import dialog.
+#[tauri::command]
+pub async fn onenote_diagnostics() -> Res<Vec<crate::onenote_shell::Finding>> {
+    Ok(crate::onenote_shell::diagnose())
+}
+
 #[tauri::command]
 pub async fn onenote_notebooks() -> Res<Vec<crate::onenote::OneNotebook>> {
     crate::onenote::notebooks()

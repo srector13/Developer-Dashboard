@@ -20,6 +20,8 @@
 //! — nested section groups, sub-pages, recycle bins — stays testable without
 //! Windows or OneNote installed.
 
+#[cfg(windows)]
+use crate::onenote_shell;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -627,6 +629,15 @@ mod com {
         }
     }
 
+    /// OneNote's executable, for reading its bitness. `None` when the COM
+    /// registration itself is missing.
+    pub fn onenote_exe() -> Option<std::path::PathBuf> {
+        ensure_com();
+        let progid = HSTRING::from("OneNote.Application");
+        let clsid = unsafe { CLSIDFromProgID(PCWSTR(progid.as_ptr())) }.ok()?;
+        local_server_path(&clsid)
+    }
+
     pub fn probe() -> OneNoteStatus {
         match connect() {
             Ok(_) => OneNoteStatus {
@@ -640,7 +651,7 @@ mod com {
         }
     }
 
-    pub fn hierarchy_xml() -> Result<String, String> {
+    pub fn hierarchy_xml_in_process() -> Result<String, String> {
         let (dispatch, clsid) = connect()?;
         let mut out = BSTR::new();
         // GetHierarchy(startNodeId, scope, [out] xml)
@@ -661,7 +672,7 @@ mod com {
         Ok(xml)
     }
 
-    pub fn publish_page(page_id: &str, target: &std::path::Path) -> Result<(), String> {
+    pub fn publish_page_in_process(page_id: &str, target: &std::path::Path) -> Result<(), String> {
         let (dispatch, clsid) = connect()?;
         // Publish refuses to overwrite, so clear any leftover first.
         let _ = std::fs::remove_file(target);
@@ -696,16 +707,91 @@ mod com {
         }
     }
 
-    pub fn hierarchy_xml() -> Result<String, String> {
+    pub fn hierarchy_xml_in_process() -> Result<String, String> {
         Err(UNSUPPORTED.into())
     }
 
-    pub fn publish_page(_page_id: &str, _target: &std::path::Path) -> Result<(), String> {
+    pub fn publish_page_in_process(_page_id: &str, _target: &std::path::Path) -> Result<(), String> {
         Err(UNSUPPORTED.into())
     }
 }
 
-pub use com::{hierarchy_xml, probe, publish_page};
+pub use com::probe;
+
+// ---------------------------------------------------------------------------
+// In-process first, then a process of the right bitness
+// ---------------------------------------------------------------------------
+
+/// Try the call here, and if the type library defeats us, try again somewhere
+/// that can load it.
+///
+/// In-process is kept first because it is the fast path and needs no child
+/// process. When it fails the reason is almost always `TYPE_E_LIBNOTREGISTERED`,
+/// and no amount of retrying in *this* process changes that — the bitness of
+/// the caller is the thing the type library registration is keyed on. See
+/// `crate::onenote_shell` for why that is and what the fallback does.
+#[cfg(windows)]
+fn with_fallback<T>(
+    in_process: impl FnOnce() -> Result<T, String>,
+    via_host: impl Fn(onenote_shell::Host) -> Result<T, String>,
+) -> Result<T, String> {
+    let first = match in_process() {
+        Ok(value) => return Ok(value),
+        Err(why) => why,
+    };
+    let mut attempts = vec![format!("in this app: {first}")];
+    for host in onenote_shell::host_order(com::onenote_exe().as_deref()) {
+        match via_host(host) {
+            Ok(value) => return Ok(value),
+            Err(why) => attempts.push(why),
+        }
+    }
+    Err(format!(
+        "OneNote could not be reached.\n\n{}",
+        attempts.join("\n")
+    ))
+}
+
+/// Where OneNote's executable lives, for the diagnostics report.
+#[cfg(windows)]
+pub fn com_onenote_exe() -> Option<std::path::PathBuf> {
+    com::onenote_exe()
+}
+
+/// Just the in-process read, reported as a byte count — the diagnostics report
+/// needs to know whether this route works on its own.
+#[cfg(windows)]
+pub fn hierarchy_probe_in_process() -> Result<usize, String> {
+    com::hierarchy_xml_in_process().map(|xml| xml.len())
+}
+
+#[cfg(windows)]
+pub fn hierarchy_xml() -> Result<String, String> {
+    let xml = with_fallback(com::hierarchy_xml_in_process, |host| {
+        onenote_shell::run_script(host, &onenote_shell::hierarchy_script())
+    })?;
+    if xml.trim().is_empty() {
+        return Err("OneNote returned an empty notebook list.".into());
+    }
+    Ok(xml)
+}
+
+#[cfg(windows)]
+pub fn publish_page(page_id: &str, target: &std::path::Path) -> Result<(), String> {
+    // Publish refuses to overwrite, so clear any leftover first.
+    let _ = std::fs::remove_file(target);
+    with_fallback(
+        || com::publish_page_in_process(page_id, target),
+        |host| onenote_shell::run_script(host, &onenote_shell::publish_script(page_id, target)).map(|_| ()),
+    )?;
+    if !target.exists() {
+        return Err("OneNote reported success but wrote no file.".into());
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub use com::{hierarchy_xml_in_process as hierarchy_xml, publish_page_in_process as publish_page};
 
 /// The notebooks OneNote currently has open.
 pub fn notebooks() -> Result<Vec<OneNotebook>, String> {

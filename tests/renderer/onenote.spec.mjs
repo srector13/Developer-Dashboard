@@ -228,6 +228,31 @@ const disabled = await page.evaluate(() => document.getElementById('onenote-impo
 check('import is disabled when OneNote is unavailable', disabled === true);
 check('the failure is styled as a failure, not as progress', await page.evaluate(() =>
   document.getElementById('onenote-status').classList.contains('is-error')));
+check('a failure offers the diagnostic check', await page.evaluate(() =>
+  document.getElementById('onenote-diag-actions').style.display === 'block'));
+
+// The report itself: every finding rendered, problems marked, copyable.
+await page.evaluate(() => {
+  window.api.oneNoteDiagnostics = async () => ([
+    { label: 'This app', value: '64-bit', problem: false },
+    { label: 'OneNote build', value: '32-bit (x86) — does NOT match this app', problem: true },
+  ]);
+});
+await page.locator('#onenote-diag-actions button').click();
+await page.waitForTimeout(300);
+check('the check renders every finding', await page.evaluate(() =>
+  document.querySelectorAll('#onenote-diag-rows tr').length === 2));
+check('a problem finding is marked as one', await page.evaluate(() => {
+  const rows = document.querySelectorAll('#onenote-diag-rows tr');
+  return !rows[0].classList.contains('is-problem') && rows[1].classList.contains('is-problem');
+}));
+check('findings are inserted as text, not markup', await page.evaluate(() => {
+  const cells = document.querySelectorAll('#onenote-diag-rows td');
+  return cells[1].textContent === '64-bit';
+}));
+check('the report copies as readable text', await page.evaluate(() =>
+  window.oneNoteDiagnosticsText() ===
+  '    This app: 64-bit\n[!] OneNote build: 32-bit (x86) — does NOT match this app'));
 
 await browser.close();
 console.log(`\n${failed ? `${failed} FAILED, ` : ''}${passed} passed`);

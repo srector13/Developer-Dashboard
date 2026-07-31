@@ -97,6 +97,7 @@
 
     // OneNote desktop import
     oneNoteProbe: () => invoke('onenote_probe'),
+    oneNoteDiagnostics: () => invoke('onenote_diagnostics'),
     oneNoteNotebooks: () => invoke('onenote_notebooks'),
     oneNoteImport: (items, destDir) => invoke('onenote_import', { items, destDir }),
     onOneNoteImportProgress: (callback) => on('onenote-import-progress', (e) => callback(e.payload)),

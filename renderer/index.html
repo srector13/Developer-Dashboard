@@ -1044,6 +1044,14 @@
           twice creates duplicates.
         </p>
         <div id="onenote-status" class="builder-preview-placeholder" style="display: none;"></div>
+        <div id="onenote-diag-actions" style="display: none; margin-top: 10px;">
+          <button class="btn btn-sm btn-outline" onclick="runOneNoteDiagnostics()">Run a check</button>
+          <span class="form-hint" style="margin-left: 8px;">Reports what OneNote and Windows say, so the cause is identifiable.</span>
+        </div>
+        <div id="onenote-diag" style="display: none;">
+          <table class="onenote-diag-table"><tbody id="onenote-diag-rows"></tbody></table>
+          <button class="btn btn-sm btn-outline" style="margin-top: 10px;" onclick="copyOneNoteDiagnostics()">Copy this report</button>
+        </div>
         <div id="onenote-tree" class="template-list" style="max-height: 46vh; overflow: auto;">
           <!-- Notebook / section / page checkboxes injected here -->
         </div>

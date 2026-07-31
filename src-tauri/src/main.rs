@@ -12,6 +12,7 @@ mod exports;
 mod mhtml;
 mod notebook;
 mod onenote;
+mod onenote_shell;
 mod notes;
 mod pandoc;
 mod platform;
@@ -108,6 +109,7 @@ fn main() {
             commands::import_document,
             // OneNote
             commands::onenote_probe,
+            commands::onenote_diagnostics,
             commands::onenote_notebooks,
             commands::onenote_import,
             commands::export_to_pdf,

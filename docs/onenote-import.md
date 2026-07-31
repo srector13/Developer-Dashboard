@@ -56,34 +56,57 @@ page shouldn't cost you the other two hundred.
 
 ### "Library not registered"
 
-Automation goes through OneNote's type library twice: once to translate a
-method name into a DISPID, and again when OneNote dispatches the call itself.
-On some Office installs that library's registration is missing or points at the
-wrong bitness, so both fail with `TYPE_E_LIBNOTREGISTERED` — even though the
-OneNote object is live and perfectly usable.
+Automation goes through OneNote's type library twice: once to turn a method name
+into a DISPID, and again when OneNote dispatches the call. If that library
+cannot be loaded, both fail with `TYPE_E_LIBNOTREGISTERED` even though the
+OneNote object is live and healthy.
 
-The import recovers in two steps.
+The likely cause is **bitness**, and it is not a broken install. Type library
+registration is split into `win32` and `win64` subkeys. This app is 64-bit. A
+32-bit Office — still common in managed environments — registers only `win32`,
+so a 64-bit caller is told, correctly, that the library is not registered.
+Nothing done inside a 64-bit process fixes that, because the bitness of the
+asking process is the problem.
 
-**Reading the library directly.** OneNote's program file is found via
-`HKCR\CLSID\{…}\LocalServer32`, and the type library is loaded straight out of
-that binary with `LoadTypeLibEx(…, REGKIND_NONE)`. That answers the name-to-
-DISPID question without consulting the registry at all. Resolved DISPIDs are
-cached for the life of the process.
+The import therefore tries three routes in order, stopping at the first that
+works:
 
-**Registering it for the current user.** Supplying our own DISPID is not enough
-when it is OneNote's own dispatch that cannot find the library, so on that
-failure the app calls `RegisterTypeLibForUser` and retries the call once.
+1. **In-process COM.** The fast path, and the only one with no child process.
+2. **The type library read straight off OneNote's binary**, via
+   `HKCR\CLSID\{…}\LocalServer32` and `LoadTypeLibEx(…, REGKIND_NONE)`, which
+   answers the name-to-DISPID question without the registry. Enough on its own
+   only when the name lookup was the sole failure.
+3. **A PowerShell process of OneNote's own bitness**, which is what actually
+   clears a bitness mismatch. Windows ships both builds at fixed paths —
+   `System32\WindowsPowerShell` is the 64-bit one and `SysWOW64\WindowsPowerShell`
+   the 32-bit one, confusingly — so there is no second binary to ship. OneNote's
+   own executable is inspected (its PE machine word) to decide which to try
+   first; both are tried either way.
 
-> **This writes to the registry.** `RegisterTypeLibForUser` adds type library
-> entries under `HKEY_CURRENT_USER\Software\Classes\TypeLib` — the current
-> user's hive only. It needs no administrator rights, which is what makes it
-> usable on a managed or locked-down computer, and it affects no other user
-> account. It is the same registration Office setup would normally have made.
-> To undo it, delete the OneNote entry under that key.
+The script is passed with `-EncodedCommand` (base64 of UTF-16LE), so no quoting
+layer can mangle a page ID or a path, and values interpolated into it are
+single-quoted with doubled quotes.
 
-If both steps fail, the picker explains what was tried and falls back to
-suggesting an Office Quick Repair, which may need an IT administrator on a
-managed machine.
+An in-process attempt may also register the type library for the current user
+with `RegisterTypeLibForUser`, which writes under
+`HKEY_CURRENT_USER\Software\Classes\TypeLib` — the current user's hive only, no
+administrator rights, no effect on other accounts. To undo it, delete the
+OneNote entry under that key.
+
+### When it still does not work: run the check
+
+The import dialog offers **Run a check** whenever it fails. It reports, in one
+pass:
+
+- the bitness of this app and of OneNote's own executable, and whether they
+  differ;
+- where OneNote's program file is, according to the registry;
+- which type library registrations actually exist, machine-wide and per-user,
+  broken down by version and bitness;
+- what each of the three routes above returned, verbatim.
+
+**Copy this report** puts it on the clipboard as plain text. It identifies the
+cause in one run, rather than one fact per attempt.
 
 ### Caveats
 

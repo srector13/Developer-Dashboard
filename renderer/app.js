@@ -4094,10 +4094,14 @@ async function openOneNoteImport() {
   const setStatus = (text, isError) => {
     status.innerText = text;
     status.classList.toggle('is-error', !!isError);
+    // A failure is where the check earns its place; offer it then, not before.
+    document.getElementById('onenote-diag-actions').style.display = isError ? 'block' : 'none';
   };
 
   oneNoteBooks = [];
   tree.innerHTML = '';
+  oneNoteDiagFindings = [];
+  document.getElementById('onenote-diag').style.display = 'none';
   document.getElementById('onenote-progress').style.display = 'none';
   status.style.display = 'block';
   setStatus('Looking for OneNote…', false);
@@ -4268,6 +4272,52 @@ async function runOneNoteImport() {
     stopProgress();
     progress.style.display = 'none';
     importBtn.disabled = false;
+  }
+}
+
+// The findings of the last diagnostics run, kept so Copy can rebuild the text.
+let oneNoteDiagFindings = [];
+
+async function runOneNoteDiagnostics() {
+  const rows = document.getElementById('onenote-diag-rows');
+  const panel = document.getElementById('onenote-diag');
+  if (!rows || !panel) return;
+  rows.innerHTML = '<tr><td colspan="2">Checking…</td></tr>';
+  panel.style.display = 'block';
+
+  try {
+    oneNoteDiagFindings = await window.api.oneNoteDiagnostics();
+  } catch (err) {
+    oneNoteDiagFindings = [{ label: 'Check failed', value: String(err), problem: true }];
+  }
+
+  rows.innerHTML = '';
+  for (const finding of oneNoteDiagFindings) {
+    const tr = document.createElement('tr');
+    if (finding.problem) tr.className = 'is-problem';
+    const label = document.createElement('td');
+    label.textContent = finding.label;
+    const value = document.createElement('td');
+    value.textContent = finding.value;
+    tr.append(label, value);
+    rows.appendChild(tr);
+  }
+}
+
+function oneNoteDiagnosticsText() {
+  return oneNoteDiagFindings
+    .map(f => `${f.problem ? '[!] ' : '    '}${f.label}: ${f.value}`)
+    .join('\n');
+}
+
+async function copyOneNoteDiagnostics() {
+  const text = oneNoteDiagnosticsText();
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast('Report copied.', 'success');
+  } catch {
+    showToast('Could not copy — select the text and copy it by hand.', 'error');
   }
 }
 

@@ -2568,6 +2568,30 @@ label.check-row {
   white-space: pre-wrap;
 }
 
+/* OneNote diagnostics: label on the left, what came back on the right. */
+.onenote-diag-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+  font-size: 12px;
+}
+
+.onenote-diag-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: top;
+}
+
+.onenote-diag-table td:first-child {
+  white-space: nowrap;
+  color: var(--text-secondary);
+  width: 1%;
+}
+
+.onenote-diag-table tr.is-problem td {
+  color: var(--accent-red);
+}
+
 /* The OneNote status line carries real prose when something goes wrong — a
    repair instruction runs to several sentences and has to stay readable. */
 #onenote-status {
