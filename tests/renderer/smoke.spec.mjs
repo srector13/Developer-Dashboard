@@ -212,9 +212,9 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
     setSectionMeta: async (dir, desc) => { window.__sectionMeta = { dir, desc }; return true; },
     checkForUpdates: async () => (window.__updateResult || { status: 'current', version: '1.0.0' }),
     getAppVersion: async () => '1.0.0',
-    deleteNode: async () => true,
+    deleteNode: async (p) => { (window.__deleted = window.__deleted || []).push(p); return true; },
     renameNode: async () => true,
-    relocateNode: async (src, dest) => { window.__relocateCall = { src, dest }; return true; },
+    relocateNode: async (src, dest) => { window.__relocateCall = { src, dest }; (window.__relocated = window.__relocated || []).push([src, dest]); return true; },
     moveNode: async () => true,
     readScratchpad: async () => '',
     appendScratchpad: async () => true,
@@ -1694,6 +1694,102 @@ await page.waitForTimeout(500);
 check('close-all clears the tab strip and canvas', await page.evaluate(() =>
   document.querySelectorAll('#tab-strip .note-tab').length === 0 &&
   document.getElementById('tab-strip').style.display === 'none'));
+
+// --- 37b. Multi-select in the tree: Explorer's Ctrl/Shift mechanics ---
+// The visible page order is smoke.md, xss.md, deep.md, then Projects/alpha.md.
+const rowFor = (label) => page.locator('#notebook-tree .tree-node-label', { hasText: label }).first();
+const selectedPaths = () => page.evaluate(() => window.selectedNotePaths());
+
+await page.evaluate(() => { window.clearSelection(); window.__deleted = []; window.__relocated = []; });
+await rowFor('Smoke Note').click();
+await page.waitForTimeout(250);
+check('a plain click selects just that note', JSON.stringify(await selectedPaths()) ===
+  JSON.stringify(['/nb/smoke.md']), JSON.stringify(await selectedPaths()));
+check('a plain click still opens the note', await page.evaluate(() =>
+  document.getElementById('note-title').innerText.includes('Smoke Note')));
+
+await rowFor('Deep Link').click({ modifiers: ['Control'] });
+await page.waitForTimeout(200);
+check('Ctrl-click adds without opening', await page.evaluate(() =>
+  window.selectedNotePaths().length === 2 && window.selectedNotePaths().includes('/nb/deep.md') &&
+  document.getElementById('note-title').innerText.includes('Smoke Note')));
+check('both rows are marked selected', await page.evaluate(() =>
+  document.querySelectorAll('#notebook-tree .tree-node.selected').length === 2));
+
+await rowFor('Deep Link').click({ modifiers: ['Control'] });
+await page.waitForTimeout(200);
+check('Ctrl-click again removes it', await page.evaluate(() =>
+  window.selectedNotePaths().length === 1 && !window.selectedNotePaths().includes('/nb/deep.md')));
+
+// Shift takes the range from the anchor, which Ctrl-click moved to deep.md.
+await page.evaluate(() => { window.clearSelection(); });
+await rowFor('Smoke Note').click();
+await page.waitForTimeout(200);
+await rowFor('Deep Link').click({ modifiers: ['Shift'] });
+await page.waitForTimeout(250);
+check('Shift-click selects the whole range', await page.evaluate(() =>
+  window.selectedNotePaths().length === 3 && window.selectedNotePaths().includes('/nb/xss.md')),
+  JSON.stringify(await selectedPaths()));
+
+// Shifting back to a nearer row narrows from the same anchor rather than adding.
+await rowFor('xss').first().click({ modifiers: ['Shift'] }).catch(() => {});
+await page.waitForTimeout(200);
+check('a second Shift-click replaces the range, it does not accrete',
+  (await selectedPaths()).length <= 3, JSON.stringify(await selectedPaths()));
+
+// Escape drops the selection.
+await page.evaluate(() => { window.clearSelection(); });
+await rowFor('Smoke Note').click();
+await rowFor('Deep Link').click({ modifiers: ['Control'] });
+await page.waitForTimeout(200);
+await page.keyboard.press('Escape');
+await page.waitForTimeout(200);
+check('Escape clears a multi-selection', await page.evaluate(() => window.selectedNotePaths().length === 0));
+
+// Deleting one row of a multi-selection deletes all of them, once.
+page.once('dialog', (d) => d.accept());
+await page.evaluate(async () => {
+  window.__deleted = [];
+  window.setSelection(['/nb/smoke.md', '/nb/deep.md'], '/nb/smoke.md');
+  await window.deleteNode('/nb/deep.md');
+});
+await page.waitForTimeout(400);
+check('deleting inside a selection removes every selected note', await page.evaluate(() =>
+  window.__deleted.length === 2 &&
+  window.__deleted.includes('/nb/smoke.md') && window.__deleted.includes('/nb/deep.md')),
+  await page.evaluate(() => JSON.stringify(window.__deleted)));
+check('the selection is dropped once it has been acted on', await page.evaluate(() =>
+  window.selectedNotePaths().length === 0));
+
+// A row OUTSIDE the selection acts on itself alone — Explorer's rule.
+check('acting on an unselected row acts only on it', await page.evaluate(() => {
+  window.setSelection(['/nb/smoke.md', '/nb/deep.md'], '/nb/smoke.md');
+  return JSON.stringify(window.selectionFor('/nb/xss.md')) === JSON.stringify(['/nb/xss.md']);
+}));
+check('acting on a selected row acts on the whole selection', await page.evaluate(() =>
+  window.selectionFor('/nb/deep.md').length === 2));
+check('the batch comes back in tree order, not click order', await page.evaluate(() => {
+  window.setSelection(['/nb/deep.md', '/nb/smoke.md'], '/nb/smoke.md');
+  return JSON.stringify(window.selectionFor('/nb/deep.md')) ===
+    JSON.stringify(['/nb/smoke.md', '/nb/deep.md']);
+}));
+
+// Dragging one of a selection carries them all into the destination section.
+await page.evaluate(async () => {
+  window.__relocated = [];
+  window.setSelection(['/nb/smoke.md', '/nb/deep.md'], '/nb/smoke.md');
+  window.handleDragStart({ dataTransfer: { setData() {}, effectAllowed: '' }, stopPropagation() {} }, '/nb/deep.md');
+  await window.handleDrop(
+    { preventDefault() {}, stopPropagation() {}, currentTarget: document.createElement('div') },
+    '/nb/Projects',
+  );
+});
+await page.waitForTimeout(400);
+check('dragging a selection moves every note in it', await page.evaluate(() =>
+  window.__relocated.length === 2 && window.__relocated.every(([, dest]) => dest === '/nb/Projects')),
+  await page.evaluate(() => JSON.stringify(window.__relocated)));
+
+await page.evaluate(() => window.clearSelection());
 
 // --- 38a. Opening a note at a line, the way another tool would ---
 // The command line counts from 1 and the payload mirrors src-tauri/src/cli.rs.

@@ -21,7 +21,7 @@ flowchart LR
 
 ## Everything in one place
 
-- **Sections and pages.** Folders are sections, files are pages. Drag pages between sections, pin the important ones, and reorder things however you like.
+- **Sections and pages.** Folders are sections, files are pages. Drag pages between sections, pin the important ones, and reorder things however you like. Select several at once the way you would in File Explorer — Ctrl+click to add one, Shift+click for a range — then drag or delete the lot in one go.
 - **Daily notes.** Name a page with a date (`2026-07-13`) and it gets a calendar icon and sorts newest-first — a running work journal with zero setup.
 - **Tabs.** Keep several notes open at once, just like a browser, with a dot marking anything unsaved.
 - **Write your way.** A distraction-free reading view, a plain editor, or both side by side. Checkboxes in the reading view are clickable — tick off tasks without switching modes.

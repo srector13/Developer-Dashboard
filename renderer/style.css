@@ -466,6 +466,29 @@ body.sidebar-collapsed #btn-expand-sidebar {
   box-shadow: 0 0 16px rgba(88, 166, 255, 0.15), inset 0 0 8px rgba(88, 166, 255, 0.05);
 }
 
+/* Multi-selected rows. Deliberately different from .active: the open note and
+   the selection are separate ideas, and both can be true of the same row. */
+.tree-node.selected {
+  background-color: var(--surface-active);
+  border-color: var(--border-color);
+  color: var(--text-heading);
+}
+
+.tree-node.selected::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: 3px;
+  background-color: var(--accent-blue);
+}
+
+.tree-node.selected.active {
+  background-color: rgba(88, 166, 255, 0.14);
+}
+
 .tree-node-content {
   display: flex;
   align-items: center;

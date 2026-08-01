@@ -188,6 +188,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     noteEditorEl.addEventListener('click', () => { updateWikiAutocomplete(); hideAiGhost(); });
   }
 
+  // Empty space in the notebook tree clears the selection, the way clicking
+  // the background of a file list does.
+  const treeEl = document.getElementById('notebook-tree');
+  if (treeEl) {
+    treeEl.addEventListener('click', (e) => {
+      if (e.target === treeEl) clearSelection();
+    });
+  }
+
   // Tab context menu dismissal: any click or right-click elsewhere closes it
   // (opening it stops propagation, so these never fire for the menu itself)
   document.addEventListener('click', hideTabContextMenu);
@@ -264,33 +273,40 @@ document.addEventListener('keydown', (e) => {
     if (activeNote) showFindBar();
     else openDrawerView('search');
   } else if (e.key === 'Escape') {
-    closeTopOverlay();
+    // Overlays first: Escape should shut whatever is on top before it reaches
+    // down to the tree behind it.
+    if (!closeTopOverlay() && selectedPaths.size > 1) clearSelection();
   }
 });
 
-// Close the currently open overlay (modal / popout / popover / palette) on Escape
+/// Close the topmost overlay. Returns true when one was closed, so a caller can
+/// tell whether Escape has already been spent.
 function closeTopOverlay() {
   const palette = document.getElementById('command-palette-modal');
   if (palette && palette.style.display !== 'none') {
     hideCommandPalette();
-    return;
+    return true;
   }
   const popout = document.getElementById('mermaid-popout-overlay');
   if (popout && popout.classList.contains('active')) {
     closeMermaidPopout();
-    return;
+    return true;
   }
   const tagsPopover = document.getElementById('tags-popover');
   if (tagsPopover && tagsPopover.classList.contains('active')) {
     hideTagsPopover();
-    return;
+    return true;
   }
   const activeModals = document.querySelectorAll('.modal-overlay.active');
   if (activeModals.length > 0) {
     activeModals[activeModals.length - 1].classList.remove('active');
-    return;
+    return true;
   }
-  if (findBarVisible()) hideFindBar();
+  if (findBarVisible()) {
+    hideFindBar();
+    return true;
+  }
+  return false;
 }
 
 // ==========================================
@@ -511,6 +527,121 @@ function scanGlobalTags(node, counts = null) {
   if (top) tagCounts = counts;
 }
 
+// ==========================================
+// MULTI-SELECT IN THE NOTEBOOK TREE
+// ==========================================
+//
+// File Explorer's mechanics, because that is what the modifier keys already
+// mean to anyone using this on Windows: plain click selects one and opens it,
+// Ctrl-click adds or removes one, Shift-click takes the range from the anchor.
+// Selection covers pages only — sections have their own actions, and dragging
+// a folder into a multi-page move has no sensible meaning.
+//
+// A selection of one behaves exactly as before, so every existing action keeps
+// working without knowing this exists.
+
+let selectedPaths = new Set();
+/// The row a Shift-range is measured from — the last one clicked without Shift.
+let selectionAnchor = null;
+
+/// Pages in the order they appear in the tree. `activeNoteList` is rebuilt by
+/// each render and is already in visible order, which is what a range needs.
+function visiblePagePaths() {
+  return activeNoteList.map(p => p.fsPath);
+}
+
+/// The current selection, in tree order.
+///
+/// A function rather than the Set itself: a script-scope `let` is not reachable
+/// from outside this file, and tree order is what every caller wants anyway.
+function selectedNotePaths() {
+  return visiblePagePaths().filter(p => selectedPaths.has(p));
+}
+
+function setSelection(paths, anchor) {
+  selectedPaths = new Set(paths);
+  if (anchor !== undefined) selectionAnchor = anchor;
+  renderSidebarTree();
+}
+
+function clearSelection() {
+  if (!selectedPaths.size) return;
+  selectedPaths = new Set();
+  selectionAnchor = null;
+  renderSidebarTree();
+}
+
+/// The paths an action should apply to when it was invoked on `fsPath`.
+///
+/// Acting on a row inside a multi-selection acts on the whole selection; acting
+/// on a row outside it acts on that row alone, which is also what Explorer does.
+function selectionFor(fsPath) {
+  if (selectedPaths.size > 1 && selectedPaths.has(fsPath)) {
+    // Keep tree order rather than insertion order, so a bulk move lands the
+    // pages in the order the user sees them.
+    return visiblePagePaths().filter(p => selectedPaths.has(p));
+  }
+  return [fsPath];
+}
+
+function handlePageRowClick(event, fsPath) {
+  const additive = event.ctrlKey || event.metaKey;
+
+  if (event.shiftKey && selectionAnchor) {
+    event.preventDefault();
+    const order = visiblePagePaths();
+    const from = order.indexOf(selectionAnchor);
+    const to = order.indexOf(fsPath);
+    if (from !== -1 && to !== -1) {
+      const [lo, hi] = from <= to ? [from, to] : [to, from];
+      // The anchor stays put, so widening and narrowing the range both work
+      // from the same origin — Shift-clicking twice replaces, never accretes.
+      setSelection(order.slice(lo, hi + 1));
+      return;
+    }
+  }
+
+  if (additive) {
+    event.preventDefault();
+    const next = new Set(selectedPaths);
+    if (next.has(fsPath)) next.delete(fsPath);
+    else next.add(fsPath);
+    setSelection(next, fsPath);
+    return;
+  }
+
+  // A plain click is the ordinary one: this page, and open it.
+  selectedPaths = new Set([fsPath]);
+  selectionAnchor = fsPath;
+  openNote(fsPath);
+}
+
+/// Delete every page in `paths`, with a single confirmation.
+async function deleteSelection(paths) {
+  const count = paths.length;
+  if (!count) return;
+  if (!confirm(`Move ${count} notes to the Trash?`)) return;
+
+  let removed = 0;
+  const failed = [];
+  for (const path of paths) {
+    // One at a time, so a single unwritable file does not abandon the rest.
+    if (await window.api.deleteNode(path)) {
+      removed += 1;
+      if (activeNote === path) closeNoteCanvas();
+    } else {
+      failed.push(path);
+    }
+  }
+  clearSelection();
+  await refreshNotebook();
+  if (failed.length) {
+    showToast(`Moved ${removed} to Trash; ${failed.length} could not be moved.`, 'error');
+  } else {
+    showToast(`Moved ${removed} notes to Trash — restore them any time from the Trash button.`);
+  }
+}
+
 // Sidebar notebook tree HTML generator
 function renderSidebarTree() {
   const treeContainer = document.getElementById('notebook-tree');
@@ -599,9 +730,10 @@ function generateTreeHTML(node, depth) {
         iconHtml = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-secondary);"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
       }
 
+      const isSelected = selectedPaths.has(page.fsPath);
       html += `
-        <div class="tree-node ${isActive ? 'active' : ''}" style="padding-left: ${(isRoot ? 0 : depth + 1) * 12 + 12}px;"
-             onclick="openNote(${jsArg(page.fsPath)})"
+        <div class="tree-node ${isActive ? 'active' : ''} ${isSelected ? 'selected' : ''}" style="padding-left: ${(isRoot ? 0 : depth + 1) * 12 + 12}px;"
+             onclick="handlePageRowClick(event, ${jsArg(page.fsPath)})"
              draggable="true"
              ondragstart="handleDragStart(event, ${jsArg(page.fsPath)})"
              ondragover="handlePageDragOver(event)"
@@ -4008,6 +4140,13 @@ async function savePageInfo() {
 
 // Delete note node dialog (soft delete: items go to the notebook trash)
 async function deleteNode(fsPath) {
+  // Deleting a row inside a multi-selection deletes all of it, with one prompt.
+  const batch = selectionFor(fsPath);
+  if (batch.length > 1) {
+    await deleteSelection(batch);
+    return;
+  }
+
   const isDir = fsPath && !fsPath.endsWith('.md');
   const confirmMsg = isDir
     ? 'Move this section folder and everything inside it to the Trash?'
@@ -5632,6 +5771,26 @@ function showSectionMenu(e, fsPath, name) {
 }
 
 function showPageMenu(e, sectionPath, pageName, pageFsPath) {
+  const batch = selectionFor(pageFsPath);
+  // Right-clicking inside a multi-selection acts on all of it, so the menu
+  // has to say so — silently deleting eight notes from a menu that said
+  // "Delete Page" would be a nasty surprise.
+  if (batch.length > 1) {
+    showContextMenu(e, [
+      { label: `${batch.length} notes selected`, enabled: false, action: () => {} },
+      null,
+      { label: 'Clear Selection', enabled: true, action: () => clearSelection() },
+      null,
+      {
+        label: `Delete ${batch.length} Notes`,
+        enabled: true,
+        danger: true,
+        action: () => deleteSelection(batch),
+      },
+    ]);
+    return;
+  }
+
   showContextMenu(e, [
     { label: 'Page Info…', enabled: true, action: () => showPageInfoModal(pageFsPath) },
     null,
@@ -6863,11 +7022,21 @@ function insertBuilderDiagram() {
 
 // --- Drag & Drop Handlers ---
 let dragSourcePath = null;
+// Every path the current drag carries — one row, or a whole selection.
+let dragSourcePaths = [];
 
 function handleDragStart(e, fsPath) {
   dragSourcePath = fsPath;
+  // Dragging a row inside a multi-selection drags all of it; dragging one
+  // outside collapses the selection onto it first, as Explorer does.
+  dragSourcePaths = selectionFor(fsPath);
+  if (/\.md$/i.test(fsPath) && !selectedPaths.has(fsPath)) {
+    selectedPaths = new Set([fsPath]);
+    selectionAnchor = fsPath;
+    renderSidebarTree();
+  }
   e.dataTransfer.effectAllowed = 'move';
-  e.dataTransfer.setData('text/plain', fsPath);
+  e.dataTransfer.setData('text/plain', dragSourcePaths.join('\n'));
   e.stopPropagation();
 }
 
@@ -6897,15 +7066,21 @@ async function handleDrop(e, targetFsPath) {
     node.classList.remove('drag-over');
   }
   
-  const srcPath = dragSourcePath;
-  if (!srcPath || !targetFsPath || srcPath === targetFsPath) return;
+  const sources = (dragSourcePaths.length ? dragSourcePaths : [dragSourcePath])
+    .filter(p => p && p !== targetFsPath);
+  if (!sources.length || !targetFsPath) return;
 
-  const success = await window.api.relocateNode(srcPath, targetFsPath);
-  if (success) {
-    await refreshNotebook();
-    if (activeNote === srcPath) {
-      closeNoteCanvas();
+  let moved = 0;
+  for (const srcPath of sources) {
+    if (await window.api.relocateNode(srcPath, targetFsPath)) {
+      moved += 1;
+      if (activeNote === srcPath) closeNoteCanvas();
     }
+  }
+  if (moved) {
+    clearSelection();
+    await refreshNotebook();
+    if (sources.length > 1) showToast(`Moved ${moved} notes.`);
   }
 }
 
@@ -6950,7 +7125,6 @@ async function handlePageDrop(e, dirPath, targetName) {
   const srcPath = dragSourcePath;
   if (!srcPath) return;
   const srcDir = nodeParentDir(srcPath);
-  const srcName = srcPath.slice(srcDir.length + 1);
 
   if (!/\.md$/i.test(srcPath)) {
     // A section dropped onto a page row: move it into that page's folder
@@ -6961,24 +7135,45 @@ async function handlePageDrop(e, dirPath, targetName) {
     return;
   }
 
-  if (srcDir === dirPath) {
-    // Same section: rewrite the order file with the page in its new slot
-    if (srcName.toLowerCase() === targetName.toLowerCase()) return;
+  const dragged = (dragSourcePaths.length ? dragSourcePaths : [srcPath])
+    .filter(p => /\.md$/i.test(p));
+  const sameSection = dragged.filter(p => nodeParentDir(p) === dirPath);
+  const fromElsewhere = dragged.filter(p => nodeParentDir(p) !== dirPath);
+
+  // Pages already in this section are reordered; the rest are moved in. A
+  // mixed selection does both, which is the only reading that loses nothing.
+  if (sameSection.length) {
     const section = findSectionByFsPath(treeData, dirPath);
-    if (!section) return;
-    const ord = section.pages.map(p => p.name).filter(n => n.toLowerCase() !== srcName.toLowerCase());
-    let ti = ord.findIndex(n => n.toLowerCase() === targetName.toLowerCase());
-    if (ti === -1) return;
-    if (!before) ti += 1;
-    ord.splice(ti, 0, srcName);
-    const ok = await window.api.setNodeOrder(dirPath, ord);
-    if (ok) await refreshNotebook();
-  } else {
-    // Different section: move the page there (lands at the default position)
-    const ok = await window.api.relocateNode(srcPath, dirPath);
-    if (ok) {
-      await refreshNotebook();
-      if (activeNote === srcPath) closeNoteCanvas();
+    if (section) {
+      const names = sameSection.map(p => p.slice(nodeParentDir(p).length + 1));
+      const lower = new Set(names.map(n => n.toLowerCase()));
+      // Dropping a block onto one of its own members is a no-op, not a
+      // rearrangement of the block around itself.
+      if (!lower.has(targetName.toLowerCase())) {
+        const ord = section.pages
+          .map(p => p.name)
+          .filter(n => !lower.has(n.toLowerCase()));
+        let ti = ord.findIndex(n => n.toLowerCase() === targetName.toLowerCase());
+        if (ti !== -1) {
+          if (!before) ti += 1;
+          // Insert in tree order, so a multi-page drag keeps its shape.
+          ord.splice(ti, 0, ...names);
+          await window.api.setNodeOrder(dirPath, ord);
+        }
+      }
     }
+  }
+
+  let moved = 0;
+  for (const path of fromElsewhere) {
+    if (await window.api.relocateNode(path, dirPath)) {
+      moved += 1;
+      if (activeNote === path) closeNoteCanvas();
+    }
+  }
+
+  if (sameSection.length || moved) {
+    clearSelection();
+    await refreshNotebook();
   }
 }
