@@ -59,6 +59,29 @@ const checks = {
   'dart highlight': /language-dart|hljs/.test(out) && out.includes('hljs'),
   'js highlight': out.includes('hljs-keyword') || out.includes('hljs'),
   'external target': out.includes('target="_blank"'),
+  // markdown-it refuses file: by default and drops the link entirely, which is
+  // what made file links show as raw [text](file:///…) in the preview.
+  'file link renders as a link': md.render('[Spec](file:///C:/docs/spec.pdf)\n', {})
+    .includes('href="file:///C:/docs/spec.pdf"'),
+  'file link is marked for the click handler': md.render('[Spec](file:///C:/d/s.pdf)\n', {})
+    .includes('class="file-link"'),
+  'a UNC file link renders': md.render('[Spec](file://server/team/s.pdf)\n', {})
+    .includes('href="file://server/team/s.pdf"'),
+  'a relative document link is marked as a file link':
+    md.render('[Spec](../docs/spec.pdf)\n', {}).includes('class="file-link"'),
+  'a relative note link is NOT a file link':
+    !md.render('[Other](../notes/other.md)\n', {}).includes('file-link'),
+  'a heading anchor is not a file link':
+    !md.render('[Top](#top)\n', {}).includes('file-link'),
+  'a web link is not a file link':
+    !md.render('[Site](https://example.com)\n', {}).includes('file-link'),
+  // The dangerous schemes stay refused.
+  'javascript: is still rejected':
+    !md.render('[x](javascript:alert(1))\n', {}).includes('href="javascript:'),
+  'vbscript: is still rejected':
+    !md.render('[x](vbscript:msgbox)\n', {}).includes('href="vbscript:'),
+  'a non-image data: url is still rejected':
+    !md.render('[x](data:text/html;base64,PHNjcmlwdD4=)\n', {}).includes('href="data:text/html'),
   // Blocks carry the line they came from in the ORIGINAL note, not in the
   // body left after frontmatter and the leading H1 are stripped. In `sample`
   // the paragraph is line 8 and the two tasks are lines 10 and 11.

@@ -1,6 +1,6 @@
 {
   "name": "markdown-notebook",
-  "version": "1.5.0-beta.14",
+  "version": "1.5.0-beta.15",
   "private": true,
   "description": "A modern minimalistic Markdown note-taking desktop application — native Windows build (Rust + WebView2, no Electron).",
   "author": "Stephen Rector",

@@ -82,6 +82,27 @@
       }
     });
 
+    // 0. Allow file: links.
+    //
+    // markdown-it refuses `file:` by default, alongside javascript: and
+    // vbscript: — sound for a web page, wrong for a desktop notebook, where
+    // "link to a document on the network drive" is an ordinary thing to want.
+    // Refused links are not rendered as links at all: the note showed the raw
+    // `[Spec](file:///…)` as literal text, which is what made web links look
+    // fine and file links look broken.
+    //
+    // The genuinely dangerous schemes stay refused. Nothing here can navigate
+    // the app either — app.js intercepts the click and hands the path to the
+    // system, so a file: href is never followed by the webview itself.
+    md.validateLink = (url) => {
+      const value = url.trim().toLowerCase();
+      if (/^(vbscript|javascript):/.test(value)) return false;
+      if (/^data:/.test(value)) {
+        return /^data:image\/(gif|png|jpeg|webp);/.test(value);
+      }
+      return true;
+    };
+
     // 1. Highlight Plugin: ==highlight== -> <mark>highlight</mark>
     md.inline.ruler.after('emphasis', 'notebook-mark', (state, silent) => {
       const start = state.pos;
@@ -225,6 +246,11 @@
       if (/^https?:\/\//i.test(href)) {
         tokens[idx].attrSet('target', '_blank');
         tokens[idx].attrSet('rel', 'noopener noreferrer');
+      } else if (isFileTarget(href)) {
+        // Marked so app.js can hand it to the system rather than let the
+        // webview navigate to it — following a file: href in place would
+        // replace the app with the document.
+        tokens[idx].attrSet('class', 'file-link');
       }
       return defaultLinkOpen(tokens, idx, options, env, self);
     };
@@ -305,6 +331,23 @@
     return mdInstance;
   }
 
+  // Does this link target something to open with the system rather than to
+  // follow in the app?
+  //
+  // A `file:` URL always is. A relative path is one too, unless it points at
+  // another note (which opens in the app) or at a heading on this page.
+  function isFileTarget(href) {
+    if (!href) return false;
+    if (/^file:/i.test(href)) return true;
+    if (href.startsWith('#')) return false;
+    // Any other scheme — http, mailto, onenote: — is somebody else's business.
+    if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return false;
+    // A bare Windows path typed without a scheme, e.g. C:\docs\spec.pdf.
+    if (/^[a-z]:[\\/]/i.test(href)) return true;
+    const path = href.split(/[?#]/)[0];
+    return !!path && !/\.md$/i.test(path);
+  }
+
   // Map each line of the preprocessed body back to its line in the original
   // note, so a preview block can say which source line it came from.
   //
@@ -363,5 +406,5 @@
     });
   }
 
-  window.NotebookMarkdown = { render, resolvePath, toAssetUrl, buildLineMap };
+  window.NotebookMarkdown = { render, resolvePath, toAssetUrl, buildLineMap, isFileTarget };
 })();

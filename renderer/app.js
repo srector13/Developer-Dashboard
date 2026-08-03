@@ -1327,6 +1327,8 @@ async function doRenderMarkdownPreview() {
     });
   });
 
+  wirePreviewLinks(preview);
+
   // Wrap and add copy utilities to code blocks
   preview.querySelectorAll('pre').forEach(preEl => {
     if (preEl.closest('.mermaid-block-container') || preEl.classList.contains('notebook-mermaid')) {
@@ -3747,6 +3749,56 @@ async function taskBoardToggle(checkbox) {
 function taskBoardOpenNote(card) {
   hideTaskBoardModal();
   openNote(card.dataset.fspath);
+}
+
+function wirePreviewLinks(preview) {
+  // Every link in a note is handed to the system rather than followed here.
+  //
+  // WebView2 does not act on `target="_blank"` by itself, so a web link did
+  // nothing at all when clicked — the address was right, but nothing opened it.
+  // A `file:` link is worse than useless followed in place: the webview would
+  // navigate the app itself to the document, with no way back.
+  //
+  // Relative links resolve against the note's own folder, so
+  // `[Spec](../docs/spec.pdf)` works from wherever the note lives, and one
+  // pointing at another note opens in the app instead of leaving it.
+  preview.querySelectorAll('a[href]').forEach(link => {
+    if (link.classList.contains('wiki-link') || link.classList.contains('task-checkbox-link')) {
+      return; // these have handlers of their own
+    }
+    const raw = link.getAttribute('href') || '';
+    // In-page heading anchors keep the browser's own behaviour.
+    if (!raw || raw.startsWith('#')) return;
+
+    link.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const path = raw.split(/[?#]/)[0];
+      const isWindowsPath = /^[a-zA-Z]:[\\/]/.test(raw);
+      const isAbsolute = isWindowsPath || raw.startsWith('/') || raw.startsWith('\\\\');
+      // A drive letter looks like a scheme but is not one.
+      const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw) && !isWindowsPath;
+      const noteDir = activeNote ? pathDirname(activeNote) : notebookRoot;
+
+      // A relative link to another note stays inside the app.
+      if (!hasScheme && !isAbsolute && /\.md$/i.test(path)) {
+        await openNote(window.NotebookMarkdown.resolvePath(noteDir, decodeURI(path)));
+        return;
+      }
+
+      const target = hasScheme || isAbsolute
+        ? raw
+        : window.NotebookMarkdown.resolvePath(noteDir, decodeURI(raw));
+
+      try {
+        const ok = await window.api.openExternal(target);
+        if (ok === false) showToast('Nothing could open that link.', 'error');
+      } catch (err) {
+        showToast(`Could not open the link: ${err}`, 'error');
+      }
+    });
+  });
 }
 
 // --- IMAGE LIGHTBOX ----------------------------------------------------------

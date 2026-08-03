@@ -270,12 +270,74 @@ pub async fn toggle_mermaid_orientation(app: AppHandle, line_index: i64) -> Res<
     Ok(())
 }
 
+/// Open a link with whatever the system uses for it.
+///
+/// Takes both URLs and filesystem paths, because a note's links are both:
+/// `https://…` for the web, and `file:///C:/…` or a plain `C:\…` for a document
+/// on disk. `open_url` does not handle a bare path, so anything that is not a
+/// URL — and anything wearing a `file:` scheme, which is only a path in
+/// disguise — goes to `open_path` instead.
 #[tauri::command]
 pub async fn open_external(app: AppHandle, url: String) -> Res<bool> {
-    app.opener()
-        .open_url(url, None::<&str>)
-        .map_err(|e| e.to_string())?;
+    let target = url.trim();
+    if target.is_empty() {
+        return Ok(false);
+    }
+
+    if let Some(path) = file_url_to_path(target) {
+        app.opener()
+            .open_path(path, None::<&str>)
+            .map_err(|e| e.to_string())?;
+        return Ok(true);
+    }
+
+    // A scheme means a URL: http, mailto, onenote, and so on.
+    let is_url = regex::Regex::new(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
+        .map(|re| re.is_match(target))
+        // A Windows drive letter looks like a scheme; it is not one.
+        .unwrap_or(false)
+        && !is_windows_path(target);
+
+    if is_url {
+        app.opener()
+            .open_url(target, None::<&str>)
+            .map_err(|e| e.to_string())?;
+    } else {
+        app.opener()
+            .open_path(target, None::<&str>)
+            .map_err(|e| e.to_string())?;
+    }
     Ok(true)
+}
+
+fn is_windows_path(target: &str) -> bool {
+    let bytes = target.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
+}
+
+/// Turn a `file:` URL back into a filesystem path, or `None` when it is not one.
+///
+/// `file:///C:/a%20b.pdf` → `C:/a b.pdf`, `file:///home/me/x` → `/home/me/x`.
+pub fn file_url_to_path(target: &str) -> Option<String> {
+    let rest = target
+        .strip_prefix("file://")
+        .or_else(|| target.strip_prefix("FILE://"))?;
+    // A UNC path arrives as file://server/share — the host is part of the path.
+    let decoded = urlencoding::decode(rest)
+        .map(|s| s.into_owned())
+        .unwrap_or_else(|_| rest.to_string());
+    let trimmed = decoded.trim_start_matches('/');
+    if is_windows_path(trimmed) {
+        Some(trimmed.to_string())
+    } else if decoded.starts_with('/') {
+        Some(decoded)
+    } else {
+        // file://server/share — put the leading slashes back.
+        Some(format!("\\\\{}", decoded.replace('/', "\\")))
+    }
 }
 
 // ===========================================================================
@@ -1939,5 +2001,57 @@ mod tests {
             Some("Real Heading".into())
         );
         assert_eq!(first_heading("no headings here"), None);
+    }
+
+    // A note's file links reach open_external in several spellings; each has to
+    // come out as a path the system can open.
+
+    #[test]
+    fn a_windows_file_url_becomes_a_windows_path() {
+        assert_eq!(
+            file_url_to_path("file:///C:/docs/spec.pdf").as_deref(),
+            Some("C:/docs/spec.pdf")
+        );
+    }
+
+    #[test]
+    fn percent_escapes_are_decoded() {
+        // The link modal writes what the user typed; spaces arrive encoded.
+        assert_eq!(
+            file_url_to_path("file:///C:/My%20Docs/a%20file.pdf").as_deref(),
+            Some("C:/My Docs/a file.pdf")
+        );
+    }
+
+    #[test]
+    fn a_posix_file_url_keeps_its_leading_slash() {
+        assert_eq!(
+            file_url_to_path("file:///home/me/notes.pdf").as_deref(),
+            Some("/home/me/notes.pdf")
+        );
+    }
+
+    #[test]
+    fn a_unc_file_url_becomes_a_unc_path() {
+        // file://server/share is the network-drive case this feature is for.
+        assert_eq!(
+            file_url_to_path("file://fileserver/team/spec.pdf").as_deref(),
+            Some(r"\\fileserver\team\spec.pdf")
+        );
+    }
+
+    #[test]
+    fn anything_that_is_not_a_file_url_is_left_for_open_url() {
+        assert_eq!(file_url_to_path("https://example.com"), None);
+        assert_eq!(file_url_to_path("mailto:a@b.c"), None);
+        assert_eq!(file_url_to_path(r"C:\docs\spec.pdf"), None);
+    }
+
+    #[test]
+    fn a_drive_letter_is_not_mistaken_for_a_url_scheme() {
+        assert!(is_windows_path(r"C:\docs\spec.pdf"));
+        assert!(is_windows_path("D:/docs/spec.pdf"));
+        assert!(!is_windows_path("https://example.com"));
+        assert!(!is_windows_path("C:"));
     }
 }

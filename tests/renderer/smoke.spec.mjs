@@ -73,6 +73,10 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
       title: xssTitle, created: '2026-07-01', tags: ['<img src=x onerror=window.__xss4=1>'], pinned: false,
       openTasks: 0, completedTasks: 0, taskLines: [],
     }, {
+      kind: 'page', name: 'links.md', fsPath: '/nb/links.md', relPath: 'links.md',
+      title: 'Links', created: '2026-07-06', tags: [], pinned: false,
+      openTasks: 0, completedTasks: 0, taskLines: [],
+    }, {
       kind: 'page', name: 'deep.md', fsPath: '/nb/deep.md', relPath: 'deep.md',
       // Task counts stay zero: the notebook metrics checks assert exact totals.
       title: 'Deep Link', created: '2026-07-05', tags: [], pinned: false,
@@ -98,6 +102,15 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
     // Line numbers are load-bearing here — see the deep-link section.
     // 1 --- / 2 title / 3 --- / 4 blank / 5 # Deep / 6 blank / 7 First para.
     // 8 blank / 9 ## Second / 10 blank / 11 - [ ] find me / 12 - [x] done
+    '/nb/links.md': [
+      '# Links',
+      '',
+      '- [The spec](file:///C:/docs/spec.pdf)',
+      '- [Our website](https://example.com)',
+      '- [Nearby doc](docs/report.pdf)',
+      '- [Another note](smoke.md)',
+      '',
+    ].join('\n'),
     '/nb/deep.md': [
       '---', 'title: Deep Link', '---', '',
       '# Deep', '', 'First para.', '', '## Second', '',
@@ -256,7 +269,7 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
       return true;
     },
     toggleMermaidOrientation: () => {},
-    openExternal: async () => true,
+    openExternal: async (u) => { (window.__opened = window.__opened || []).push(u); return true; },
     resolveRelativePath: (base, rel) => rel,
     renderMarkdown: (text, opts) => renderMarkdown(text),
   };
@@ -805,8 +818,8 @@ await page.locator('.logo-area').click(); // Notebook Dashboard (root landing)
 await page.waitForTimeout(500);
 check('root landing opens', await page.locator('#landing-workspace').isVisible());
 check('metrics: pages / completed / pending', await page.evaluate(() =>
-  // smoke.md, xss.md, deep.md, Projects/alpha.md
-  document.getElementById('metric-pages').innerText === '4' &&
+  // smoke.md, xss.md, links.md, deep.md, Projects/alpha.md
+  document.getElementById('metric-pages').innerText === '5' &&
   document.getElementById('metric-completed').innerText === '1' &&
   document.getElementById('metric-pending').innerText === '1'));
 check('pending actions rendered from taskLines', await page.evaluate(() => {
@@ -1695,6 +1708,60 @@ check('close-all clears the tab strip and canvas', await page.evaluate(() =>
   document.querySelectorAll('#tab-strip .note-tab').length === 0 &&
   document.getElementById('tab-strip').style.display === 'none'));
 
+// --- 37a. Links in the preview are opened by the system, not followed ---
+// WebView2 ignores target="_blank", so a web link did nothing on click; a
+// file: href followed in place would navigate the app away from itself.
+//
+// The markdown stub in this harness emits no anchors, so the preview is filled
+// with what renderer/markdown.js really produces for these links and the app's
+// own wiring is run over it. What is under test here is the click handling.
+await page.evaluate(async () => { await window.openNote('/nb/links.md'); });
+await page.waitForTimeout(400);
+await page.evaluate(() => {
+  window.__opened = [];
+  document.getElementById('preview-pane').innerHTML =
+    window.NotebookMarkdown.render([
+      '- [The spec](file:///C:/docs/spec.pdf)',
+      '- [Our website](https://example.com)',
+      '- [Nearby doc](docs/report.pdf)',
+      '- [Another note](smoke.md)',
+      '',
+    ].join('\n'), {});
+  window.wirePreviewLinks(document.getElementById('preview-pane'));
+});
+
+const clickLink = async (text) => {
+  await page.locator('#preview-pane a', { hasText: text }).first().click();
+  await page.waitForTimeout(250);
+};
+
+check('a file link is rendered as a link at all', await page.evaluate(() =>
+  !!document.querySelector('#preview-pane a[href^="file:"]')),
+  await page.evaluate(() => document.getElementById('preview-pane').innerHTML.slice(0, 300)));
+
+await clickLink('The spec');
+check('clicking a file link hands the path to the system', await page.evaluate(() =>
+  window.__opened.some(u => String(u).includes('spec.pdf'))),
+  await page.evaluate(() => JSON.stringify(window.__opened)));
+
+await clickLink('Our website');
+check('clicking a web link opens it too — target=_blank alone did nothing',
+  await page.evaluate(() => window.__opened.some(u => String(u).startsWith('https://example.com'))),
+  await page.evaluate(() => JSON.stringify(window.__opened)));
+
+await clickLink('Nearby doc');
+check('a relative document resolves against the note folder', await page.evaluate(() =>
+  window.__opened.some(u => String(u).replace(/\\/g, '/').endsWith('/nb/docs/report.pdf'))),
+  await page.evaluate(() => JSON.stringify(window.__opened)));
+
+// A relative link to another note stays in the app rather than leaving it.
+await page.evaluate(() => { window.__opened = []; });
+await clickLink('Another note');
+check('a link to another note opens in the app, not the system', await page.evaluate(() =>
+  window.__opened.length === 0 &&
+  document.getElementById('note-title').innerText.includes('Smoke Note')),
+  await page.evaluate(() => JSON.stringify(window.__opened)));
+
 // --- 37b. Multi-select in the tree: Explorer's Ctrl/Shift mechanics ---
 // The visible page order is smoke.md, xss.md, deep.md, then Projects/alpha.md.
 const rowFor = (label) => page.locator('#notebook-tree .tree-node-label', { hasText: label }).first();
@@ -1727,15 +1794,18 @@ await rowFor('Smoke Note').click();
 await page.waitForTimeout(200);
 await rowFor('Deep Link').click({ modifiers: ['Shift'] });
 await page.waitForTimeout(250);
+// smoke.md → xss.md → links.md → deep.md, so the range is four rows.
 check('Shift-click selects the whole range', await page.evaluate(() =>
-  window.selectedNotePaths().length === 3 && window.selectedNotePaths().includes('/nb/xss.md')),
+  window.selectedNotePaths().length === 4 &&
+  window.selectedNotePaths().includes('/nb/xss.md') &&
+  window.selectedNotePaths().includes('/nb/links.md')),
   JSON.stringify(await selectedPaths()));
 
 // Shifting back to a nearer row narrows from the same anchor rather than adding.
 await rowFor('xss').first().click({ modifiers: ['Shift'] }).catch(() => {});
 await page.waitForTimeout(200);
 check('a second Shift-click replaces the range, it does not accrete',
-  (await selectedPaths()).length <= 3, JSON.stringify(await selectedPaths()));
+  (await selectedPaths()).length <= 4, JSON.stringify(await selectedPaths()));
 
 // Escape drops the selection.
 await page.evaluate(() => { window.clearSelection(); });
