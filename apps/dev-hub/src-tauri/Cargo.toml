@@ -1,0 +1,69 @@
+[package]
+name = "dev-hub"
+description = "A portable hub for full-stack development work: a global quick launcher plus a live dashboard."
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# One binary, no installer. `windows_subsystem` in main.rs keeps the console
+# window from flashing on launch.
+[[bin]]
+name = "dev-hub"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { workspace = true }
+
+[dependencies]
+# The suite's shared vocabulary and plumbing — see crates/ for what each owns.
+suite-core = { workspace = true }
+suite-config = { workspace = true }
+suite-registry = { workspace = true }
+
+tauri = { workspace = true, features = ["tray-icon", "image-png"] }
+tauri-plugin-clipboard-manager = { workspace = true }
+tauri-plugin-dialog = { workspace = true }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-opener = { workspace = true }
+tauri-plugin-single-instance = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Scanning roots, watching the config, text work
+walkdir = { workspace = true }
+notify = { workspace = true }
+notify-debouncer-mini = { workspace = true }
+regex = { workspace = true }
+once_cell = { workspace = true }
+
+chrono = { workspace = true }
+
+# Health checks only ever hit URLs from the user's own config file. TLS via
+# native-tls means schannel on Windows — no C toolchain, no vendored OpenSSL.
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Repo status. default-features = false drops the ssh/https transports (and
+# with them the OpenSSL dependency) — Dev Hub only ever reads local repos.
+# vendored-libgit2 builds libgit2 from source, so there is no system dependency
+# on the machine the exe lands on.
+git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2"] }
+
+[target.'cfg(windows)'.dependencies]
+# Run-at-login is a value under HKCU\...\CurrentVersion\Run. A safe wrapper
+# beats hand-rolling RegSetValueExW: this crate's code paths can't be compiled
+# from a macOS dev box, and unverifiable `unsafe` is exactly how the last batch
+# of Windows-only defects got in.
+winreg = "0.52"
+# The foreground-stealing workaround for hotkey-summoned windows.
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_Threading",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+] }

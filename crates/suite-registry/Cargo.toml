@@ -1,0 +1,13 @@
+[package]
+name = "suite-registry"
+description = "The per-user file every suite app writes itself into, so the others can find and launch it."
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+suite-config = { workspace = true }

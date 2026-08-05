@@ -1,0 +1,12 @@
+[package]
+name = "suite-config"
+description = "Portable data directories and merge-onto-defaults config loading, shared by every app in the suite."
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
