@@ -1,0 +1,625 @@
+/* Log Viewer Styling
+ *
+ * The palette lives in the suite's shared tokens, imported below — this file
+ * only holds the Log Viewer's own component classes. Every one of them draws
+ * from those tokens and adds nothing to the palette, which is what makes this
+ * read as a sibling of Dev Hub rather than a different program that happens to
+ * be dark. If a colour is needed that isn't there, add a semantic token to
+ * ui/tokens.css; don't inline it here.
+ */
+
+@import url('vendor/suite/tokens.css');
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* `hidden` has to beat whatever display a component sets, or an element that
+   looks invisible is still laid out — and a full-window overlay like
+   #drop-hint then swallows every click in the app while appearing to be gone.
+   The attribute's UA default is only `display: none`, which any later rule
+   silently overrides. */
+[hidden] {
+  display: none !important;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+  display: flex;
+  flex-direction: column;
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+/* The per-source and per-highlight palette. Config files name a colour rather
+   than carrying one, so these are the only values either can select. */
+[data-colour="blue"]   { --swatch: var(--accent-blue); }
+[data-colour="teal"]   { --swatch: var(--accent-teal); }
+[data-colour="green"]  { --swatch: var(--accent-green); }
+[data-colour="red"]    { --swatch: var(--accent-red); }
+[data-colour="amber"]  { --swatch: var(--mark-text); }
+[data-colour="violet"] { --swatch: #a371f7; }
+[data-colour="pink"]   { --swatch: #db61a2; }
+
+/* ==========================================================================
+   Top bar
+   ========================================================================== */
+
+#topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--glass-bg);
+  border-bottom: 1px solid var(--border-color);
+  backdrop-filter: var(--glass-blur);
+  flex-shrink: 0;
+}
+
+#brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-display);
+  font-weight: 600;
+  color: var(--text-heading);
+  white-space: nowrap;
+}
+
+#brand img {
+  width: 20px;
+  height: 20px;
+}
+
+.topbar-spacer {
+  flex: 1;
+}
+
+#filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 900px;
+}
+
+.field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 0;
+  min-width: 90px;
+  padding: 0 8px;
+  height: 30px;
+  background: var(--inset-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.field:focus-within {
+  border-color: var(--border-glow);
+}
+
+.field-icon svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: var(--text-muted);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.field input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+}
+
+.field input::placeholder {
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+}
+
+.field input.invalid {
+  color: var(--accent-red);
+}
+
+.toggles {
+  display: flex;
+  gap: 4px;
+}
+
+.toggle {
+  height: 30px;
+  min-width: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--inset-bg);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.toggle:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.toggle.on {
+  background: var(--accent-glow);
+  border-color: var(--border-glow);
+  color: var(--accent-blue);
+}
+
+#level {
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  /* Opaque, deliberately: a native <select> hands its own background to the OS
+     dropdown, and a translucent one composites against the desktop. */
+  background: var(--control-bg);
+  color: var(--control-text);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.icon-button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--inset-bg);
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  background: var(--surface-hover);
+}
+
+.icon-button svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: var(--text-secondary);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.icon-button:hover svg {
+  stroke: var(--text-heading);
+}
+
+#filter-error {
+  margin: 0;
+  padding: 6px 14px;
+  background: rgba(248, 81, 73, 0.12);
+  border-bottom: 1px solid var(--border-color);
+  color: var(--accent-red);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+/* ==========================================================================
+   Layout
+   ========================================================================== */
+
+#body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+#sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  padding: 12px 10px;
+  overflow-y: auto;
+  background: var(--bg-tertiary);
+  border-right: 1px solid var(--border-color);
+}
+
+.panel + .panel {
+  margin-top: 18px;
+}
+
+.panel h2 {
+  margin-bottom: 8px;
+  padding: 0 6px;
+  color: var(--text-muted);
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.panel ul {
+  list-style: none;
+}
+
+.empty {
+  padding: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+kbd {
+  padding: 1px 4px;
+  background: var(--chip-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+/* --- sources */
+
+.source,
+.highlight {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: var(--radius-md);
+}
+
+.source:hover,
+.highlight:hover {
+  background: var(--surface-hover);
+}
+
+.source .dot,
+.highlight .swatch {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--swatch, var(--accent-blue));
+}
+
+.source .name,
+.highlight .name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.source .count {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+[data-off="true"] {
+  opacity: 0.45;
+}
+
+.actions {
+  display: none;
+  gap: 2px;
+}
+
+.source:hover .actions,
+.highlight:hover .actions {
+  display: flex;
+}
+
+/* The counts shift as buttons appear; hiding them on hover keeps the row from
+   reflowing under the pointer. */
+.source:hover .count {
+  display: none;
+}
+
+.row-action {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+}
+
+.row-action:hover {
+  background: var(--surface-active);
+}
+
+.row-action svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: var(--text-secondary);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.row-action:hover svg {
+  stroke: var(--text-heading);
+}
+
+.saved-filter {
+  display: block;
+  width: 100%;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.saved-filter:hover {
+  background: var(--surface-hover);
+  color: var(--text-heading);
+}
+
+/* ==========================================================================
+   The log
+   ========================================================================== */
+
+#log-pane {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+#scroller {
+  flex: 1;
+  overflow: auto;
+  outline: none;
+}
+
+#sizer {
+  position: relative;
+}
+
+/* `will-change` keeps the translated window on its own layer, so scrolling a
+   large view does not repaint the whole pane every frame. */
+#rows {
+  will-change: transform;
+}
+
+.row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 1px 14px;
+  font-family: var(--font-mono);
+  font-size: var(--log-font-size, 12px);
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.row:hover {
+  background: var(--surface-hover);
+}
+
+.cell {
+  flex-shrink: 0;
+}
+
+/* `HH:MM:SS.mmm` is exactly 12 characters, so 12ch is the floor — at 11 the
+   timestamp runs into the source name on every row that has one. */
+.ts {
+  width: 12ch;
+  color: var(--text-muted);
+}
+
+.src {
+  width: 12ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--swatch, var(--accent-blue));
+}
+
+.lvl {
+  width: 5ch;
+  color: var(--text-secondary);
+  font-size: 0.85em;
+}
+
+.txt {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-primary);
+}
+
+/* Wrapping is opt-in: it makes the row count stop matching the line count,
+   which is disorienting when you are counting occurrences — and it is what
+   turns virtualisation off, so it is the expensive mode too. */
+body.wrap .row {
+  white-space: pre-wrap;
+  align-items: flex-start;
+}
+
+body.wrap .txt {
+  word-break: break-word;
+}
+
+/* A continuation line — a stack frame, a wrapped message — is indented so the
+   trace reads as one thing rather than as several unrelated lines. */
+.row[data-continuation="true"] .txt {
+  padding-left: 2ch;
+  color: var(--text-secondary);
+}
+
+/* Level is a tint on the level column only. Colouring the whole line by level
+   would fight the highlight rules, which are the thing you actually configured. */
+.row[data-level="warn"] .lvl  { color: var(--mark-text); }
+.row[data-level="error"] .lvl,
+.row[data-level="fatal"] .lvl { color: var(--accent-red); }
+.row[data-level="debug"] .lvl,
+.row[data-level="trace"] .lvl { color: var(--text-muted); }
+
+/* Highlights: a left edge and a wash, so a marked line is findable while
+   scrolling without the text itself becoming hard to read. */
+.row[data-highlight] {
+  box-shadow: inset 2px 0 0 var(--highlight, var(--accent-blue));
+  background: color-mix(in srgb, var(--highlight, var(--accent-blue)) 8%, transparent);
+}
+
+.row[data-highlight="error"] { --highlight: var(--accent-red); }
+.row[data-highlight="warn"]  { --highlight: var(--mark-text); }
+
+#log-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+#jump {
+  position: absolute;
+  right: 20px;
+  bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--menu-bg);
+  border: 1px solid var(--border-glow);
+  border-radius: var(--radius-xl);
+  color: var(--text-heading);
+  font-size: 12px;
+  cursor: pointer;
+  backdrop-filter: var(--glass-blur);
+}
+
+#jump svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ==========================================================================
+   Status bar
+   ========================================================================== */
+
+#statusbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 14px;
+  background: var(--glass-bg);
+  border-top: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.statusbar-spacer {
+  flex: 1;
+}
+
+#truncated {
+  color: var(--mark-text);
+}
+
+.text-button {
+  padding: 3px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.text-button:hover {
+  background: var(--surface-hover);
+  color: var(--text-heading);
+}
+
+.text-button.on {
+  background: var(--accent-glow);
+  border-color: var(--border-glow);
+  color: var(--accent-blue);
+}
+
+/* ==========================================================================
+   Drop target
+   ========================================================================== */
+
+#drop-hint {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--overlay-bg);
+  z-index: 20;
+}
+
+#drop-hint span {
+  padding: 18px 32px;
+  border: 2px dashed var(--border-glow);
+  border-radius: var(--radius-xl);
+  color: var(--text-heading);
+  font-family: var(--font-display);
+  font-size: 18px;
+}
+
+/* ==========================================================================
+   Scrollbars
+   ========================================================================== */
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: var(--radius-lg);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Everything the viewer window needs. The dialog and opener plugins are driven from Rust — the renderer asks to reveal a source by id, never by path, so it cannot reach a file it is not already watching. Clipboard write is granted so Copy view works without a round trip.",
+  "windows": ["main"],
+  "permissions": ["core:default", "clipboard-manager:allow-write-text"]
+}

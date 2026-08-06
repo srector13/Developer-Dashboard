@@ -1,258 +1,99 @@
-# Dev Hub
+# Dev Suite
 
-A portable Windows desktop app that acts as a single hub for full-stack development
-work: a global quick launcher plus a dashboard that aggregates live signal from the
-things you already work in — git repos, running services, markdown notes.
+Portable Windows developer tools that behave like one product. No installer, no
+admin rights, no runtime to install — drop the `.exe`s on a locked-down
+corporate Windows 11 box and run them.
 
-One `.exe`. No installer, no admin rights, no runtime to install. Drop it on a
-locked-down corporate Windows 11 box and run it.
+| App | What it is | Download |
+| --- | --- | --- |
+| **[Dev Hub](apps/dev-hub/)** | A global quick launcher plus a dashboard aggregating live signal from git repos, running services, markdown notes and log files. | [`Dev-Hub-beta-win-x64-portable.exe`](https://github.com/srector13/Developer-Dashboard/releases/download/beta/Dev-Hub-beta-win-x64-portable.exe) |
+| **[Log Viewer](apps/log-viewer/)** | A multi-file tail with saved filters, highlight rules and timestamp alignment across sources. | [`Log-Viewer-beta-win-x64-portable.exe`](https://github.com/srector13/Developer-Dashboard/releases/download/beta/Log-Viewer-beta-win-x64-portable.exe) |
+| **[Markdown Notebook](https://github.com/srector13/markdown-notebook)** | Local-first markdown notes. Still its own repository — see [the migration plan](docs/ARCHITECTURE.md#bringing-markdown-notebook-in). | — |
 
-Built as a sibling to [Markdown Notebook](https://github.com/srector13/markdown-notebook):
-same stack (Tauri v2 + Rust + a vanilla-JS renderer), same design tokens, same
-launcher chrome and keyboard model. The two apps also find each other — see
-[Notebook discovery](#notebook-discovery).
-
----
-
-## Download
-
-**[Dev-Hub-beta-win-x64-portable.exe](https://github.com/srector13/Developer-Dashboard/releases/download/beta/Dev-Hub-beta-win-x64-portable.exe)**
-
-That URL is permanent. Every push rebuilds it, so testing a change is *download,
-overwrite, run* — no hunting for a release page. Your settings and config live in
-a `DevHubData` folder beside the exe and survive the swap.
+Those URLs are permanent. Every push rebuilds them, so testing a change is
+*download, overwrite, run*. Each app's state lives in a folder beside its own
+exe and survives the swap.
 
 Requires the Microsoft Edge WebView2 runtime, which ships with Windows 10 (from
-the 2020 updates) and Windows 11. The build is unsigned, so SmartScreen will warn
-on first run.
+the 2020 updates) and Windows 11. The builds are unsigned, so SmartScreen will
+warn on first run.
 
 ---
 
-## The dashboard
+## Put them in the same folder
 
-Cards sit on a grid, each in one of three sizes — **S**, **M**, **L** — chosen
-from the control that appears when you hover a card. Sizes are whole numbers of
-grid rows and columns, so rows always line up; a large card takes two columns
-where there are two to take. Drag a card by its header to rearrange, and the
-rest close up around it. Both are remembered.
+That is the whole setup. The apps then find each other:
 
-Each provider has its own colour, so a card is identifiable before you've read
-its title. Cards show their items as a **list** or a **grid** of tiles —
-whichever suits what's on them.
+- Dev Hub's **Logs** card opens a file in Log Viewer — one click, or the hotkey
+  and the log's name.
+- Open a notebook in Markdown Notebook and Dev Hub's **Todos** card follows it,
+  with no path configured anywhere.
+- Each app can launch its siblings.
 
-### Making items yours
-
-Right-click any item, or use its **⋯** button, to give it a nickname, an icon,
-a colour, or to hide it. Left-click still runs it — that's the point of the app,
-and a click that sometimes launches and sometimes opens a menu would make the
-primary action feel unreliable.
-
-A nickname is searched as well as displayed, so renaming something to what you
-actually call it makes it findable by that name. Hidden items are listed in
-Settings → General, with a button to bring each one back.
-
-## The idea
-
-Everything in the app is a **provider** that yields **items** that carry
-**actions**:
-
-- The **launcher** is every provider's items flattened and fuzzy-matched.
-- The **dashboard** is the same items rendered as cards.
-
-There is deliberately no second code path for "dashboard data" versus "launcher
-data" — both read the same cache, so a row in one can never disagree with a row
-in the other.
-
-### v1 providers
-
-| Provider | What it shows | Refresh |
-| --- | --- | --- |
-| `launch` | Static apps, URLs and folders from your config | On config change |
-| `projects` | Git repos found under your roots — branch, dirty flag, ahead/behind, last-commit age | 120s |
-| `todos` | Unchecked `- [ ]` lines in your markdown notes, with `#tags` and `@due` dates | On note change, 300s floor |
-| `health` | HTTP checks against endpoints you list — status code, latency, and a warning when a service answers but slowly | Configurable, 60s default |
-| `command` | **The escape hatch.** Runs any command on an interval and reads stdout as JSON items | Configurable |
-
-The `command` provider is what makes this extensible without a plugin API. If a
-thing has a CLI — `gh pr list`, a kubectl one-liner, a company script — it can be
-a card and a launcher source with a config block and no recompile.
-
----
-
-## Configuration
-
-**Everything is editable in the app** — press **Settings** in the top strip. Apps
-and links, repo folders, services to watch, the launcher hotkey, and custom
-command cards all have forms, with Browse buttons so no Windows path has to be
-typed by hand. Nothing below is required reading unless you prefer files.
-
-Behind the UI are two files in `DevHubData/`, next to the exe (falling back to
-`%APPDATA%\DevHub` if that folder isn't writable):
-
-- **`settings.json`** — app state: theme, shortcut, which providers are on.
-- **`hub.config.json`** — your content: projects, URLs, endpoints, todo sources.
-
-They are separate so you can hand-edit (and version) the config without dragging
-app state along. `hub.config.json` is watched: save it and the providers reload,
-whether the edit came from the settings screen or your editor. No restart to add
-a project root.
-
-> Saving from the settings forms rewrites `hub.config.json` from the parsed
-> shape, which drops comments and any keys the forms don't cover. Settings →
-> **Advanced** keeps a raw text editor that saves the file verbatim if you want
-> to keep comments.
+None of this is hardcoded. Every app writes one entry into
+`%USERPROFILE%\.dev-suite\registry.json` on startup — who it is, where its exe
+is, and what it can be asked to do — and reads the others. Dev Hub does not ask
+for "Log Viewer"; it asks for something that can `tail-file`. A new tool that
+registers the same capability takes the action over without either app being
+changed.
 
 ```jsonc
 {
-  "launch": [
-    { "title": "IntelliJ IDEA", "icon": "app",
-      "run": { "program": "C:\\Program Files\\JetBrains\\IntelliJ IDEA\\bin\\idea64.exe" } },
-    { "title": "Jenkins", "icon": "web", "url": "https://jenkins.example.com",
-      "keywords": ["ci", "build"] }
-  ],
-  "projects": {
-    "roots": ["C:\\dev", "C:\\work\\repos"],
-    "maxDepth": 3,
-    "openWith": [
-      { "label": "IntelliJ", "program": "C:\\...\\idea64.exe", "args": ["{path}"] },
-      { "label": "VS Code",  "program": "code",   "args": ["{path}"] },
-      { "label": "Terminal", "program": "wt.exe", "args": ["-d", "{path}"] }
-    ]
+  "version": 1,
+  "apps": {
+    "dev-hub": {
+      "id": "dev-hub", "name": "Dev Hub",
+      "exe": "C:\\tools\\Dev-Hub.exe", "version": "0.2.0-beta.1",
+      "capabilities": ["launcher", "dashboard"],
+      "registeredAt": 1772899200
+    },
+    "log-viewer": {
+      "id": "log-viewer", "name": "Log Viewer",
+      "exe": "C:\\tools\\Log-Viewer.exe", "version": "0.2.0-beta.1",
+      "capabilities": ["tail-file"],
+      "registeredAt": 1772899215
+    }
   },
-  "todos": {
-    "roots": [],                 // empty → follow the Markdown Notebook pointer
-    "includeTags": [],           // empty → every todo
-    "openWith": { "program": "code", "args": ["-g", "{path}:{line}"] }
-  },
-  "health": {
-    "intervalSeconds": 60,
-    "timeoutMs": 4000,
-    "endpoints": [
-      { "name": "API — local", "url": "http://localhost:8080/actuator/health", "expect": 200 }
-    ]
-  },
-  "command": []
+  "notebookRoot": "C:\\notes"
 }
 ```
 
-`{path}` and `{line}` are substituted in `args`. A program without a `.exe`
-extension is launched through `cmd /C`, so PATH shims like `code` and `npm`
-resolve.
+Nothing is ever pruned from it: an exe on a USB stick that isn't plugged in is
+missing, not gone. A registered path that no longer resolves is skipped, not
+deleted. And a missing registry is normal — on a fresh box that is the truth,
+so every read returns an empty one rather than an error.
 
-### Notebook discovery
+Markdown Notebook has not been migrated yet, so its older pointer file
+(`%USERPROFILE%\.markdown-notebook\last-notebook.json`) is still read as a
+fallback. It keeps working untouched.
 
-When `todos.roots` is empty, Dev Hub reads
-`%USERPROFILE%\.markdown-notebook\last-notebook.json` — the per-user pointer
-Markdown Notebook writes — and scans that notebook. Open a notebook in one app
-and the other finds it with zero configuration. Dev Hub only ever reads that
-file; it never writes it.
+---
 
-The notebook roots are watched too, so ticking a checkbox in Markdown Notebook
-updates the Todos card within a second or two rather than waiting out the
-refresh interval. The watcher ignores everything the provider wouldn't read —
-`.git`, `attachments`, `templates`, non-markdown files — so a `git status` in
-your notes repo doesn't trigger a rescan.
+## Layout
 
-Clicking a todo opens its note **on the line**. Dev Hub looks for Markdown
-Notebook on disk — beside its own exe first, since the two ship as portable
-siblings — and calls it as
-`Markdown-Notebook.exe --line 42 --view edit "C:\notes\alpha.md"`. Set
-`todos.openWith` only to override that; leaving it unset is what lets the
-lookup keep working if either app moves.
+```
+crates/
+├─ suite-core/       Item · Action · Status · ProviderResult · fuzzy search
+├─ suite-config/     portable data dir, merge-onto-defaults, load/save
+└─ suite-registry/   the %USERPROFILE%\.dev-suite\registry.json above
 
-Aggregate notes — `*.toc.md`, `*.tasks.md`, and generated folder indexes — are
-skipped, because they list todos that live in other files and would otherwise
-report each one twice. Identical todos are also collapsed, keeping the copy in
-the note you'd actually edit. Both are adjustable in Settings → Todos.
-
-### `settings.json`
-
-```jsonc
-{
-  "theme": "system",
-  "launcherShortcut": "CommandOrControl+Shift+Space",
-  "launcher": {
-    "opacity": 0.88,               // 0.5–1.0
-    "showHints": true,
-    "modes": ["all", "projects", "launch", "todos", "health"],
-    "maxResults": 40,
-    "showRecentWhenEmpty": true
-  },
-  "keepInTray": true,
-  "startMinimized": false,
-  "runAtLogin": false,
-  "notifyOnFailure": false,
-  "dashboardColumns": 2,
-  "providers": { "launch": true, "projects": true, "todos": true, "health": true },
-  "ai": { "enabled": false, "provider": "openai-compatible", "baseUrl": "", "model": "" }
-}
+ui/                  design tokens, the icon set, the vendored fonts
+apps/
+├─ dev-hub/          → dev-hub.exe
+└─ log-viewer/       → log-viewer.exe
 ```
 
-Both files are merged onto their defaults on read, so a partial or hand-trimmed
-file never silently loses keys.
+`suite-core` and `suite-config` carry **no Tauri dependency**, on purpose: they
+build and test in seconds with no system libraries, and CI proves it in a
+separate job so the boundary can't erode quietly.
 
-> The `ai` block is inert in v1. It exists so an AI panel can be added later
-> without a settings migration.
+`ui/` is copied into each app's renderer rather than imported from it, because
+Tauri serves one directory as the whole frontend root and nothing above it is
+addressable at runtime. The copies are committed so a fresh clone builds with
+cargo alone; `npm run ui:check` fails CI if they drift.
 
----
-
-## Keyboard
-
-**Launcher** — <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> by default.
-
-| Key | Does |
-| --- | --- |
-| <kbd>/</kbd> | List commands — `/projects`, `/apps`, `/todos`, `/health`, `/all` |
-| <kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd> | Cycle modes (All · Projects · Launch · Todos · Health) |
-| <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>5</kbd> | Jump straight to a mode |
-| <kbd>↑</kbd> <kbd>↓</kbd> | Move the selection |
-| <kbd>Enter</kbd> | Run the item's default action — named on the selected row |
-| <kbd>Ctrl</kbd>+<kbd>Enter</kbd> | Open the item's full action menu |
-| <kbd>Esc</kbd> | Leave the commands or action menu, or hide the launcher |
-
-Typing `/` opens the command list; typing narrows it, and <kbd>Tab</kbd> or
-<kbd>Enter</kbd> picks. Aliases work too — `/repos`, `/p`, `/a`, `/t`.
-
-Settings → **Quick Launch** holds the rest of it: the hotkey, how opaque the
-panel is (it floats over whatever you summoned it from, so how transparent is
-too transparent depends on what you keep on screen), whether the keyboard hints
-along the bottom are shown, which modes get an orb, and how many matches a
-search reaches for. Changes reach an open launcher immediately.
-
-Matching is a fuzzy subsequence over title, subtitle and hidden keywords, scored
-by contiguity and word-boundary starts, with prefix matches first. Things you
-launch often get a small recency nudge — enough to break ties, never enough to
-promote a worse match.
-
-Closing the dashboard window leaves Dev Hub in the tray so the hotkey stays live.
-
-### If the hotkey does nothing
-
-Another application already owns the combination. Windows gives no warning — it
-simply doesn't deliver the key, and the app never hears about it either.
-
-Settings → **General** shows whether the hotkey actually registered, and offers
-combinations that rarely clash. **Open the launcher now** in that panel bypasses
-the hotkey entirely, so it tells you whether the problem is the shortcut or the
-launcher itself. The tray menu and the dashboard's search box are the other two
-ways in.
-
----
-
-## Privacy and portability
-
-- One `.exe`, no installer, no elevation.
-- All state in `DevHubData/` beside the exe. Nothing is written outside it.
-- **No outbound network calls** except: the health endpoints you configure, the
-  `command` providers you configure, and URLs you explicitly open. No update
-  check, no telemetry, no analytics.
-- A strict CSP on both windows; no remote script or font origins. Fonts are
-  vendored.
-- Action execution is backend-only: the renderer sends an item key and an action
-  index and can never name a program to run. The only programs that can start are
-  ones your own config described.
-- Fail soft everywhere — a missing config key, an unreachable root, a repo with
-  no upstream all produce readable text on a card, never a panic or a blank app.
+Why one repository rather than three, and what it cost:
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ---
 
@@ -260,63 +101,54 @@ ways in.
 
 ```bash
 npm install
-npm run dev            # cargo tauri dev
-npm run build          # cargo build --release
-npm run check          # cargo check
-npm run test:rust      # backend unit tests
-npm run test:renderer  # launcher + dashboard specs, node-run in Chromium
-npm run icons          # regenerate the icon set from build/icon.svg
+npm run dev:hub        # cargo tauri dev, Dev Hub
+npm run dev:logs       # cargo tauri dev, Log Viewer
+npm run build          # both release exes
+npm run check          # cargo check, whole workspace
+npm run lint           # clippy, warnings as errors
+npm run test:rust      # every backend + crate test
+npm run test:renderer  # every renderer spec, node-run in Chromium
+npm run ui:sync        # re-copy ui/ into the apps
+npm run ui:check       # fail if those copies have drifted
+npm run icons          # regenerate every app's icon set
 npm run fonts:sync     # re-copy the vendored fonts from @fontsource
 ```
 
-CI runs the renderer suite and the Rust tests on Linux, then `cargo fmt --check`,
-`cargo clippy -- -D warnings`, the tests and a release build on Windows.
+Building one app: `cargo build -p log-viewer`. Testing one crate:
+`cargo test -p suite-core`.
 
-### Layout
+CI runs the renderer suites, the workspace tests and a standalone build of the
+shared crates on Linux, then `cargo fmt --check`, clippy, the tests and both
+release exes on Windows.
 
-```
-src-tauri/src/
-├─ main.rs        builder wiring, tray, lifecycle
-├─ commands.rs    every #[tauri::command] + the action executor
-├─ desktop.rs     launcher window, tray, global shortcut, config watcher
-├─ settings.rs    portable settings + hub.config.json
-├─ state.rs       AppState — settings, config, provider cache, usage
-├─ model.rs       Item / Action / ProviderResult
-├─ registry.rs    provider registry, refresh loops, hot reload
-├─ search.rs      the fuzzy matcher
-├─ util.rs        clock, relative ages, remote-URL normalisation
-└─ providers/     mod.rs (the trait) + launch, projects, todos, health, command
+### Adding an app
 
-renderer/
-├─ index.html + app.js    the dashboard
-├─ launcher.html          the quick launcher
-├─ api-tauri.js           the renderer↔Rust bridge
-├─ icons.js               the fixed icon set
-└─ style.css              tokens + component classes
-```
+1. `apps/<name>/src-tauri` as a workspace member, depending on the crates it
+   needs.
+2. Add it to `APPS` in `scripts/render-icons.mjs` and `scripts/sync-ui.mjs`.
+3. Call `suite_registry::register` at startup with the capabilities it offers.
+4. Add its exe to the two release workflows.
 
-**Adding a provider** is a new file in `providers/`, a `pub mod` line, a config
-block in `settings.rs`, and one line in `registry::build`. That is the whole
-seam.
-
-### Deliberately deferred
-
-- **Calendar.** Not implemented. The provider seam is kept clean so an ICS feed,
-  an Outlook COM shell-out, or an MSAL device-code flow can land as one new file
-  and a config block.
-- **AI panel.** Not in v1. The intended implementation is a generic
-  OpenAI-compatible client with a configurable `baseUrl` and `model` — never a
-  hardcoded vendor.
+Discovery, cross-launch, the design language and the settings behaviour come
+for free from steps 1 and 3.
 
 ---
 
-## Releases
+## Privacy and portability
 
-- **Beta** — every push to `main` or a `claude/**` branch rebuilds the rolling
-  `beta` release. Permanent download URL, always the newest build.
-- **Versioned** — pushing a `v*` tag builds and attaches a portable exe. A semver
-  prerelease (`v0.2.0-beta.1`) publishes immediately; a plain tag (`v0.2.0`)
-  lands as a draft for review.
+- One `.exe` per app. No installer, no elevation.
+- All state beside the exe (`DevHubData`, `LogViewerData`), plus the shared
+  registry under `%USERPROFILE%`. Nothing is written anywhere else.
+- **No outbound network calls** except the health endpoints and `command`
+  providers you configure yourself, and URLs you explicitly open. No update
+  check, no telemetry, no analytics.
+- A strict CSP on every window; no remote script or font origins. Fonts are
+  vendored.
+- Action execution is backend-only: a renderer sends an item key and an action
+  index, or a source id — it can never name a program to run or a path to read.
+- Fail soft everywhere. A missing config key, an unreachable root, a log file
+  that doesn't exist yet all produce readable text, never a panic or a blank
+  window.
 
 ## Licence
 

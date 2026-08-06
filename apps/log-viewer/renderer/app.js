@@ -1,0 +1,591 @@
+// The Log Viewer window.
+//
+// Three things carry the design:
+//
+//   * **Rows are virtualised.** A window of 2,000 lines is 2,000 DOM nodes if
+//     you render it naively, and scrolling that in a webview is visibly janky.
+//     Only what fits on screen (plus a little overscan) exists as elements;
+//     a spacer gives the scrollbar the right size. See `paint`.
+//   * **Text goes in as text.** Every line is `textContent`, never innerHTML.
+//     A log line is arbitrary bytes written by something else, and it is the
+//     one place in the suite where hostile content is a plausible accident.
+//   * **Follow yields to the reader.** Scrolling up turns following off and
+//     offers a way back; scrolling to the bottom turns it on again. Nothing
+//     yanks the viewport while someone is reading.
+
+(function () {
+  'use strict';
+
+  const api = window.logsApi;
+  if (!api) return; // opened outside Tauri with no stub installed
+
+  const $ = (id) => document.getElementById(id);
+
+  const els = {
+    query: $('query'),
+    exclude: $('exclude'),
+    regex: $('regex'),
+    case: $('case'),
+    level: $('level'),
+    filterError: $('filter-error'),
+    sourceList: $('source-list'),
+    sourcesEmpty: $('sources-empty'),
+    filtersPanel: $('filters-panel'),
+    filterList: $('filter-list'),
+    highlightsPanel: $('highlights-panel'),
+    highlightList: $('highlight-list'),
+    scroller: $('scroller'),
+    sizer: $('sizer'),
+    rows: $('rows'),
+    logEmpty: $('log-empty'),
+    jump: $('jump'),
+    counts: $('counts'),
+    truncated: $('truncated'),
+    follow: $('follow'),
+    copy: $('copy'),
+    clear: $('clear'),
+    openFile: $('open-file'),
+    revealConfig: $('reveal-config'),
+    dropHint: $('drop-hint'),
+  };
+
+  const state = {
+    settings: null,
+    config: { sources: [], filters: [], highlights: [] },
+    lines: [],
+    matched: 0,
+    total: 0,
+    truncated: false,
+    follow: true,
+    rowHeight: 20,
+    // How many rows to render beyond the viewport, so a fast scroll does not
+    // show blank space before the next frame lands.
+    overscan: 12,
+  };
+
+  // ==========================================================================
+  // Rendering the log
+  // ==========================================================================
+
+  /** Local wall clock, to the millisecond. Logs are read in local time. */
+  function formatTime(millis) {
+    const d = new Date(millis);
+    const pad = (n, width) => String(n).padStart(width, '0');
+    return `${pad(d.getHours(), 2)}:${pad(d.getMinutes(), 2)}:${pad(d.getSeconds(), 2)}.${pad(d.getMilliseconds(), 3)}`;
+  }
+
+  const sourceById = new Map();
+
+  function buildRow(view) {
+    const line = view.line;
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.dataset.level = line.level;
+    if (view.highlight) row.dataset.highlight = view.highlight;
+    if (line.continuation) row.dataset.continuation = 'true';
+
+    if (state.settings.showTimestamps) {
+      const ts = document.createElement('span');
+      ts.className = 'cell ts';
+      // A continuation line has no clock of its own; showing the inherited one
+      // as if it did would be a small, repeated lie.
+      ts.textContent = line.timestamp == null ? '' : formatTime(line.timestamp);
+      row.appendChild(ts);
+    }
+
+    if (state.settings.showSource) {
+      const source = sourceById.get(line.source);
+      const src = document.createElement('span');
+      src.className = 'cell src';
+      src.dataset.colour = (source && source.colour) || 'blue';
+      src.textContent = (source && source.name) || line.source;
+      row.appendChild(src);
+    }
+
+    if (state.settings.showLevel) {
+      const lvl = document.createElement('span');
+      lvl.className = 'cell lvl';
+      lvl.textContent = line.level === 'unknown' ? '' : line.level.toUpperCase();
+      row.appendChild(lvl);
+    }
+
+    const text = document.createElement('span');
+    text.className = 'cell txt';
+    // textContent, always. See the note at the top of this file.
+    text.textContent = line.text;
+    row.appendChild(text);
+
+    return row;
+  }
+
+  /**
+   * Draw the rows that are currently on screen.
+   *
+   * With wrapping on, a row's height is no longer knowable in advance, so
+   * virtualisation is switched off and the whole window is rendered. That
+   * window is capped by `settings.window` (2,000 by default), which keeps the
+   * worst case bounded — and wrapping is off by default precisely because this
+   * is the expensive mode.
+   */
+  function paint() {
+    const wrapping = state.settings.wrap;
+    const count = state.lines.length;
+
+    els.logEmpty.hidden = count > 0;
+
+    if (wrapping) {
+      els.sizer.style.height = '';
+      els.rows.style.transform = '';
+      render(0, count);
+      return;
+    }
+
+    els.sizer.style.height = `${count * state.rowHeight}px`;
+
+    const viewport = els.scroller.clientHeight || 1;
+    const first = Math.max(0, Math.floor(els.scroller.scrollTop / state.rowHeight) - state.overscan);
+    const visible = Math.ceil(viewport / state.rowHeight) + state.overscan * 2;
+
+    els.rows.style.transform = `translateY(${first * state.rowHeight}px)`;
+    render(first, Math.min(count, first + visible));
+  }
+
+  function render(from, to) {
+    const fragment = document.createDocumentFragment();
+    for (let i = from; i < to; i++) {
+      fragment.appendChild(buildRow(state.lines[i]));
+    }
+    els.rows.replaceChildren(fragment);
+  }
+
+  /** Measure a real row once, so the virtualiser's arithmetic matches reality. */
+  function measureRowHeight() {
+    const probe = document.createElement('div');
+    probe.className = 'row';
+    probe.style.visibility = 'hidden';
+    probe.style.position = 'absolute';
+    const cell = document.createElement('span');
+    cell.className = 'cell txt';
+    cell.textContent = 'measuring';
+    probe.appendChild(cell);
+    els.rows.appendChild(probe);
+    const height = probe.getBoundingClientRect().height;
+    probe.remove();
+    if (height > 0) state.rowHeight = height;
+  }
+
+  // ==========================================================================
+  // Following
+  // ==========================================================================
+
+  /** Within a row or two of the bottom counts as "at the bottom". */
+  function atBottom() {
+    const { scrollTop, scrollHeight, clientHeight } = els.scroller;
+    return scrollHeight - scrollTop - clientHeight <= state.rowHeight * 2;
+  }
+
+  function scrollToBottom() {
+    els.scroller.scrollTop = els.scroller.scrollHeight;
+  }
+
+  function setFollow(follow, { persist = true } = {}) {
+    state.follow = follow;
+    els.follow.classList.toggle('on', follow);
+    els.follow.setAttribute('aria-pressed', String(follow));
+    els.jump.hidden = follow;
+    if (follow) scrollToBottom();
+    if (persist && state.settings && state.settings.follow !== follow) {
+      state.settings.follow = follow;
+      api.saveSettings(state.settings).catch(() => {});
+    }
+  }
+
+  els.scroller.addEventListener('scroll', () => {
+    paint();
+    // Scrolling away from the bottom is the reader saying "hold still".
+    // Scrolling back is them saying "carry on".
+    if (state.follow && !atBottom()) setFollow(false);
+    else if (!state.follow && atBottom()) setFollow(true);
+  }, { passive: true });
+
+  els.follow.addEventListener('click', () => setFollow(!state.follow));
+  els.jump.addEventListener('click', () => setFollow(true));
+
+  // ==========================================================================
+  // The filter bar
+  // ==========================================================================
+
+  function currentFilter() {
+    return {
+      query: els.query.value,
+      exclude: els.exclude.value,
+      regex: els.regex.classList.contains('on'),
+      caseSensitive: els.case.classList.contains('on'),
+      minLevel: els.level.value,
+      sources: [],
+    };
+  }
+
+  function showFilterError(message) {
+    els.filterError.textContent = message || '';
+    els.filterError.hidden = !message;
+    // The inputs are marked too, so it is obvious which of the two is wrong
+    // when the message names one.
+    els.query.classList.toggle('invalid', !!message && message.startsWith('Filter:'));
+    els.exclude.classList.toggle('invalid', !!message && message.startsWith('Exclude:'));
+  }
+
+  function applyView(view) {
+    state.lines = view.lines;
+    state.matched = view.matched;
+    state.total = view.total;
+    state.truncated = view.truncated;
+    updateCounts();
+    paint();
+    if (state.follow) scrollToBottom();
+  }
+
+  async function applyFilter() {
+    try {
+      applyView(await api.setFilter(currentFilter()));
+      showFilterError(null);
+    } catch (error) {
+      // A half-typed regex is the common case here. The previous view stays on
+      // screen — blanking the window on every keystroke of `(\d` would make
+      // the feature unusable.
+      showFilterError(String(error));
+    }
+  }
+
+  let filterTimer = null;
+  function scheduleFilter() {
+    clearTimeout(filterTimer);
+    filterTimer = setTimeout(applyFilter, 120);
+  }
+
+  els.query.addEventListener('input', scheduleFilter);
+  els.exclude.addEventListener('input', scheduleFilter);
+  els.level.addEventListener('change', applyFilter);
+
+  for (const toggle of [els.regex, els.case]) {
+    toggle.addEventListener('click', () => {
+      toggle.classList.toggle('on');
+      toggle.setAttribute('aria-pressed', String(toggle.classList.contains('on')));
+      applyFilter();
+    });
+  }
+
+  function updateCounts() {
+    const shown = state.lines.length;
+    const parts = [];
+    if (state.matched === state.total) {
+      parts.push(`${state.total.toLocaleString()} lines`);
+    } else {
+      parts.push(`${state.matched.toLocaleString()} of ${state.total.toLocaleString()} lines`);
+    }
+    if (shown < state.matched) parts.push(`showing newest ${shown.toLocaleString()}`);
+    els.counts.textContent = parts.join(' · ');
+    els.truncated.hidden = !state.truncated;
+  }
+
+  // ==========================================================================
+  // Sources
+  // ==========================================================================
+
+  function iconButton(icon, title, onClick) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'row-action';
+    button.title = title;
+    button.setAttribute('aria-label', title);
+    button.innerHTML = window.SuiteIcons.iconSvg(icon);
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      onClick();
+    });
+    return button;
+  }
+
+  async function refreshSources() {
+    const sources = await api.listSources();
+    sourceById.clear();
+    for (const source of sources) sourceById.set(source.id, source);
+
+    els.sourcesEmpty.hidden = sources.length > 0;
+    const list = document.createDocumentFragment();
+
+    for (const source of sources) {
+      const item = document.createElement('li');
+      item.className = 'source';
+      item.dataset.colour = source.colour;
+      if (!source.enabled) item.dataset.off = 'true';
+
+      const dot = document.createElement('span');
+      dot.className = 'dot';
+      item.appendChild(dot);
+
+      const name = document.createElement('span');
+      name.className = 'name';
+      name.textContent = source.name;
+      name.title = source.path;
+      item.appendChild(name);
+
+      const count = document.createElement('span');
+      count.className = 'count';
+      count.textContent = source.lines.toLocaleString();
+      item.appendChild(count);
+
+      const actions = document.createElement('span');
+      actions.className = 'actions';
+      actions.appendChild(iconButton(
+        source.enabled ? 'eye' : 'eyeOff',
+        source.enabled ? 'Stop reading this file' : 'Read this file again',
+        async () => {
+          await api.setSourceEnabled(source.id, !source.enabled);
+          await refreshSources();
+        },
+      ));
+      if (!source.pinned) {
+        actions.appendChild(iconButton('pin', 'Keep this file in the config', async () => {
+          await api.pinSource(source.id);
+          await refreshSources();
+        }));
+      }
+      actions.appendChild(iconButton('refresh', 'Re-read from the top of the file', async () => {
+        await api.reloadSource(source.id);
+      }));
+      actions.appendChild(iconButton('file', 'Show in Explorer', () => {
+        api.revealSource(source.id).catch(() => {});
+      }));
+      actions.appendChild(iconButton('trash', 'Close this file', async () => {
+        await api.removeSource(source.id);
+        await refreshSources();
+        await applyFilter();
+      }));
+      item.appendChild(actions);
+
+      list.appendChild(item);
+    }
+
+    els.sourceList.replaceChildren(list);
+    // A source's colour and name are shown on every row, so a change to the
+    // list means the log needs redrawing too.
+    paint();
+  }
+
+  // ==========================================================================
+  // Saved filters and highlight rules
+  // ==========================================================================
+
+  function renderSavedFilters() {
+    const filters = state.config.filters || [];
+    els.filtersPanel.hidden = filters.length === 0;
+
+    const list = document.createDocumentFragment();
+    for (const saved of filters) {
+      const item = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'saved-filter';
+      button.textContent = saved.name || saved.id;
+      button.addEventListener('click', () => {
+        els.query.value = saved.query || '';
+        els.exclude.value = saved.exclude || '';
+        els.regex.classList.toggle('on', !!saved.regex);
+        els.case.classList.toggle('on', !!saved.caseSensitive);
+        els.level.value = saved.minLevel || 'unknown';
+        applyFilter();
+      });
+      item.appendChild(button);
+      list.appendChild(item);
+    }
+    els.filterList.replaceChildren(list);
+  }
+
+  function renderHighlights() {
+    const rules = state.config.highlights || [];
+    els.highlightsPanel.hidden = rules.length === 0;
+
+    const list = document.createDocumentFragment();
+    for (const rule of rules) {
+      const item = document.createElement('li');
+      item.className = 'highlight';
+      item.dataset.rule = rule.id;
+      if (!rule.enabled) item.dataset.off = 'true';
+
+      const swatch = document.createElement('span');
+      swatch.className = 'swatch';
+      swatch.dataset.colour = rule.colour || 'blue';
+      item.appendChild(swatch);
+
+      const name = document.createElement('span');
+      name.className = 'name';
+      name.textContent = rule.name || rule.id;
+      name.title = rule.pattern;
+      item.appendChild(name);
+
+      item.appendChild(iconButton(
+        rule.enabled ? 'eye' : 'eyeOff',
+        rule.enabled ? 'Stop colouring these' : 'Colour these again',
+        async () => {
+          rule.enabled = !rule.enabled;
+          state.config = await api.saveConfig(state.config);
+          renderHighlights();
+          await applyFilter();
+        },
+      ));
+
+      list.appendChild(item);
+    }
+    els.highlightList.replaceChildren(list);
+  }
+
+  // ==========================================================================
+  // Toolbar and keyboard
+  // ==========================================================================
+
+  els.openFile.addEventListener('click', async () => {
+    await api.pickFiles();
+    await refreshSources();
+    await applyFilter();
+  });
+
+  els.revealConfig.addEventListener('click', () => api.revealConfigFile().catch(() => {}));
+
+  els.clear.addEventListener('click', async () => {
+    applyView(await api.clear());
+    await refreshSources();
+  });
+
+  els.copy.addEventListener('click', async () => {
+    const text = await api.copyView();
+    await api.writeClipboard(text);
+    els.copy.textContent = 'Copied';
+    setTimeout(() => { els.copy.textContent = 'Copy view'; }, 1200);
+  });
+
+  document.addEventListener('keydown', (event) => {
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+
+    if (event.key === 'Escape' && typing) {
+      document.activeElement.blur();
+      return;
+    }
+    if (event.ctrlKey && event.key === 'f') {
+      event.preventDefault();
+      els.query.focus();
+      els.query.select();
+      return;
+    }
+    if (event.ctrlKey && event.key === 'l') {
+      event.preventDefault();
+      els.clear.click();
+      return;
+    }
+    if (event.ctrlKey && event.key === 'o') {
+      event.preventDefault();
+      els.openFile.click();
+      return;
+    }
+    if (typing) return;
+
+    if (event.key === 'f') {
+      setFollow(!state.follow);
+    } else if (event.key === 'End') {
+      setFollow(true);
+    } else if (event.key === '/') {
+      event.preventDefault();
+      els.query.focus();
+    }
+  });
+
+  // ==========================================================================
+  // Dropping files
+  // ==========================================================================
+
+  if (api.onFileDropHover) api.onFileDropHover(() => { els.dropHint.hidden = false; });
+  if (api.onFileDropCancel) api.onFileDropCancel(() => { els.dropHint.hidden = true; });
+  if (api.onFileDrop) {
+    api.onFileDrop(async (paths) => {
+      els.dropHint.hidden = true;
+      for (const path of paths) await api.addSource(path);
+      await refreshSources();
+      await applyFilter();
+    });
+  }
+
+  // ==========================================================================
+  // Live updates
+  // ==========================================================================
+
+  api.onLinesAppended((payload) => {
+    if (!payload || !payload.lines) return;
+
+    state.matched = payload.matched;
+    state.total = payload.total;
+    if (payload.lines.length) {
+      state.lines = state.lines.concat(payload.lines);
+      // The buffer the renderer holds is bounded the same way the backend's
+      // is: drop from the front rather than growing without limit.
+      const cap = state.settings.window;
+      if (state.lines.length > cap) state.lines = state.lines.slice(-cap);
+    }
+
+    updateCounts();
+    paint();
+    if (state.follow) scrollToBottom();
+  });
+
+  if (api.onSourcesChanged) {
+    api.onSourcesChanged(async () => {
+      await refreshSources();
+      await applyFilter();
+    });
+  }
+
+  // ==========================================================================
+  // Boot
+  // ==========================================================================
+
+  function applySettings(settings) {
+    state.settings = settings;
+    document.body.dataset.theme = settings.theme === 'light' ? 'light' : 'dark';
+    document.body.classList.toggle('wrap', !!settings.wrap);
+    document.documentElement.style.setProperty('--log-font-size', `${settings.fontSize}px`);
+  }
+
+  (async function boot() {
+    const context = await api.context();
+    applySettings(context.settings);
+    state.config = context.config;
+
+    // Icons declared in the markup, resolved once the icon set is loaded.
+    for (const holder of document.querySelectorAll('[data-icon]')) {
+      holder.innerHTML = window.SuiteIcons.iconSvg(holder.dataset.icon);
+    }
+
+    els.query.value = context.filter.query || '';
+    els.exclude.value = context.filter.exclude || '';
+    els.regex.classList.toggle('on', !!context.filter.regex);
+    els.case.classList.toggle('on', !!context.filter.caseSensitive);
+    els.level.value = context.filter.minLevel || 'unknown';
+
+    if (context.configError) showFilterError(context.configError);
+
+    measureRowHeight();
+    renderSavedFilters();
+    renderHighlights();
+    await refreshSources();
+    await applyFilter();
+    setFollow(context.settings.follow, { persist: false });
+
+    // A resized window changes how many rows fit, which changes what to draw.
+    window.addEventListener('resize', () => {
+      measureRowHeight();
+      paint();
+      if (state.follow) scrollToBottom();
+    });
+
+    document.body.dataset.ready = 'true';
+  })();
+})();

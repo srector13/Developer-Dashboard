@@ -1,12 +1,16 @@
-// Re-copies the vendored UI font files from the @fontsource packages.
+// Re-copies the vendored UI font files from the @fontsource packages into ui/.
 // Run after upgrading @fontsource/inter or @fontsource/outfit:
-//   npm run fonts:sync
+//   npm run fonts:sync && npm run ui:sync
+//
+// The fonts land in ui/ rather than in an app, because every app in the suite
+// uses the same two families; `sync-ui.mjs` is what gets them from there into
+// each renderer.
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const DEST = path.join(ROOT, 'renderer', 'vendor', 'fonts');
+const DEST = path.join(ROOT, 'ui', 'fonts');
 fs.mkdirSync(DEST, { recursive: true });
 
 let copied = 0;

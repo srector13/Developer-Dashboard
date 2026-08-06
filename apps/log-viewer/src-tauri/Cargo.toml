@@ -1,0 +1,33 @@
+[package]
+name = "log-viewer"
+description = "A portable multi-file log tail with saved filters, highlight rules and timestamp alignment."
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "log-viewer"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { workspace = true }
+
+[dependencies]
+suite-core = { workspace = true }
+suite-config = { workspace = true }
+suite-registry = { workspace = true }
+
+tauri = { workspace = true }
+tauri-plugin-clipboard-manager = { workspace = true }
+tauri-plugin-dialog = { workspace = true }
+tauri-plugin-opener = { workspace = true }
+tauri-plugin-single-instance = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+regex = { workspace = true }
+once_cell = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }

@@ -1,0 +1,12 @@
+[package]
+name = "suite-core"
+description = "The vocabulary every app in the suite shares: items, actions, fuzzy search."
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

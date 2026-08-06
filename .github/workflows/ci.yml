@@ -14,7 +14,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Fast path: the renderer suite in plain Chromium. The UI is shared with the
+  # Fast path: the renderer suites in plain Chromium. The UI is shared with the
   # Rust shell but needs no Windows and no Rust toolchain, so it runs first and
   # cheaply on every push.
   renderer:
@@ -28,7 +28,13 @@ jobs:
       - run: npm ci
       - name: Install Chromium for Playwright
         run: npx playwright install --with-deps chromium
-      - name: Renderer suite (launcher + dashboard)
+      # The shared UI is copied into each app's renderer and committed, so a
+      # fresh clone builds with cargo alone. Committed copies drift, which is
+      # the problem ui/ exists to solve, so the copy is re-run here and any
+      # difference fails the build.
+      - name: The vendored copies of ui/ are current
+        run: npm run ui:check
+      - name: Renderer suites (Dev Hub + Log Viewer)
         run: npm run test:renderer
       # Not a byte-for-byte diff against the committed icons: zlib's output
       # varies between Node versions, so that check fails for reasons that have
@@ -36,9 +42,10 @@ jobs:
       - name: The icon generator still works
         run: npm run icons
 
-  # The backend's own tests. Pure logic — fuzzy ranking, config migration, git
-  # status against a fixture repo, markdown todo parsing — so it runs on Linux
-  # where runners are cheapest and fastest.
+  # The backends' own tests, plus the shared crates'. Pure logic — fuzzy
+  # ranking, config migration, git status against a fixture repo, markdown todo
+  # parsing, log tailing against temp files — so it runs on Linux where runners
+  # are cheapest and fastest.
   rust-tests:
     runs-on: ubuntu-latest
     steps:
@@ -49,8 +56,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            src-tauri/target
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('src-tauri/Cargo.lock') }}
+            target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-test-
       - name: Install Linux WebView dependencies
         run: |
@@ -62,11 +69,31 @@ jobs:
         run: |
           git config --global user.name "CI"
           git config --global user.email "ci@example.com"
-      - name: Unit tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Unit tests (whole workspace)
+        run: cargo test --workspace
+
+  # The shared crates carry no Tauri dependency on purpose, so they build and
+  # test in seconds with no system libraries at all. Proving that here is what
+  # stops the boundary eroding: the first `use tauri::` in suite-core fails this
+  # job long before it fails anything else.
+  shared-crates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache cargo registry and build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-crates-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-crates-
+      - name: The shared crates stand alone, with no desktop toolchain
+        run: cargo test -p suite-core -p suite-config -p suite-registry
 
   # Everything that only exists on Windows: the tray, the foreground
-  # workaround, and the portable exe itself.
+  # workaround, file rotation via creation time, and the portable exes.
   windows-build:
     runs-on: windows-latest
     steps:
@@ -77,20 +104,22 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            src-tauri/target
-          key: ${{ runner.os }}-cargo-build-${{ hashFiles('src-tauri/Cargo.lock') }}
+            target
+          key: ${{ runner.os }}-cargo-build-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-build-
       - name: Formatting
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+        run: cargo fmt --all -- --check
       - name: Clippy (warnings are errors)
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Unit tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
-      - name: Build the portable executable
-        run: cargo build --release --manifest-path src-tauri/Cargo.toml
-      - name: Upload the portable exe for inspection
+        run: cargo test --workspace
+      - name: Build the portable executables
+        run: cargo build --release --workspace
+      - name: Upload the portable exes for inspection
         uses: actions/upload-artifact@v4
         with:
-          name: dev-hub-portable
-          path: src-tauri/target/release/dev-hub.exe
+          name: dev-suite-portable
+          path: |
+            target/release/dev-hub.exe
+            target/release/log-viewer.exe
           retention-days: 7
