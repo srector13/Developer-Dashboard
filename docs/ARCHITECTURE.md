@@ -121,20 +121,43 @@ it should be reusing.
 
 The order:
 
-1. **Teach it the registry.** One call to `suite_registry::register` on startup
-   with `open-note-at-line`, and `set_notebook_root` where it currently writes
-   its pointer file. Done in its own repository, shipped, verified. Dev Hub
-   already reads the registry first and falls back to the old pointer, so this
-   changes nothing for anyone until it lands — and nothing breaks if it never
-   does.
+1. **Teach it the registry.** ✅ Done, on that repo's
+   `claude/suite-registry` branch. It registers on startup with
+   `open-note-at-line` and records the notebook root alongside its existing
+   pointer write. Dev Hub already reads the registry first and falls back to
+   the old pointer, so this changed nothing for anyone until it lands — and
+   nothing breaks if it never does.
 2. **Move the code in**, as `apps/markdown-notebook`, replacing its copies of
    the model, the settings merge and the design tokens with the crates.
 3. **Migrate the issues**, and leave the old repository archived with a pointer
    here. The old release download URL is the thing to be careful about: anything
    bookmarking it needs a redirect or a final release that says where to go.
 
-Only step 1 has to happen soon; it is small and it removes the fallback path.
 Steps 2 and 3 can wait for a quiet week.
+
+### Step 1 did not use the crate, and that was right
+
+The plan above originally said Markdown Notebook would call
+`suite_registry::register`. It doesn't — it has its own ~150-line `suite`
+module writing the same file.
+
+Depending on the crate would have meant a Cargo git dependency from one
+repository to another, for the sake of writing a small JSON file. That is worse
+than the duplication it avoids: it makes a portable app's build depend on
+network access to a second repository, and — right now — on an unmerged branch
+of it. The registry is an **interchange format**, and a second implementation of
+a format is ordinary. The `last-notebook.json` pointer it replaces always worked
+exactly this way.
+
+What that costs is the risk of the two implementations drifting, so the contract
+is pinned from the reader's side: `suite-registry` has a test carrying the
+verbatim output of Markdown Notebook's writer, captured from a real run, and
+asserts this crate parses it and finds the capability. If either side's field
+names or types move, that test fails — rather than Dev Hub silently ceasing to
+offer "open this todo".
+
+When the app moves in at step 2, the module is deleted in favour of the crate.
+Its own doc comment says so.
 
 ## Deliberately not doing
 

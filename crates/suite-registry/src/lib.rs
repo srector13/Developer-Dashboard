@@ -376,6 +376,60 @@ mod tests {
         assert_eq!(json["capabilities"][0], capability::TAIL_FILE);
     }
 
+    /// Verbatim output of Markdown Notebook's `suite` module, captured from a
+    /// real run of it.
+    ///
+    /// That app writes the registry with its own small implementation rather
+    /// than this crate — it is a separate repository, and the registry is an
+    /// interchange format, so a second implementation is expected. This is
+    /// where the two are held to the same contract: if either side's field
+    /// names or types drift, this fails here rather than as "Dev Hub silently
+    /// stopped offering to open my todos".
+    const MARKDOWN_NOTEBOOK_SAMPLE: &str = r#"{
+      "apps": {
+        "markdown-notebook": {
+          "capabilities": [
+            "open-note-at-line"
+          ],
+          "exe": "C:\\tools\\Markdown-Notebook.exe",
+          "id": "markdown-notebook",
+          "name": "Markdown Notebook",
+          "registeredAt": 1772899300,
+          "version": "1.5.0-beta.15"
+        }
+      },
+      "notebookRoot": "C:\\notes",
+      "version": 1
+    }"#;
+
+    #[test]
+    fn what_markdown_notebook_writes_is_what_this_crate_reads() {
+        let raw: serde_json::Value = serde_json::from_str(MARKDOWN_NOTEBOOK_SAMPLE)
+            .expect("the captured sample must be valid JSON");
+        let registry: Registry = suite_config::merge_onto_defaults(raw);
+
+        let entry = registry
+            .get(MARKDOWN_NOTEBOOK)
+            .expect("the notebook registers under the id this crate looks for");
+        assert_eq!(entry.name, "Markdown Notebook");
+        assert_eq!(entry.exe, "C:\\tools\\Markdown-Notebook.exe");
+        assert_eq!(entry.registered_at, 1772899300);
+        assert_eq!(registry.notebook_root, "C:\\notes");
+    }
+
+    #[test]
+    fn the_notebooks_capability_is_the_one_dev_hub_asks_for() {
+        // The whole point of capability lookup: Dev Hub asks for "something
+        // that can open a note at a line", not for Markdown Notebook by name.
+        // If these two strings ever disagree, that stops working silently.
+        let raw: serde_json::Value = serde_json::from_str(MARKDOWN_NOTEBOOK_SAMPLE).unwrap();
+        let registry: Registry = suite_config::merge_onto_defaults(raw);
+
+        let found = registry.providers_of(capability::OPEN_NOTE_AT_LINE);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, MARKDOWN_NOTEBOOK);
+    }
+
     #[test]
     fn a_sibling_lookup_finds_the_test_binary_beside_itself() {
         // The running test executable is the one file guaranteed to be where we

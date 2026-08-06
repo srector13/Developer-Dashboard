@@ -54,10 +54,10 @@ The connective tissue, built before app #4 rather than after it.
   so a version means something and code signing will be one step rather than
   three.
 
-*Still outstanding:* Markdown Notebook is not migrated. The order and the
-reasoning are in [ARCHITECTURE.md](ARCHITECTURE.md#bringing-markdown-notebook-in);
-the only part worth doing soon is teaching it to register itself, which removes
-the fallback path.
+*Still outstanding:* Markdown Notebook's code has not moved into the workspace,
+though it now registers itself — see
+[ARCHITECTURE.md](ARCHITECTURE.md#bringing-markdown-notebook-in) for the
+remaining steps and why they can wait.
 
 ---
 
