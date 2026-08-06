@@ -31,15 +31,30 @@ const MAX_READ_PER_POLL: u64 = 8 * 1024 * 1024;
 /// interesting part of a log is the end. This is the "tail -n" of the app.
 const INITIAL_TAIL_BYTES: u64 = 2 * 1024 * 1024;
 
-/// A file's identity, used to notice that the name now points at a different
-/// file.
+/// How many bytes from the start of the file to keep as a fingerprint.
 ///
-/// On Unix this is the inode. On Windows it is the creation time, which is
-/// *nearly* right: NTFS file-system tunneling can hand a recreated file the
-/// creation time of the one it replaced, when both happen within about 15
-/// seconds. That is why length is checked too — a rotated file is almost
-/// always shorter than the offset we hold, and that check needs no OS support
-/// at all.
+/// This is the primary rotation signal, and it is deliberately not the file's
+/// identity as the OS reports it:
+///
+///   * On Unix the inode is reliable, but it is not available on Windows
+///     through stable Rust — `MetadataExt::file_index` is still unstable, and
+///     it needs a handle rather than a path.
+///   * Windows' creation time looks like a substitute and is a trap. NTFS
+///     *file-system tunneling* hands a recreated file the creation time of the
+///     one it replaced when both happen within about 15 seconds — which is
+///     exactly what a log rotation is. The stale value then says "same file"
+///     at the precise moment it is not.
+///
+/// Reading the first 256 bytes and comparing them costs one small read per
+/// poll and works the same way on every platform. Any log worth tailing has a
+/// timestamp in its first line, so two different files agreeing on 256 bytes
+/// is not a case worth designing around.
+const HEAD_BYTES: usize = 256;
+
+/// A file's identity as the OS reports it. Kept as a *secondary* signal only:
+/// on Unix the inode catches a replacement whose contents happen to match, and
+/// on Windows the creation time does the same whenever tunneling doesn't
+/// apply. Neither is trusted on its own — see `HEAD_BYTES`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Identity(u64);
 
@@ -58,6 +73,17 @@ fn identity(metadata: &Metadata) -> Identity {
 #[cfg(not(any(unix, windows)))]
 fn identity(_metadata: &Metadata) -> Identity {
     Identity(0)
+}
+
+/// Has the start of the file changed under us?
+///
+/// Only the common prefix is compared, because a growing file legitimately has
+/// a longer head than the one recorded when it was shorter. An empty recorded
+/// head compares equal to anything — a file that was empty and now has content
+/// has grown, not rotated.
+fn head_changed(recorded: &[u8], current: &[u8]) -> bool {
+    let common = recorded.len().min(current.len());
+    recorded[..common] != current[..common]
 }
 
 /// What one poll produced.
@@ -79,6 +105,8 @@ pub struct Poll {
 pub struct Tail {
     path: PathBuf,
     offset: u64,
+    /// The first `HEAD_BYTES` of the file as last seen. The rotation signal.
+    head: Vec<u8>,
     identity: Option<Identity>,
     /// Bytes after the last newline seen, held until the line is complete.
     remainder: String,
@@ -92,6 +120,7 @@ impl Tail {
         Self {
             path: path.into(),
             offset: 0,
+            head: Vec::new(),
             identity: None,
             remainder: String::new(),
             started: false,
@@ -121,9 +150,27 @@ impl Tail {
         let length = metadata.len();
         let current = identity(&metadata);
 
+        // One handle for both reads. The head has to be re-read on every poll —
+        // it is the rotation signal, so skipping it when nothing looks like it
+        // has changed is exactly how a same-length replacement gets missed.
+        let Ok(mut file) = File::open(&self.path) else {
+            return Poll {
+                missing: true,
+                ..Default::default()
+            };
+        };
+        let head = read_head(&mut file);
+
         // Rotation: a different file behind the same name, or the same file
         // truncated. Either way the offset we hold means nothing now.
-        let rotated = self.started && (self.identity != Some(current) || length < self.offset);
+        //
+        // The head comparison is what catches a rotation on Windows, where the
+        // reported identity can be stale and the replacement can be longer than
+        // the offset we hold — see HEAD_BYTES.
+        let rotated = self.started
+            && (head_changed(&self.head, &head)
+                || length < self.offset
+                || self.identity != Some(current));
         if rotated {
             self.offset = 0;
             self.remainder.clear();
@@ -135,6 +182,7 @@ impl Tail {
             self.started = true;
         }
         self.identity = Some(current);
+        self.head = head;
 
         if length <= self.offset {
             return Poll {
@@ -143,13 +191,6 @@ impl Tail {
             };
         }
 
-        let Ok(mut file) = File::open(&self.path) else {
-            return Poll {
-                rotated,
-                missing: true,
-                ..Default::default()
-            };
-        };
         if file.seek(SeekFrom::Start(self.offset)).is_err() {
             return Poll {
                 rotated,
@@ -208,9 +249,28 @@ impl Tail {
     /// 2GB file from byte zero is what was actually asked for.
     pub fn rewind(&mut self) {
         self.offset = 0;
+        self.head.clear();
         self.identity = None;
         self.remainder.clear();
         self.started = true;
+    }
+}
+
+/// The first `HEAD_BYTES` of an open file, or as much of it as exists.
+///
+/// A read that fails yields an empty head, which compares equal to everything
+/// — a transient read error must not be reported as a rotation.
+fn read_head(file: &mut File) -> Vec<u8> {
+    if file.seek(SeekFrom::Start(0)).is_err() {
+        return Vec::new();
+    }
+    let mut buffer = vec![0u8; HEAD_BYTES];
+    match read_fully(file, &mut buffer) {
+        Ok(read) => {
+            buffer.truncate(read);
+            buffer
+        }
+        Err(_) => Vec::new(),
     }
 }
 
@@ -349,6 +409,79 @@ mod tests {
         let poll = tail.poll();
         assert!(poll.rotated, "a different file behind the same name");
         assert_eq!(poll.lines.len(), 2);
+    }
+
+    #[test]
+    fn a_replacement_is_detected_from_content_alone() {
+        // This is the regression test for the whole `HEAD_BYTES` design, and it
+        // is written to defeat *every other* signal on *every* platform:
+        //
+        //   * rewriting in place keeps the inode (Unix) and the creation time
+        //     (Windows), so the reported identity is unchanged;
+        //   * the new content is exactly as long as the old, so the
+        //     `length < offset` check cannot fire either.
+        //
+        // Only comparing the head of the file catches this. It is the same
+        // blind spot NTFS file-system tunneling opens up for a real rotation:
+        // a file recreated within ~15 seconds of the original being moved aside
+        // inherits its creation time, so the OS says "same file" at the exact
+        // moment it is not.
+        let dir = scratch("same-length-replacement");
+        let path = dir.join("app.log");
+        std::fs::write(&path, b"aaaa\n").unwrap();
+
+        let mut tail = Tail::new(&path);
+        assert_eq!(tail.poll().lines, vec!["aaaa"]);
+
+        std::fs::write(&path, b"bbbb\n").unwrap();
+
+        let poll = tail.poll();
+        assert!(poll.rotated, "the head of the file changed");
+        assert_eq!(poll.lines, vec!["bbbb"]);
+    }
+
+    #[test]
+    fn a_growing_file_is_not_mistaken_for_a_replacement() {
+        // The head recorded when the file was short is a prefix of the head
+        // read once it is long. Comparing them naively at full length would
+        // report a rotation on every write.
+        let dir = scratch("growing");
+        let path = dir.join("app.log");
+        append(&path, "ab\n");
+
+        let mut tail = Tail::new(&path);
+        assert!(!tail.poll().rotated);
+
+        append(&path, &format!("{}\n", "c".repeat(HEAD_BYTES * 2)));
+        let poll = tail.poll();
+        assert!(!poll.rotated, "it grew, it was not replaced");
+        assert_eq!(poll.lines.len(), 1);
+    }
+
+    #[test]
+    fn a_file_that_was_empty_and_then_written_to_is_not_a_rotation() {
+        // An empty head compares equal to anything; a service that creates its
+        // log file before writing to it must not read as a replacement.
+        let dir = scratch("empty-then-written");
+        let path = dir.join("app.log");
+        std::fs::write(&path, b"").unwrap();
+
+        let mut tail = Tail::new(&path);
+        assert!(!tail.poll().rotated);
+
+        append(&path, "first line\n");
+        let poll = tail.poll();
+        assert!(!poll.rotated);
+        assert_eq!(poll.lines, vec!["first line"]);
+    }
+
+    #[test]
+    fn comparing_heads_only_looks_at_the_bytes_both_have() {
+        assert!(!head_changed(b"", b"anything"));
+        assert!(!head_changed(b"abc", b"abcdef"));
+        assert!(!head_changed(b"abcdef", b"abc"));
+        assert!(head_changed(b"abc", b"abd"));
+        assert!(head_changed(b"abcdef", b"abd"));
     }
 
     #[test]
