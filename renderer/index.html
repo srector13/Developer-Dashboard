@@ -36,14 +36,17 @@
        so the window has a real taskbar entry and a branded screen the whole
        time it's loading. Hidden by the renderer once the first render lands. -->
   <div id="app-loading">
-    <img class="app-loading-logo" src="../build/icon.png" alt="">
+    <!-- Must live inside renderer/: that directory is the entire frontend
+         root at runtime, so "../build/…" resolves above it and 404s. -->
+    <img class="app-loading-logo" src="app-icon.png" alt="">
     <div class="app-loading-title">Markdown Notebook</div>
     <div class="app-loading-sub">Opening your notebook…</div>
     <div class="app-loading-spinner" aria-hidden="true"></div>
   </div>
 
-  <!-- Frameless titlebar padding for macOS -->
-  <div id="titlebar"></div>
+  <!-- No titlebar spacer: this build uses the native Windows title bar, so
+       the app content starts directly beneath it. The 32px band that used to
+       sit here existed to make room for macOS's inset traffic lights. -->
 
   <!-- Onboarding On Screen Overlay -->
   <div id="onboarding" class="overlay active">
@@ -89,32 +92,52 @@
         <button onclick="clearTagFilter()" title="Clear filter">&times;</button>
       </div>
 
+      <!-- Notebook actions: everything that puts content INTO the notebook.
+           Deliberately a sibling of .tree-container rather than a child —
+           that container clips its overflow, which would cut off the Import
+           menu. -->
+      <div class="tree-controls">
+        <button class="icon-btn" onclick="promptCreateSection('')" title="New Section">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
+        </button>
+        <button class="icon-btn" onclick="promptCreatePage('')" title="New Page">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+        </button>
+        <div class="editor-dropdown">
+          <button class="icon-btn dropdown-toggle" onclick="toggleEditorDropdown('dropdown-import', event)" title="Import — clipboard, a file, or OneNote">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          </button>
+          <div id="dropdown-import" class="dropdown-menu glass-card">
+            <div class="dropdown-item" onclick="importFromClipboard()" title="Turn whatever you've copied — an email, a web page — into a new note">From Clipboard</div>
+            <!-- The supported formats live in the tooltip rather than inline:
+                 these labels are long enough that a description beside them
+                 wraps in the sidebar's narrow menu. -->
+            <div class="dropdown-item" onclick="importDocFile()" title="Word (.docx, .odt, .rtf) · PowerPoint (.pptx) · Excel (.xlsx) · OneNote page (.mht) · EPUB · HTML · plain text and LaTeX">From a File…</div>
+            <div class="dropdown-item" onclick="openOneNoteImport()" title="Pick notebooks, sections or pages from OneNote desktop — each page becomes its own note, and sections are kept">From OneNote…</div>
+          </div>
+        </div>
+        <!-- Pushed right: the others add content, this one filters it. -->
+        <button class="icon-btn tree-controls-filter" onclick="showTagsPopover()" title="Filter by Tag">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+        </button>
+      </div>
+
       <!-- Sections & Pages Tree -->
       <div class="tree-container">
-        <div class="tree-controls">
-          <button class="btn btn-sm btn-outline" onclick="promptCreateSection('')" title="New Section">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
-            Section
-          </button>
-          <button class="btn btn-sm btn-outline" onclick="promptCreatePage('')" title="New Page">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
-            Page
-          </button>
-          <button class="btn btn-sm btn-outline" onclick="showTagsPopover()" title="Filter by Tag">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
-            Tags
-          </button>
-        </div>
         <div id="notebook-tree" class="file-tree">
           <!-- Tree nodes dynamically injected here -->
         </div>
       </div>
 
-      <!-- Sidebar Footer: Templates Manager -->
+      <!-- Sidebar Footer: notebook-wide tools -->
       <div class="sidebar-footer">
         <button class="btn btn-sm btn-outline" onclick="showTemplatesModal()" title="Add & manage note templates">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
           Templates
+        </button>
+        <button class="btn btn-sm btn-outline" onclick="showTrashModal()" title="Restore or permanently delete trashed notes and sections">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          Trash
         </button>
       </div>
     </aside>
@@ -165,20 +188,31 @@
           <!-- 2. Basic Text Formatting Buttons -->
           <button class="toolbar-btn" onclick="insertFormatting('bold')" title="Bold text formatting (Cmd+B / Ctrl+B)"><strong>B</strong></button>
           <button class="toolbar-btn" onclick="insertFormatting('italic')" title="Italic text formatting (Cmd+I / Ctrl+I)"><em>I</em></button>
-          <button class="toolbar-btn" onclick="insertFormatting('list-bullet')" title="Bullet List item (Cmd+Alt+L)">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
-          </button>
-          <button class="toolbar-btn" onclick="insertFormatting('list-number')" title="Numbered List item">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></svg>
-          </button>
-          <button class="toolbar-btn" onclick="insertFormatting('list-check')" title="Task Checklist item (Cmd+Alt+C / Cmd+Alt+X)">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-          </button>
-          <button class="toolbar-btn" onclick="insertFormatting('separator')" title="Horizontal rule separator line (Cmd+Alt+-)">&mdash;</button>
-          <button class="toolbar-btn" onclick="insertFormatting('blockquote')" title="Blockquote text highlight">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-          </button>
-          <button class="toolbar-btn" onclick="insertFormatting('tldr')" title="Insert a > TL;DR summary callout">TL;DR</button>
+          <!-- Lists and block inserts are each one control with a menu, the same
+               shape as the heading picker. Eight separate buttons made the row
+               read as noise; the keyboard shortcuts are unchanged. -->
+          <div class="editor-dropdown">
+            <button class="toolbar-btn dropdown-toggle" onclick="toggleEditorDropdown('dropdown-list', event)" title="Lists — bullet, numbered or task">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+              <svg class="chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div id="dropdown-list" class="dropdown-menu glass-card">
+              <div class="dropdown-item" onclick="insertFormatting('list-bullet')">Bullet List &nbsp;<span class="item-desc shortcut-hint">Cmd+Alt+L</span></div>
+              <div class="dropdown-item" onclick="insertFormatting('list-number')">Numbered List</div>
+              <div class="dropdown-item" onclick="insertFormatting('list-check')">Task Checklist &nbsp;<span class="item-desc shortcut-hint">Cmd+Alt+C</span></div>
+            </div>
+          </div>
+          <div class="editor-dropdown">
+            <button class="toolbar-btn dropdown-toggle" onclick="toggleEditorDropdown('dropdown-block', event)" title="Blocks — quote, callout or divider">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              <svg class="chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div id="dropdown-block" class="dropdown-menu glass-card">
+              <div class="dropdown-item" onclick="insertFormatting('blockquote')">Blockquote</div>
+              <div class="dropdown-item" onclick="insertFormatting('tldr')">TL;DR Callout &nbsp;<span class="item-desc">Summary at the top</span></div>
+              <div class="dropdown-item" onclick="insertFormatting('separator')">Divider &nbsp;<span class="item-desc shortcut-hint">Cmd+Alt+-</span></div>
+            </div>
+          </div>
           <button class="toolbar-btn" onclick="openLinkModal()" title="Insert a hyperlink">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
           </button>
@@ -297,24 +331,28 @@
         </div>
 
         <div class="toolbar-group">
-          <!-- File Actions Dropdown -->
+          <!-- Export: everything that takes THIS note somewhere else.
+               Importing lives in the sidebar, next to the notebook's other
+               "add something" actions. -->
           <div class="editor-dropdown">
-            <button class="toolbar-btn dropdown-toggle" onclick="toggleEditorDropdown('dropdown-file-actions', event)" title="File Actions (Import/Export)">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-              <span style="margin-left: 6px; font-weight: 500; font-size: 13px;">File Actions</span>
-              <svg class="chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left: 4px;"><polyline points="6 9 12 15 18 9"/></svg>
+            <button class="toolbar-btn dropdown-toggle" onclick="toggleEditorDropdown('dropdown-export', event)" title="Export — PDF, HTML, Word, or copy as rich text">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              <svg class="chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
             </button>
-            <div id="dropdown-file-actions" class="dropdown-menu glass-card" style="right: 0; left: auto;">
-              <div class="dropdown-item" onclick="importFromClipboard()" title="Import Rich Text or HTML from Clipboard as a note">Paste Note from Clipboard</div>
-              <div class="dropdown-item" onclick="importDocFile()" title="Import DOCX/PPTX/XLSX file via Pandoc">Import Doc via Pandoc</div>
-              <div class="dropdown-item" onclick="exportToPdf()" title="Export current note to PDF">Export to PDF</div>
-              <div class="dropdown-item" onclick="exportAsHtml()" title="Export current note as a standalone HTML file (images inlined)">Export to HTML</div>
-              <div class="dropdown-item" onclick="exportAsDocx()" title="Export current note to Word via Pandoc">Export to Word (DOCX)</div>
-              <div class="dropdown-item" onclick="copyAsRichText()" title="Copy the rendered note to the clipboard as rich text">Copy as Rich Text</div>
-              <div class="dropdown-item" onclick="showHistoryModal()" title="Browse and restore earlier saved versions of this note">Note History</div>
-              <div class="dropdown-item" onclick="showTrashModal()" title="Restore or permanently delete trashed notes">Trash</div>
+            <div id="dropdown-export" class="dropdown-menu glass-card" style="right: 0; left: auto;">
+              <div class="dropdown-item" onclick="exportToPdf()" title="One note, a whole section, or the entire notebook as a PDF">
+                PDF &nbsp;<span class="item-desc">One note or the whole notebook</span>
+              </div>
+              <div class="dropdown-item" onclick="exportAsHtml()" title="A single self-contained file with the images included">
+                HTML &nbsp;<span class="item-desc">Self-contained, images included</span>
+              </div>
+              <div class="dropdown-item" onclick="exportAsDocx()" title="Export this note as a Word document">Word (.docx)</div>
+              <div class="dropdown-item" onclick="copyAsRichText()" title="Copy the formatted note, ready to paste into an email, Slack or a wiki">Copy as Rich Text</div>
             </div>
           </div>
+          <button class="icon-btn" onclick="showHistoryModal()" title="Note History — browse and restore earlier versions of this note">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><polyline points="12 7 12 12 15 14"/></svg>
+          </button>
           <button class="icon-btn" id="btn-open-search" onclick="openDrawerView('search')" title="Search Notes">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           </button>
@@ -341,13 +379,10 @@
         <header id="note-header">
           <div class="title-row">
             <h1 id="note-title" onclick="promptRenameCurrent()">Note Title</h1>
+            <!-- Auto-save is a preference, not a per-note control: it lives in
+                 Settings (and the command palette). This pill reports the state
+                 that actually changes while you work. -->
             <span id="save-status-indicator" class="status-indicator"></span>
-            
-            <!-- Quick Auto Save Toggle inside note Header -->
-            <label class="autosave-toggle-label" style="display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-secondary); margin-left: auto; cursor: pointer; user-select: none;">
-              <input type="checkbox" id="header-autosave" onchange="toggleAutoSave(this.checked)" style="accent-color: var(--accent-blue); width: 14px; height: 14px; cursor: pointer;">
-              Auto-save
-            </label>
           </div>
           <div class="meta-row">
             <div class="meta-item">
@@ -520,11 +555,10 @@
     <!-- RIGHT DRAWER: Outline / Search results, toggled at the top -->
     <aside id="right-drawer" class="collapsed">
       <div class="drawer-section">
-        <div class="drawer-header" style="display: flex; justify-content: space-between; align-items: center;">
-          <div class="drawer-tabs" role="tablist">
-            <button id="drawer-tab-outline" class="drawer-tab active" onclick="setDrawerTab('outline')" title="Headings outline of the open note">Outline</button>
-            <button id="drawer-tab-search" class="drawer-tab" onclick="setDrawerTab('search')" title="Search results (titles, content, tags)">Search</button>
-          </div>
+        <div class="drawer-header">
+          <!-- Which view is showing is chosen by the toolbar icons; this only
+               names the one you are looking at. -->
+          <span id="drawer-title">Outline</span>
           <button class="icon-btn" onclick="toggleRightDrawer()" title="Close panel">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
@@ -631,9 +665,9 @@
         </div>
 
         <!-- Local AI (optional) -->
-        <div class="form-group" style="display: flex; align-items: center; gap: 10px; margin-top: 20px;">
-          <input type="checkbox" id="settings-ai-enabled" onchange="toggleAiSettingsFields()" style="width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent-blue);">
-          <label for="settings-ai-enabled" style="margin-bottom: 0; cursor: pointer; user-select: none;">Enable Local AI (Ollama / LM Studio)</label>
+        <div class="form-group check-row" style="margin-top: 20px;">
+          <input type="checkbox" id="settings-ai-enabled" onchange="toggleAiSettingsFields()">
+          <label for="settings-ai-enabled">Enable Local AI (Ollama / LM Studio)</label>
         </div>
         <div class="form-hint" style="margin-top: -8px;">Optional. Talks only to a model server running on your own machine — your notes never leave your computer.</div>
         <div id="settings-ai-fields" style="display: none;">
@@ -656,25 +690,25 @@
             </div>
             <div class="form-hint" id="settings-ai-status">Test checks the server and lists the models it has installed.</div>
           </div>
-          <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
-            <input type="checkbox" id="settings-ai-autocomplete" style="width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent-blue);">
-            <label for="settings-ai-autocomplete" style="margin-bottom: 0; cursor: pointer; user-select: none;">Smart autocomplete (ghost suggestions while typing — Tab accepts)</label>
+          <div class="form-group check-row">
+            <input type="checkbox" id="settings-ai-autocomplete">
+            <label for="settings-ai-autocomplete">Smart autocomplete (ghost suggestions while typing — Tab accepts)</label>
           </div>
           <div class="form-hint" style="margin-top: -8px;">Works best with a small, fast model. Suggestions appear after a short pause at the end of a line.</div>
         </div>
 
         <!-- Auto Save Checkbox in Settings Modal -->
-        <div class="form-group" style="display: flex; align-items: center; gap: 10px; margin-top: 20px;">
-          <input type="checkbox" id="settings-autosave" style="width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent-blue);">
-          <label for="settings-autosave" style="margin-bottom: 0; cursor: pointer; user-select: none;">Enable Auto-Save (automatically saves note 1 second after typing)</label>
+        <div class="form-group check-row" style="margin-top: 20px;">
+          <input type="checkbox" id="settings-autosave">
+          <label for="settings-autosave">Enable Auto-Save (automatically saves note 1 second after typing)</label>
         </div>
-        <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
-          <input type="checkbox" id="settings-spellcheck" style="width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent-blue);">
-          <label for="settings-spellcheck" style="margin-bottom: 0; cursor: pointer; user-select: none;">Spell-check in the editor (red squiggles under misspelled words)</label>
+        <div class="form-group check-row">
+          <input type="checkbox" id="settings-spellcheck">
+          <label for="settings-spellcheck">Spell-check in the editor (red squiggles under misspelled words)</label>
         </div>
-        <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
-          <input type="checkbox" id="settings-keep-in-tray" style="width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent-blue);">
-          <label for="settings-keep-in-tray" style="margin-bottom: 0; cursor: pointer; user-select: none;">Keep running in the tray when the window is closed (keeps the launcher &amp; tools available)</label>
+        <div class="form-group check-row">
+          <input type="checkbox" id="settings-keep-in-tray">
+          <label for="settings-keep-in-tray">Keep running in the tray when the window is closed (keeps the launcher &amp; tools available)</label>
         </div>
         <div class="form-hint" style="margin-top: -8px;">With this off, closing the window quits the app entirely — the global launcher shortcut and tray tools stop working until you reopen it. Quit any time from the tray menu.</div>
       </div>
@@ -758,10 +792,10 @@
         <div class="form-group">
           <label>Link Type</label>
           <div class="link-type-toggle" style="display:flex; gap:8px;">
-            <label style="display:flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+            <label class="check-row">
               <input type="radio" name="link-kind" value="web" checked onchange="updateLinkModalHint()"> Web hyperlink
             </label>
-            <label style="display:flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+            <label class="check-row">
               <input type="radio" name="link-kind" value="file" onchange="updateLinkModalHint()"> File link
             </label>
           </div>
@@ -775,7 +809,7 @@
           <input type="text" id="link-modal-title" placeholder="e.g. Project spec" onkeydown="handleLinkModalEnter(event)">
         </div>
         <div class="form-group">
-          <label style="display:flex; align-items:center; gap:6px; font-weight:normal; cursor:pointer;">
+          <label class="check-row">
             <input type="checkbox" id="link-modal-hover" onchange="toggleLinkHoverField()"> Add hover tooltip
           </label>
         </div>
@@ -941,9 +975,9 @@
           </div>
           <div id="page-info-links-list" class="link-chip-list"></div>
         </div>
-        <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
-          <input type="checkbox" id="page-info-pinned" style="width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent-blue);">
-          <label for="page-info-pinned" style="margin-bottom: 0; cursor: pointer; user-select: none;">Pin this page to the top of its section</label>
+        <div class="form-group check-row">
+          <input type="checkbox" id="page-info-pinned">
+          <label for="page-info-pinned">Pin this page to the top of its section</label>
         </div>
       </div>
       <div class="modal-footer">
@@ -992,6 +1026,67 @@
       <div class="modal-footer" style="justify-content: space-between;">
         <button class="btn btn-outline" onclick="confirmEmptyTrash()" title="Permanently delete everything in the trash">Empty Trash</button>
         <button class="btn btn-primary" onclick="hideTrashModal()">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- OneNote Import Modal -->
+  <div id="onenote-modal" class="modal-overlay">
+    <div class="glass-card modal-card builder-card">
+      <div class="modal-header">
+        <h3>Import from OneNote</h3>
+        <button class="close-btn" onclick="hideOneNoteModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="templates-help">
+          Each OneNote page becomes its own note in the section you choose
+          below. Pages already imported are not detected, so importing twice
+          creates duplicates.
+        </p>
+        <div id="onenote-status" class="builder-preview-placeholder" style="display: none;"></div>
+        <div id="onenote-diag-actions" style="display: none; margin-top: 10px;">
+          <button class="btn btn-sm btn-outline" onclick="runOneNoteDiagnostics()">Run a check</button>
+          <span class="form-hint" style="margin-left: 8px;">Reports what OneNote and Windows say, so the cause is identifiable.</span>
+        </div>
+        <div id="onenote-diag" style="display: none;">
+          <table class="onenote-diag-table"><tbody id="onenote-diag-rows"></tbody></table>
+          <button class="btn btn-sm btn-outline" style="margin-top: 10px;" onclick="copyOneNoteDiagnostics()">Copy this report</button>
+        </div>
+        <div id="onenote-tree" class="template-list" style="max-height: 46vh; overflow: auto;">
+          <!-- Notebook / section / page checkboxes injected here -->
+        </div>
+      </div>
+      <div class="modal-footer onenote-footer">
+        <label class="templates-help" style="margin: 0;">
+          Into:
+          <select id="onenote-dest" style="margin-left: 6px;"></select>
+        </label>
+        <label class="check-row templates-help" style="margin: 0;" title="Off: every page lands directly in the section you chose. On: OneNote's notebook, section groups and sections are recreated as folders under it.">
+          <input type="checkbox" id="onenote-keep-structure">
+          Recreate OneNote's folders
+        </label>
+        <div class="onenote-footer-actions">
+          <button class="btn btn-outline" onclick="hideOneNoteModal()">Cancel</button>
+          <button class="btn btn-primary" id="onenote-import-btn" onclick="runOneNoteImport()">Import selected</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- OneNote import progress: its own screen, because the picker's job is
+       done once the import starts and an import can run for a long while. -->
+  <div id="onenote-progress-modal" class="modal-overlay">
+    <div class="glass-card modal-card" style="max-width: 460px;">
+      <div class="modal-body" style="text-align: center; padding: 32px 28px;">
+        <div class="onenote-progress-spinner" aria-hidden="true"></div>
+        <h3 id="onenote-progress-title" style="margin: 18px 0 6px;">Importing from OneNote</h3>
+        <div class="app-loading-sub" id="onenote-progress-label">Starting…</div>
+        <div class="onenote-progress-track" role="progressbar" aria-labelledby="onenote-progress-title">
+          <div class="onenote-progress-fill" id="onenote-progress-fill"></div>
+        </div>
+        <div class="form-hint" id="onenote-progress-note" style="margin-top: 14px;">
+          OneNote is exporting each page. Leave this open — it may take a moment for pages with a lot of images.
+        </div>
       </div>
     </div>
   </div>
@@ -1054,13 +1149,13 @@
             <option value="Legal">Legal</option>
           </select>
         </div>
-        <div class="form-group" style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
-          <input type="checkbox" id="pdf-open-after" style="width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent-blue);">
-          <label for="pdf-open-after" style="margin-bottom: 0; cursor: pointer; user-select: none;">Open the PDF after export</label>
+        <div class="form-group check-row" style="margin-bottom: 10px;">
+          <input type="checkbox" id="pdf-open-after">
+          <label for="pdf-open-after">Open the PDF after export</label>
         </div>
-        <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
-          <input type="checkbox" id="pdf-reveal" style="width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent-blue);">
-          <label for="pdf-reveal" style="margin-bottom: 0; cursor: pointer; user-select: none;">Show in containing folder</label>
+        <div class="form-group check-row">
+          <input type="checkbox" id="pdf-reveal">
+          <label for="pdf-reveal">Show in containing folder</label>
         </div>
       </div>
       <div class="modal-footer">
@@ -1320,7 +1415,15 @@
 
   <!-- Scripts -->
   <!-- mermaid (3+MB) is lazy-loaded by ensureMermaid() on first diagram use;
-       a synchronous tag here blocked first paint on every launch -->
+       a synchronous tag here blocked first paint on every launch.
+       markdown-it + highlight.js (~250KB) used to load in the Electron
+       preload; they sit here now and are cheap enough to parse up front. -->
+  <script src="vendor/markdown-it.min.js"></script>
+  <script src="vendor/highlight.min.js"></script>
+  <script src="vendor/hljs-dart.min.js"></script>
+  <script src="vendor/hljs-scala.min.js"></script>
+  <script src="markdown.js"></script>
+  <script src="api-tauri.js"></script>
   <script src="app.js?v=3"></script>
 </body>
 </html>

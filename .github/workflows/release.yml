@@ -1,13 +1,20 @@
 name: Release
 
-# Pushing a v* tag builds installers + portable/zip artifacts for macOS and
-# Windows and attaches them to a draft GitHub Release. Code signing and
-# notarization activate automatically when the signing secrets are configured
-# (see docs/RELEASING.md); without them the build still succeeds unsigned.
+# Pushing a v* tag builds the portable Windows executable and attaches it to a
+# GitHub Release. There is deliberately no installer target: this build ships as
+# a single .exe that runs from anywhere.
 #
-# Manual runs (workflow_dispatch) work too: electron-builder creates/updates a
-# DRAFT release named v<package.json version> — publishing that draft is what
-# creates the tag. Handy when tags can't be pushed from the working machine.
+# A semver prerelease tag (v1.5.0-beta.1) publishes immediately as a GitHub
+# pre-release; a plain version tag (v1.5.0) lands as a draft so the notes can be
+# reviewed before publishing.
+#
+# Code signing activates automatically when WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD
+# are configured (see docs/RELEASING.md); without them the build still succeeds
+# and produces an unsigned exe.
+#
+# Only first-party actions and the runner's preinstalled toolchains are used
+# (windows-latest ships rustup + stable Rust and the gh CLI), so a release
+# doesn't depend on third-party action availability.
 on:
   push:
     tags: ['v*']
@@ -16,86 +23,144 @@ on:
 permissions:
   contents: write
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      # Sequential so the two platforms don't race to create the same
-      # draft release (the first run creates it, the second appends)
-      max-parallel: 1
-      matrix:
-        os: [macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
+    # Lifted to env because the `secrets` context isn't available to a step's
+    # `if:` — this is what makes signing opt-in rather than required.
+    env:
+      WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+
+      - name: Show the toolchain
+        run: |
+          rustup show
+          cargo --version
+
+      - name: Cache cargo registry and build output
+        uses: actions/cache@v4
         with:
-          node-version: 20
-          cache: npm
-      - name: Install dependencies
-        run: npm ci
-      - name: Typecheck + compile
-        run: npm run compile
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-release-
 
-      # electron-builder picks up signing automatically:
-      #  - Windows: CSC_LINK (base64 .pfx) + CSC_KEY_PASSWORD
-      #  - macOS:   CSC_LINK (base64 .p12) + CSC_KEY_PASSWORD
-      # The variables are exported ONLY when the secrets have values — an
-      # empty CSC_LINK makes electron-builder think a certificate was
-      # provided and the build fails trying to read it as a file.
-      - name: Configure code signing (when secrets exist)
-        shell: bash
-        env:
-          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
-          APPLE_ID_SECRET: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD_SECRET: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID_SECRET: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          if [ "$RUNNER_OS" = "macOS" ] && [ -n "$MAC_CSC_LINK" ]; then
-            echo "CSC_LINK=$MAC_CSC_LINK" >> "$GITHUB_ENV"
-            echo "CSC_KEY_PASSWORD=$MAC_CSC_KEY_PASSWORD" >> "$GITHUB_ENV"
-          fi
-          if [ "$RUNNER_OS" = "macOS" ] && [ -n "$APPLE_ID_SECRET" ]; then
-            echo "APPLE_ID=$APPLE_ID_SECRET" >> "$GITHUB_ENV"
-            echo "APPLE_APP_SPECIFIC_PASSWORD=$APPLE_APP_SPECIFIC_PASSWORD_SECRET" >> "$GITHUB_ENV"
-            echo "APPLE_TEAM_ID=$APPLE_TEAM_ID_SECRET" >> "$GITHUB_ENV"
-          fi
-          if [ "$RUNNER_OS" = "Windows" ] && [ -n "$WIN_CSC_LINK" ]; then
-            echo "CSC_LINK=$WIN_CSC_LINK" >> "$GITHUB_ENV"
-            echo "CSC_KEY_PASSWORD=$WIN_CSC_KEY_PASSWORD" >> "$GITHUB_ENV"
-          fi
+      - name: Unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
 
-      # Notarization is enabled only when Apple credentials exist, by
-      # overriding the config's notarize=false on the command line.
-      - name: Build and publish (macOS)
-        if: runner.os == 'macOS'
+      - name: Build (release)
+        run: cargo build --release --manifest-path src-tauri/Cargo.toml
+
+      # The tag is the source of truth for a tag push, so a beta can be cut
+      # without the version in package.json and the release name drifting
+      # apart. Manual runs fall back to package.json.
+      - name: Resolve the version
+        id: version
         shell: bash
         run: |
-          EXTRA=()
-          if [ -n "$APPLE_ID" ] && [ -n "$APPLE_TEAM_ID" ]; then
-            EXTRA+=(-c.mac.notarize.teamId="$APPLE_TEAM_ID")
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="$(node -p "require('./package.json').version")"
           fi
-          # 'always' creates the draft release when it doesn't exist yet
-          # (onTagOrDraft only appends to an existing one on non-tag builds)
-          npx electron-builder --mac --publish always "${EXTRA[@]}"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+          # A semver prerelease (1.5.0-beta.1) publishes as a GitHub pre-release
+          case "$VERSION" in
+            *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *)   echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
 
-      - name: Build and publish (Windows)
-        if: runner.os == 'Windows'
-        run: npx electron-builder --win --publish always
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Name the artifact
+        id: artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          NAME="Markdown-Notebook-${{ steps.version.outputs.value }}-win-x64-portable.exe"
+          cp "src-tauri/target/release/markdown-notebook.exe" "dist/$NAME"
+          echo "path=dist/$NAME" >> "$GITHUB_OUTPUT"
+          ls -l dist
 
-      - name: Upload artifacts (build inspection)
+      # signtool ships with the Windows SDK that windows-latest already has.
+      - name: Sign the executable (when secrets exist)
+        if: env.WIN_CSC_LINK != ''
+        shell: pwsh
+        run: |
+          [IO.File]::WriteAllBytes("cert.pfx", [Convert]::FromBase64String($env:WIN_CSC_LINK))
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" |
+                      Sort-Object FullName -Descending | Select-Object -First 1
+          & $signtool.FullName sign /f cert.pfx /p $env:WIN_CSC_KEY_PASSWORD `
+            /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "${{ steps.artifact.outputs.path }}"
+          Remove-Item cert.pfx
+
+      - name: Upload the build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dist-${{ matrix.os }}
-          path: |
-            dist/*.exe
-            dist/*.zip
-            dist/*.dmg
-          retention-days: 7
+          name: markdown-notebook-portable
+          path: ${{ steps.artifact.outputs.path }}
+          retention-days: 14
+
+      - name: Write the release notes
+        id: notes
+        shell: bash
+        run: |
+          cat > release-notes.md <<'NOTES'
+          Portable Windows build — a single `.exe` with nothing to install.
+
+          Download it, put it wherever you like (Downloads, a USB stick, a work
+          machine you can't install software on), and run it. Settings live in a
+          `MarkdownNotebookData` folder created next to the exe, so the app
+          travels with it.
+
+          Requires the Microsoft Edge WebView2 runtime, which ships with
+          Windows 10 (from the 2020 updates) and Windows 11.
+
+          Because a running executable can't replace itself, this build does not
+          self-update: when a new version lands, download it and swap the file.
+          Your notes and settings are untouched.
+          NOTES
+          if [ "${{ steps.version.outputs.prerelease }}" = "true" ]; then
+            cat >> release-notes.md <<'NOTES'
+
+          ---
+
+          **This is a beta.** It is the first release of the native Windows
+          build — the Electron shell replaced by a Rust binary drawing into
+          WebView2 — so the app is a few megabytes instead of ninety and starts
+          without unpacking itself to `%TEMP%` first. The note-handling logic is
+          covered by unit tests and the UI suite, but the desktop integration
+          (tray, global shortcuts, PDF export, screenshot capture) is new code
+          against new APIs. Keep a backup of anything irreplaceable, and please
+          report what breaks.
+          NOTES
+          fi
+          cat release-notes.md
+
+      - name: Publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FLAGS=()
+          if [ "${{ steps.version.outputs.prerelease }}" = "true" ]; then
+            FLAGS+=(--prerelease)
+          else
+            FLAGS+=(--draft)
+          fi
+          TAG="v${{ steps.version.outputs.value }}"
+          # --target pins the tag to the commit that was built. Without it a
+          # manual run would tag the default branch instead of this ref.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${{ steps.artifact.outputs.path }}" --clobber
+            gh release edit "$TAG" --notes-file release-notes.md "${FLAGS[@]}"
+          else
+            gh release create "$TAG" "${{ steps.artifact.outputs.path }}" \
+              --target "$GITHUB_SHA" \
+              --title "$TAG" --notes-file release-notes.md "${FLAGS[@]}"
+          fi

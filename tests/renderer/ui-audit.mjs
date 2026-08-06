@@ -9,8 +9,6 @@ import { fileURLToPath } from 'url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const require = createRequire(path.join(ROOT, 'package.json'));
 const { chromium } = require('@playwright/test');
-const MarkdownIt = require('markdown-it');
-const hljs = require('highlight.js');
 
 const OUT = process.env.UI_AUDIT_OUT || path.join(ROOT, 'tests', 'renderer', 'ui-audit-output');
 fs.mkdirSync(OUT, { recursive: true });
@@ -65,95 +63,6 @@ flowchart LR
 \`\`\`
 `;
 
-// ---------------------------------------------------------------------------
-// Node-side port of preload.ts renderMarkdown (markdown-it + hljs + plugins)
-// so the stub returns the same HTML the real app produces.
-// ---------------------------------------------------------------------------
-const md = new MarkdownIt({
-  html: true, linkify: true, breaks: true,
-  highlight: (str, lang) => {
-    if (lang && hljs.getLanguage(lang)) {
-      try {
-        return '<pre class="hljs"><code>' + hljs.highlight(str, { language: lang, ignoreIllegals: true }).value + '</code></pre>';
-      } catch (e) {}
-    }
-    return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>';
-  }
-});
-function escapeHtml(s) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-// ==mark== plugin
-md.inline.ruler.after('emphasis', 'notebook-mark', (state, silent) => {
-  const start = state.pos, src = state.src;
-  if (src.charCodeAt(start) !== 0x3d || src.charCodeAt(start + 1) !== 0x3d) return false;
-  const end = src.indexOf('==', start + 2);
-  if (end < 0 || end === start + 2 || end + 2 > state.posMax) return false;
-  if (!silent) {
-    const content = src.slice(start + 2, end);
-    state.push('mark_open', 'mark', 1);
-    const t = state.push('text', '', 0); t.content = content;
-    state.push('mark_close', 'mark', -1);
-  }
-  state.pos = end + 2;
-  return true;
-});
-// mermaid fence plugin (same markup as preload.ts)
-const defaultFence = md.renderer.rules.fence || ((t, i, o, e, s) => s.renderToken(t, i, o));
-md.renderer.rules.fence = (tokens, idx, options, env, self) => {
-  const token = tokens[idx];
-  const info = (token.info || '').trim().split(/\s+/g)[0].toLowerCase();
-  const mapLine = token.map ? token.map[0] : -1;
-  if (info === 'mermaid') {
-    return `<div class="mermaid-block-container" data-line="${mapLine}">
-      <div class="mermaid-actions-bar">
-        <button class="mermaid-action-btn" onclick="zoomMermaid(this, -15)" title="Zoom Out Diagram"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
-        <button class="mermaid-action-btn" onclick="zoomMermaid(this, 15)" title="Zoom In Diagram"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
-        <button class="mermaid-action-btn" onclick="popoutMermaid(this)" title="Pop Out Diagram Focus"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></button>
-        <button class="mermaid-action-btn" onclick="window.api.toggleMermaidOrientation(${mapLine})" title="Toggle Diagram Orientation"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg></button>
-      </div>
-      <pre class="notebook-mermaid" data-line="${mapLine}">${escapeHtml(token.content)}</pre>
-    </div>\n`;
-  }
-  return defaultFence(tokens, idx, options, env, self);
-};
-// task-list plugin (same as preload.ts)
-md.core.ruler.after('inline', 'notebook-task-lists', (state) => {
-  const tokens = state.tokens;
-  for (let i = 0; i < tokens.length; i++) {
-    if (tokens[i].type !== 'inline') continue;
-    let parent = null;
-    for (let j = i - 1; j >= 0; j--) {
-      if (tokens[j].type === 'list_item_open') { parent = tokens[j]; break; }
-      if (tokens[j].type === 'list_item_close') break;
-    }
-    if (!parent) continue;
-    const m = tokens[i].content.match(/^\[([ xX])\]\s+/);
-    const targetLine = parent.map ? parent.map[0] : -1;
-    if (m) {
-      const checked = m[1].toLowerCase() === 'x';
-      const children = tokens[i].children || [];
-      const linkOpen = new state.Token('link_open', 'a', 1);
-      linkOpen.attrs = [['href', '#'], ['class', 'task-checkbox-link'], ['data-line', String(targetLine)], ['style', 'text-decoration: none; color: inherit; cursor: pointer;']];
-      const checkboxHtml = new state.Token('html_inline', '', 0);
-      checkboxHtml.content = `<input class="task-checkbox" type="checkbox"${checked ? ' checked' : ''} style="cursor: pointer; margin-right: 8px;">`;
-      const linkClose = new state.Token('link_close', 'a', -1);
-      children.unshift(linkOpen, checkboxHtml, linkClose);
-      for (const c of children.slice(3)) {
-        if (c.type === 'text') { c.content = c.content.replace(/^\[([ xX])\]\s+/, ''); break; }
-      }
-      tokens[i].children = children;
-    }
-  }
-});
-function renderNoteHtml(text) {
-  let body = text;
-  const fm = body.match(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/);
-  if (fm) body = body.slice(fm[0].length);
-  body = body.replace(/^([ \t]*\r?\n)*#[ \t]+.+(\r?\n|$)/, '');
-  return md.render(body);
-}
-const RENDERED_HTML = renderNoteHtml(NOTE_MD);
 
 // ---------------------------------------------------------------------------
 // Browser setup
@@ -161,7 +70,7 @@ const RENDERED_HTML = renderNoteHtml(NOTE_MD);
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 
-await page.addInitScript(({ noteMd, renderedHtml }) => {
+await page.addInitScript(({ noteMd }) => {
   const tree = {
     kind: 'section', name: 'Root', fsPath: '/nb', relPath: '',
     pages: [{ kind: 'page', name: 'smoke.md', fsPath: '/nb/smoke.md', relPath: 'smoke.md', title: 'Smoke Note', created: '2026-07-10', tags: ['test', 'ui'], pinned: false, openTasks: 1, completedTasks: 1, taskLines: [] }],
@@ -208,7 +117,10 @@ await page.addInitScript(({ noteMd, renderedHtml }) => {
     toggleMermaidOrientation: () => {},
     openExternal: async () => true,
     resolveRelativePath: (b, r) => r,
-    renderMarkdown: (text) => text === noteMd ? renderedHtml : ('<p>' + String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</p>'),
+    // Render through the app's own pipeline (renderer/markdown.js, loaded by
+    // index.html) rather than a copy of it — the audit should be looking at
+    // what actually ships.
+    renderMarkdown: (text, opts) => window.NotebookMarkdown.render(text, opts),
     createPage: async () => '/nb/new.md', createSection: async () => '/nb/s',
     deleteNode: async () => true, renameNode: async () => true,
     relocateNode: async () => true, moveNode: async () => true,
@@ -217,7 +129,7 @@ await page.addInitScript(({ noteMd, renderedHtml }) => {
     exportToPdf: async () => ({ success: true, pdfPath: '/tmp/x.pdf' }),
     selectFolder: async () => '/nb',
   };
-}, { noteMd: NOTE_MD, renderedHtml: RENDERED_HTML });
+}, { noteMd: NOTE_MD });
 
 await page.goto('file://' + path.join(ROOT, 'renderer', 'index.html'), { waitUntil: 'domcontentloaded' });
 await page.waitForTimeout(800);
@@ -481,6 +393,17 @@ for (const t of ['light', 'dark']) {
   contrastReport[`${t}-modals`].dropdown = await probeContrast([
     ['dropdown-item', '#dropdown-heading .dropdown-item'],
   ]);
+
+  // Tree row context menu — its Delete entry is the only red-on-surface text
+  await page.evaluate(() => window.showPageMenu(
+    new MouseEvent('contextmenu', { clientX: 300, clientY: 300 }), '/nb', 'smoke.md', '/nb/smoke.md'));
+  await page.waitForTimeout(250);
+  await shot(`${t}-tree-context-menu`, { clip: { x: 0, y: 0, width: 900, height: 600 } });
+  contrastReport[`${t}-modals`].treeMenu = await probeContrast([
+    ['context-item', '#tab-context-menu .dropdown-item:not(.danger)'],
+    ['context-item-danger', '#tab-context-menu .dropdown-item.danger'],
+  ]);
+  await page.evaluate(() => window.hideTabContextMenu());
   await page.evaluate(() => {
     document.getElementById('dropdown-heading').classList.remove('active');
     window.setViewMode('preview');

@@ -6,7 +6,11 @@ dist/
 *.zip
 .DS_Store
 
-# Playwright E2E
+# Rust / Tauri
+/src-tauri/target/
+/src-tauri/gen/
+
+# Playwright
 /playwright-report/
 /test-results/
 /blob-report/

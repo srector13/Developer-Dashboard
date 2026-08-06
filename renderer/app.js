@@ -37,6 +37,10 @@ function normalizeShortcutTitles() {
       el.setAttribute('title', normalized);
     }
   });
+  // Menu entries spell their shortcut out in the row itself, not in a tooltip.
+  document.querySelectorAll('.shortcut-hint').forEach(el => {
+    el.textContent = normalizeShortcutText(el.textContent);
+  });
 }
 
 let notebookRoot = '';
@@ -57,12 +61,37 @@ let autoSaveTimeout = null;
 let previewZoomLevel = 100;
 let popoutZoomLevel = 100;
  
-// Fade out and remove the startup loading overlay
+// Fade out and remove the startup loading overlay.
+//
+// The native build starts fast enough that the overlay would otherwise appear
+// for a single frame and read as a flicker rather than a splash, so it is held
+// for a short floor before fading. The floor runs concurrently with the
+// notebook load — it only ever delays the *fade*, never the work.
+const APP_LOADING_MIN_MS = 450;
+const appLoadingStartedAt = Date.now();
+
 function hideAppLoading() {
   const el = document.getElementById('app-loading');
   if (!el) return;
-  el.classList.add('hiding');
-  setTimeout(() => el.classList.add('gone'), 300);
+  const remaining = Math.max(0, APP_LOADING_MIN_MS - (Date.now() - appLoadingStartedAt));
+  setTimeout(() => {
+    el.classList.add('hiding');
+    setTimeout(() => el.classList.add('gone'), 300);
+  }, remaining);
+}
+
+// Launched from another tool with a note to open, optionally at a line — see
+// docs/command-line.md. The command line counts lines from 1, openNoteAtLine
+// counts from 0.
+async function handleOpenRequest(request) {
+  if (!request || !request.fsPath) return;
+  const view = request.view || null;
+  if (request.line) {
+    await openNoteAtLine(request.fsPath, request.line - 1, { view });
+  } else {
+    await openNote(request.fsPath);
+    if (view) setViewMode(view);
+  }
 }
 
 // Initialize App
@@ -70,7 +99,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Load settings
   appSettings = await window.api.getSettings();
   autoSaveEnabled = appSettings.autoSaveEnabled || false;
-  document.getElementById('header-autosave').checked = autoSaveEnabled;
 
   // Set theme from settings (also initializes Mermaid with the right theme)
   applyTheme(appSettings.theme);
@@ -106,6 +134,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   // painted, so there's a taskbar entry and a branded screen throughout.
   hideAppLoading();
 
+  // A cold start launched with a note on the command line. Collected here,
+  // after the tree is loaded and the previous session's tabs are restored, so
+  // the requested note ends up the active one rather than being overwritten.
+  if (window.api.takePendingOpen) {
+    try {
+      await handleOpenRequest(await window.api.takePendingOpen());
+    } catch (err) {
+      console.error('Command-line open failed:', err);
+    }
+  }
+
   // File watcher setup (auto refresh)
   window.api.onFilesChanged(async () => {
     await refreshNotebook(false); // refresh tree without resetting active note
@@ -125,6 +164,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (fsPath) openNote(fsPath);
     });
   }
+  if (window.api.onOpenNoteAt) {
+    window.api.onOpenNoteAt(handleOpenRequest);
+  }
+
   // Launcher "Export" button: open the note, then its PDF export dialog
   if (window.api.onOpenNoteExport) {
     window.api.onOpenNoteExport(async (fsPath) => {
@@ -143,6 +186,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (noteEditorEl) {
     noteEditorEl.addEventListener('blur', () => setTimeout(() => { hideWikiAutocomplete(); hideAiGhost(); }, 120));
     noteEditorEl.addEventListener('click', () => { updateWikiAutocomplete(); hideAiGhost(); });
+  }
+
+  // Empty space in the notebook tree clears the selection, the way clicking
+  // the background of a file list does.
+  const treeEl = document.getElementById('notebook-tree');
+  if (treeEl) {
+    treeEl.addEventListener('click', (e) => {
+      if (e.target === treeEl) clearSelection();
+    });
   }
 
   // Tab context menu dismissal: any click or right-click elsewhere closes it
@@ -221,33 +273,40 @@ document.addEventListener('keydown', (e) => {
     if (activeNote) showFindBar();
     else openDrawerView('search');
   } else if (e.key === 'Escape') {
-    closeTopOverlay();
+    // Overlays first: Escape should shut whatever is on top before it reaches
+    // down to the tree behind it.
+    if (!closeTopOverlay() && selectedPaths.size > 1) clearSelection();
   }
 });
 
-// Close the currently open overlay (modal / popout / popover / palette) on Escape
+/// Close the topmost overlay. Returns true when one was closed, so a caller can
+/// tell whether Escape has already been spent.
 function closeTopOverlay() {
   const palette = document.getElementById('command-palette-modal');
   if (palette && palette.style.display !== 'none') {
     hideCommandPalette();
-    return;
+    return true;
   }
   const popout = document.getElementById('mermaid-popout-overlay');
   if (popout && popout.classList.contains('active')) {
     closeMermaidPopout();
-    return;
+    return true;
   }
   const tagsPopover = document.getElementById('tags-popover');
   if (tagsPopover && tagsPopover.classList.contains('active')) {
     hideTagsPopover();
-    return;
+    return true;
   }
   const activeModals = document.querySelectorAll('.modal-overlay.active');
   if (activeModals.length > 0) {
     activeModals[activeModals.length - 1].classList.remove('active');
-    return;
+    return true;
   }
-  if (findBarVisible()) hideFindBar();
+  if (findBarVisible()) {
+    hideFindBar();
+    return true;
+  }
+  return false;
 }
 
 // ==========================================
@@ -468,6 +527,121 @@ function scanGlobalTags(node, counts = null) {
   if (top) tagCounts = counts;
 }
 
+// ==========================================
+// MULTI-SELECT IN THE NOTEBOOK TREE
+// ==========================================
+//
+// File Explorer's mechanics, because that is what the modifier keys already
+// mean to anyone using this on Windows: plain click selects one and opens it,
+// Ctrl-click adds or removes one, Shift-click takes the range from the anchor.
+// Selection covers pages only — sections have their own actions, and dragging
+// a folder into a multi-page move has no sensible meaning.
+//
+// A selection of one behaves exactly as before, so every existing action keeps
+// working without knowing this exists.
+
+let selectedPaths = new Set();
+/// The row a Shift-range is measured from — the last one clicked without Shift.
+let selectionAnchor = null;
+
+/// Pages in the order they appear in the tree. `activeNoteList` is rebuilt by
+/// each render and is already in visible order, which is what a range needs.
+function visiblePagePaths() {
+  return activeNoteList.map(p => p.fsPath);
+}
+
+/// The current selection, in tree order.
+///
+/// A function rather than the Set itself: a script-scope `let` is not reachable
+/// from outside this file, and tree order is what every caller wants anyway.
+function selectedNotePaths() {
+  return visiblePagePaths().filter(p => selectedPaths.has(p));
+}
+
+function setSelection(paths, anchor) {
+  selectedPaths = new Set(paths);
+  if (anchor !== undefined) selectionAnchor = anchor;
+  renderSidebarTree();
+}
+
+function clearSelection() {
+  if (!selectedPaths.size) return;
+  selectedPaths = new Set();
+  selectionAnchor = null;
+  renderSidebarTree();
+}
+
+/// The paths an action should apply to when it was invoked on `fsPath`.
+///
+/// Acting on a row inside a multi-selection acts on the whole selection; acting
+/// on a row outside it acts on that row alone, which is also what Explorer does.
+function selectionFor(fsPath) {
+  if (selectedPaths.size > 1 && selectedPaths.has(fsPath)) {
+    // Keep tree order rather than insertion order, so a bulk move lands the
+    // pages in the order the user sees them.
+    return visiblePagePaths().filter(p => selectedPaths.has(p));
+  }
+  return [fsPath];
+}
+
+function handlePageRowClick(event, fsPath) {
+  const additive = event.ctrlKey || event.metaKey;
+
+  if (event.shiftKey && selectionAnchor) {
+    event.preventDefault();
+    const order = visiblePagePaths();
+    const from = order.indexOf(selectionAnchor);
+    const to = order.indexOf(fsPath);
+    if (from !== -1 && to !== -1) {
+      const [lo, hi] = from <= to ? [from, to] : [to, from];
+      // The anchor stays put, so widening and narrowing the range both work
+      // from the same origin — Shift-clicking twice replaces, never accretes.
+      setSelection(order.slice(lo, hi + 1));
+      return;
+    }
+  }
+
+  if (additive) {
+    event.preventDefault();
+    const next = new Set(selectedPaths);
+    if (next.has(fsPath)) next.delete(fsPath);
+    else next.add(fsPath);
+    setSelection(next, fsPath);
+    return;
+  }
+
+  // A plain click is the ordinary one: this page, and open it.
+  selectedPaths = new Set([fsPath]);
+  selectionAnchor = fsPath;
+  openNote(fsPath);
+}
+
+/// Delete every page in `paths`, with a single confirmation.
+async function deleteSelection(paths) {
+  const count = paths.length;
+  if (!count) return;
+  if (!confirm(`Move ${count} notes to the Trash?`)) return;
+
+  let removed = 0;
+  const failed = [];
+  for (const path of paths) {
+    // One at a time, so a single unwritable file does not abandon the rest.
+    if (await window.api.deleteNode(path)) {
+      removed += 1;
+      if (activeNote === path) closeNoteCanvas();
+    } else {
+      failed.push(path);
+    }
+  }
+  clearSelection();
+  await refreshNotebook();
+  if (failed.length) {
+    showToast(`Moved ${removed} to Trash; ${failed.length} could not be moved.`, 'error');
+  } else {
+    showToast(`Moved ${removed} notes to Trash — restore them any time from the Trash button.`);
+  }
+}
+
 // Sidebar notebook tree HTML generator
 function renderSidebarTree() {
   const treeContainer = document.getElementById('notebook-tree');
@@ -503,6 +677,7 @@ function generateTreeHTML(node, depth) {
                ondragstart="handleDragStart(event, ${jsArg(node.fsPath)})"
                ondragover="handleDragOver(event)"
                ondragleave="handleDragLeave(event)"
+               oncontextmenu="showSectionMenu(event, ${jsArg(node.fsPath)}, ${jsArg(node.name)})"
                ondrop="handleDrop(event, ${jsArg(node.fsPath)})">
             <span class="tree-node-chevron ${isExpanded ? '' : 'collapsed'}" onclick="event.stopPropagation(); toggleFolderCollapse(${jsArg(node.relPath)})">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
@@ -515,14 +690,8 @@ function generateTreeHTML(node, depth) {
               <button class="tree-node-btn" onclick="event.stopPropagation(); promptCreatePage(${jsArg(node.fsPath)})" title="New Page">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
               </button>
-              <button class="tree-node-btn" onclick="event.stopPropagation(); promptCreateSection(${jsArg(node.fsPath)})" title="New Subsection">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
-              </button>
-              <button class="tree-node-btn" onclick="event.stopPropagation(); promptRenameNode(${jsArg(node.fsPath)}, ${jsArg(node.name)})" title="Rename">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-              </button>
-              <button class="tree-node-btn" onclick="event.stopPropagation(); deleteNode(${jsArg(node.fsPath)})" title="Delete">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              <button class="tree-node-btn" onclick="showSectionMenu(event, ${jsArg(node.fsPath)}, ${jsArg(node.name)})" title="More section actions">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>
               </button>
             </div>
           </div>
@@ -561,13 +730,15 @@ function generateTreeHTML(node, depth) {
         iconHtml = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-secondary);"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
       }
 
+      const isSelected = selectedPaths.has(page.fsPath);
       html += `
-        <div class="tree-node ${isActive ? 'active' : ''}" style="padding-left: ${(isRoot ? 0 : depth + 1) * 12 + 12}px;"
-             onclick="openNote(${jsArg(page.fsPath)})"
+        <div class="tree-node ${isActive ? 'active' : ''} ${isSelected ? 'selected' : ''}" style="padding-left: ${(isRoot ? 0 : depth + 1) * 12 + 12}px;"
+             onclick="handlePageRowClick(event, ${jsArg(page.fsPath)})"
              draggable="true"
              ondragstart="handleDragStart(event, ${jsArg(page.fsPath)})"
              ondragover="handlePageDragOver(event)"
              ondragleave="handlePageDragLeave(event)"
+             oncontextmenu="showPageMenu(event, ${jsArg(node.fsPath)}, ${jsArg(page.name)}, ${jsArg(page.fsPath)})"
              ondrop="handlePageDrop(event, ${jsArg(node.fsPath)}, ${jsArg(page.name)})">
           <div class="tree-node-content">
             ${iconHtml}
@@ -575,17 +746,8 @@ function generateTreeHTML(node, depth) {
             ${badgeHtml}
           </div>
           <div class="tree-node-actions">
-            <button class="tree-node-btn" onclick="event.stopPropagation(); moveNode(${jsArg(node.fsPath)}, ${jsArg(page.name)}, 'up')" title="Move Up">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>
-            </button>
-            <button class="tree-node-btn" onclick="event.stopPropagation(); moveNode(${jsArg(node.fsPath)}, ${jsArg(page.name)}, 'down')" title="Move Down">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-            </button>
-            <button class="tree-node-btn" onclick="event.stopPropagation(); showPageInfoModal(${jsArg(page.fsPath)})" title="Edit Page Info (title, date, tags)">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-            </button>
-            <button class="tree-node-btn" onclick="event.stopPropagation(); deleteNode(${jsArg(page.fsPath)})" title="Delete">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            <button class="tree-node-btn" onclick="showPageMenu(event, ${jsArg(node.fsPath)}, ${jsArg(page.name)}, ${jsArg(page.fsPath)})" title="Page actions">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>
             </button>
           </div>
         </div>
@@ -848,10 +1010,44 @@ function highlightSnippet(text, ranges) {
   return html;
 }
 
-// Open a note and reveal the given line (best effort: exact caret placement
-// in edit/split; proportional scroll in preview, which has no line anchors)
-async function openNoteAtLine(fsPath, line) {
+// Scroll the preview to the block a source line belongs to, and mark it.
+//
+// `sourceLine` is 1-based, matching the `data-source-line` markdown.js stamps
+// and the way every editor counts. Not every line renders to its own element —
+// a line in the middle of a paragraph, or inside a fence — so this takes the
+// last block that starts at or before the target, which is the block that
+// contains it.
+function scrollPreviewToSourceLine(sourceLine) {
+  const preview = document.getElementById('preview-pane');
+  if (!preview) return false;
+  const target = Math.max(1, parseInt(sourceLine, 10) || 1);
+
+  let best = null;
+  let bestLine = -1;
+  preview.querySelectorAll('[data-source-line]').forEach(el => {
+    const at = parseInt(el.getAttribute('data-source-line'), 10);
+    if (!Number.isFinite(at) || at > target) return;
+    // >= keeps the innermost block when several start on the same line, e.g. a
+    // list item and the paragraph inside it.
+    if (at >= bestLine) { best = el; bestLine = at; }
+  });
+  if (!best) return false;
+
+  const top = best.offsetTop - preview.clientHeight / 3;
+  preview.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+  best.classList.add('line-target');
+  setTimeout(() => best.classList.remove('line-target'), 2200);
+  return true;
+}
+
+// Open a note and reveal a line: exact caret placement in edit/split, and the
+// block that contains it in preview. `line` is 0-based, as the search results
+// that call this count lines.
+async function openNoteAtLine(fsPath, line, options = {}) {
   await openNote(fsPath);
+  if (options.view && options.view !== viewMode) {
+    setViewMode(options.view);
+  }
   const lineIdx = Math.max(0, parseInt(line, 10) || 0);
   if (viewMode === 'edit' || viewMode === 'split') {
     const textarea = document.getElementById('note-editor');
@@ -863,12 +1059,16 @@ async function openNoteAtLine(fsPath, line) {
     textarea.focus();
     textarea.setSelectionRange(offset, offset);
     scrollEditorCaretIntoView(textarea);
-  } else {
-    const preview = document.getElementById('preview-pane');
-    const totalLines = noteContent.split('\n').length || 1;
+  }
+  if (viewMode === 'preview' || viewMode === 'split') {
     // wait one tick for the render queue to finish laying out
     await renderMarkdownPreview();
-    preview.scrollTop = Math.max(0, (lineIdx / totalLines) * preview.scrollHeight - preview.clientHeight / 3);
+    if (!scrollPreviewToSourceLine(lineIdx + 1)) {
+      // Nothing carried a line stamp — an empty note, or a target past the end.
+      const preview = document.getElementById('preview-pane');
+      const totalLines = noteContent.split('\n').length || 1;
+      preview.scrollTop = Math.max(0, (lineIdx / totalLines) * preview.scrollHeight - preview.clientHeight / 3);
+    }
   }
 }
 
@@ -1126,6 +1326,8 @@ async function doRenderMarkdownPreview() {
       }
     });
   });
+
+  wirePreviewLinks(preview);
 
   // Wrap and add copy utilities to code blocks
   preview.querySelectorAll('pre').forEach(preEl => {
@@ -1961,11 +2163,14 @@ function toggleEditorDropdown(id, event) {
   const targetMenu = document.getElementById(id);
   const isActive = targetMenu.classList.contains('active');
   
-  // Close all other menus first
+  // Close all other menus first. stopPropagation() above means the document
+  // listener never gets to dismiss a floating context menu, so close that too —
+  // and note it has no .editor-dropdown wrapper to reach a toggle through.
+  hideTabContextMenu();
   const menus = document.querySelectorAll('.dropdown-menu');
   menus.forEach(menu => {
     menu.classList.remove('active');
-    const toggle = menu.closest('.editor-dropdown').querySelector('.dropdown-toggle');
+    const toggle = menu.closest('.editor-dropdown')?.querySelector('.dropdown-toggle');
     if (toggle) {
       const chev = toggle.querySelector('.chevron');
       if (chev) chev.style.transform = 'rotate(0deg)';
@@ -1974,8 +2179,8 @@ function toggleEditorDropdown(id, event) {
   
   if (!isActive) {
     targetMenu.classList.add('active');
-    const toggleBtn = event.currentTarget;
-    const chev = toggleBtn.querySelector('.chevron');
+    // Callers that open a menu programmatically pass no real click target.
+    const chev = event.currentTarget?.querySelector('.chevron');
     if (chev) chev.style.transform = 'rotate(180deg)';
 
     if (id === 'dropdown-date') {
@@ -2030,6 +2235,12 @@ function initCustomTooltips() {
     if (title && !el.dataset.tooltipBound) {
       el.dataset.tooltip = title;
       el.dataset.tooltipBound = 'true'; // this runs after every render; bind each element once
+      // `title` is what gives an icon-only button its accessible name, and
+      // removing it would leave a screen reader announcing "button". Hand the
+      // name to aria-label before taking the attribute away.
+      if (!el.hasAttribute('aria-label') && !el.textContent.trim()) {
+        el.setAttribute('aria-label', title);
+      }
       el.removeAttribute('title'); // hide default system tooltip
 
       el.addEventListener('mouseenter', () => {
@@ -2432,14 +2643,14 @@ function toggleRightDrawer() {
 }
 
 // The drawer hosts two views — the note outline and the search results —
-// switched by the segmented control in its header.
+// picked by the two toolbar icons. The header just labels the current one.
 let drawerTab = localStorage.getItem('mdnb-drawer-tab') === 'search' ? 'search' : 'outline';
 
 function setDrawerTab(name) {
   drawerTab = name === 'search' ? 'search' : 'outline';
   try { localStorage.setItem('mdnb-drawer-tab', drawerTab); } catch {}
-  document.getElementById('drawer-tab-outline').classList.toggle('active', drawerTab === 'outline');
-  document.getElementById('drawer-tab-search').classList.toggle('active', drawerTab === 'search');
+  const title = document.getElementById('drawer-title');
+  if (title) title.textContent = drawerTab === 'search' ? 'Search' : 'Outline';
   document.getElementById('drawer-outline-view').style.display = drawerTab === 'outline' ? 'block' : 'none';
   document.getElementById('drawer-search-view').style.display = drawerTab === 'search' ? 'block' : 'none';
   if (drawerTab === 'outline') updateOutlineAndBacklinks();
@@ -2782,29 +2993,44 @@ function collectModalMeta() {
   return { created, tags };
 }
 
-function populateDestinationDropdown(destDir) {
-  const select = document.getElementById('create-modal-dest');
+// Fill a <select> with every section in the notebook.
+//
+// Each option carries its whole chain — "Claims › Projects", not "↳ Projects".
+// Two sections can share a name under different parents, and a bare leaf name
+// gives you no way to tell which one you are about to write into. Indentation
+// alone did not solve it either: a <select> collapses leading whitespace, and
+// even where it renders, the closed control shows one row with no ancestors.
+function fillSectionSelect(select, destDir) {
   select.innerHTML = '';
-  
+
   const rootOpt = document.createElement('option');
   rootOpt.value = notebookRoot;
   rootOpt.innerText = 'Notebook Root';
   select.appendChild(rootOpt);
 
-  const addFolders = (node, depth = 0) => {
+  const addFolders = (node, trail) => {
     if (!node || !node.sections) return;
     node.sections.forEach(sec => {
+      const chain = trail.concat(sec.name);
       const opt = document.createElement('option');
       opt.value = sec.fsPath;
-      opt.innerText = ' '.repeat((depth + 1) * 2) + '↳ ' + sec.name;
+      opt.innerText = chain.join(' › ');
+      opt.title = opt.innerText;
       select.appendChild(opt);
-      addFolders(sec, depth + 1);
+      addFolders(sec, chain);
     });
   };
 
-  if (treeData) addFolders(treeData);
-  
+  if (treeData) addFolders(treeData, []);
+
   select.value = destDir || notebookRoot;
+  // A path that is no longer in the tree would silently leave the first option
+  // selected, quietly retargeting the write at the notebook root.
+  if (!select.value) select.value = notebookRoot;
+}
+
+function populateDestinationDropdown(destDir) {
+  fillSectionSelect(document.getElementById('create-modal-dest'), destDir);
 }
 
 // New note popup creation
@@ -3525,6 +3751,56 @@ function taskBoardOpenNote(card) {
   openNote(card.dataset.fspath);
 }
 
+function wirePreviewLinks(preview) {
+  // Every link in a note is handed to the system rather than followed here.
+  //
+  // WebView2 does not act on `target="_blank"` by itself, so a web link did
+  // nothing at all when clicked — the address was right, but nothing opened it.
+  // A `file:` link is worse than useless followed in place: the webview would
+  // navigate the app itself to the document, with no way back.
+  //
+  // Relative links resolve against the note's own folder, so
+  // `[Spec](../docs/spec.pdf)` works from wherever the note lives, and one
+  // pointing at another note opens in the app instead of leaving it.
+  preview.querySelectorAll('a[href]').forEach(link => {
+    if (link.classList.contains('wiki-link') || link.classList.contains('task-checkbox-link')) {
+      return; // these have handlers of their own
+    }
+    const raw = link.getAttribute('href') || '';
+    // In-page heading anchors keep the browser's own behaviour.
+    if (!raw || raw.startsWith('#')) return;
+
+    link.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const path = raw.split(/[?#]/)[0];
+      const isWindowsPath = /^[a-zA-Z]:[\\/]/.test(raw);
+      const isAbsolute = isWindowsPath || raw.startsWith('/') || raw.startsWith('\\\\');
+      // A drive letter looks like a scheme but is not one.
+      const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw) && !isWindowsPath;
+      const noteDir = activeNote ? pathDirname(activeNote) : notebookRoot;
+
+      // A relative link to another note stays inside the app.
+      if (!hasScheme && !isAbsolute && /\.md$/i.test(path)) {
+        await openNote(window.NotebookMarkdown.resolvePath(noteDir, decodeURI(path)));
+        return;
+      }
+
+      const target = hasScheme || isAbsolute
+        ? raw
+        : window.NotebookMarkdown.resolvePath(noteDir, decodeURI(raw));
+
+      try {
+        const ok = await window.api.openExternal(target);
+        if (ok === false) showToast('Nothing could open that link.', 'error');
+      } catch (err) {
+        showToast(`Could not open the link: ${err}`, 'error');
+      }
+    });
+  });
+}
+
 // --- IMAGE LIGHTBOX ----------------------------------------------------------
 function wirePreviewImages(preview) {
   preview.querySelectorAll('img').forEach(img => {
@@ -3916,6 +4192,13 @@ async function savePageInfo() {
 
 // Delete note node dialog (soft delete: items go to the notebook trash)
 async function deleteNode(fsPath) {
+  // Deleting a row inside a multi-selection deletes all of it, with one prompt.
+  const batch = selectionFor(fsPath);
+  if (batch.length > 1) {
+    await deleteSelection(batch);
+    return;
+  }
+
   const isDir = fsPath && !fsPath.endsWith('.md');
   const confirmMsg = isDir
     ? 'Move this section folder and everything inside it to the Trash?'
@@ -3928,7 +4211,7 @@ async function deleteNode(fsPath) {
         closeNoteCanvas();
       }
       await refreshNotebook();
-      showToast('Moved to Trash — restore it any time from File Actions → Trash.');
+      showToast('Moved to Trash — restore it any time from the Trash button below the notebook tree.');
     }
   }
 }
@@ -3974,6 +4257,273 @@ function importFromClipboard() {
 
   document.getElementById('create-modal').classList.add('active');
   setTimeout(() => document.getElementById('create-modal-name').focus(), 100);
+}
+
+// ==========================================
+// OneNote import
+// ==========================================
+
+// The hierarchy fetched from OneNote, kept while the modal is open.
+let oneNoteBooks = [];
+
+function fillOneNoteDestinations(destDir) {
+  fillSectionSelect(document.getElementById('onenote-dest'), destDir);
+}
+
+async function openOneNoteImport() {
+  if (!notebookRoot) {
+    alert('Open a notebook first.');
+    return;
+  }
+  const modal = document.getElementById('onenote-modal');
+  const status = document.getElementById('onenote-status');
+  const tree = document.getElementById('onenote-tree');
+  const importBtn = document.getElementById('onenote-import-btn');
+
+  // Failures here are prose, not a one-liner — mark them so they read as a
+  // problem rather than as another progress message.
+  const setStatus = (text, isError) => {
+    status.innerText = text;
+    status.classList.toggle('is-error', !!isError);
+    // A failure is where the check earns its place; offer it then, not before.
+    document.getElementById('onenote-diag-actions').style.display = isError ? 'block' : 'none';
+  };
+
+  oneNoteBooks = [];
+  tree.innerHTML = '';
+  oneNoteDiagFindings = [];
+  document.getElementById('onenote-diag').style.display = 'none';
+  status.style.display = 'block';
+  setStatus('Looking for OneNote…', false);
+  importBtn.disabled = true;
+  fillOneNoteDestinations(activeNote ? pathDirname(activeNote) : notebookRoot);
+  modal.classList.add('active');
+
+  const probe = await window.api.oneNoteProbe();
+  if (!probe.available) {
+    setStatus(probe.reason ||
+      'OneNote desktop was not found. This needs OneNote 2016 or the Microsoft 365 desktop app — the Store version has no automation interface.', true);
+    return;
+  }
+
+  try {
+    setStatus('Reading your notebooks…', false);
+    oneNoteBooks = await window.api.oneNoteNotebooks();
+  } catch (err) {
+    setStatus(String(err && err.message ? err.message : err), true);
+    return;
+  }
+
+  if (!oneNoteBooks.length) {
+    setStatus('OneNote has no notebooks open.', false);
+    return;
+  }
+  status.style.display = 'none';
+  importBtn.disabled = false;
+  renderOneNoteTree();
+}
+
+// A flat list of rows (notebook / section / page) with checkboxes. Ticking a
+// notebook or section ticks everything beneath it.
+function renderOneNoteTree() {
+  const tree = document.getElementById('onenote-tree');
+  tree.innerHTML = '';
+
+  oneNoteBooks.forEach((book, bookIndex) => {
+    tree.appendChild(oneNoteRow({
+      label: book.name,
+      depth: 0,
+      bold: true,
+      dataset: { book: String(bookIndex) },
+    }));
+
+    book.sections.forEach((section, sectionIndex) => {
+      const path = [section.name];
+      const label = section.groupPath.length
+        ? `${section.groupPath.join(' / ')} / ${section.name}`
+        : section.name;
+      tree.appendChild(oneNoteRow({
+        label: `${label}  (${section.pages.length})`,
+        depth: 1,
+        dataset: { book: String(bookIndex), section: String(sectionIndex) },
+      }));
+
+      section.pages.forEach((page, pageIndex) => {
+        tree.appendChild(oneNoteRow({
+          // OneNote sub-pages are indented one further, as they are in OneNote
+          label: page.name,
+          depth: 1 + Math.min(page.level, 3),
+          dataset: {
+            book: String(bookIndex),
+            section: String(sectionIndex),
+            page: String(pageIndex),
+          },
+        }));
+        void path;
+      });
+    });
+  });
+}
+
+function oneNoteRow({ label, depth, bold, dataset }) {
+  const row = document.createElement('label');
+  row.className = 'template-row';
+  row.style.paddingLeft = `${8 + depth * 18}px`;
+  row.style.display = 'flex';
+  row.style.alignItems = 'center';
+  row.style.gap = '8px';
+  row.style.cursor = 'pointer';
+
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  box.className = 'onenote-check';
+  Object.entries(dataset).forEach(([key, value]) => { box.dataset[key] = value; });
+  box.addEventListener('change', () => cascadeOneNoteCheck(box));
+
+  const text = document.createElement('span');
+  text.innerText = label;
+  if (bold) text.style.fontWeight = '600';
+
+  row.appendChild(box);
+  row.appendChild(text);
+  return row;
+}
+
+// Ticking a parent ticks its descendants; the parent is a pure convenience
+// control, so only page rows are read back when importing.
+function cascadeOneNoteCheck(source) {
+  const { book, section, page } = source.dataset;
+  if (page !== undefined) return;
+  document.querySelectorAll('.onenote-check').forEach(box => {
+    if (box === source) return;
+    if (box.dataset.book !== book) return;
+    if (section !== undefined && box.dataset.section !== section) return;
+    box.checked = source.checked;
+  });
+}
+
+function selectedOneNotePages() {
+  const items = [];
+  document.querySelectorAll('.onenote-check').forEach(box => {
+    if (!box.checked || box.dataset.page === undefined) return;
+    const book = oneNoteBooks[Number(box.dataset.book)];
+    const section = book && book.sections[Number(box.dataset.section)];
+    const page = section && section.pages[Number(box.dataset.page)];
+    if (!page) return;
+    // Flat by default: every page becomes a note directly in the section that
+    // was picked. Recreating OneNote's folders on top of a destination the
+    // user already chose is what made an import land somewhere unexpected.
+    // Same-named pages are safe — the writer gives each a unique filename.
+    //
+    // Ticking the box rebuilds OneNote's own structure instead: the notebook,
+    // then any section groups, then the section.
+    const keep = document.getElementById('onenote-keep-structure');
+    const sectionPath = keep && keep.checked
+      ? [book.name, ...section.groupPath, section.name]
+      : [];
+    items.push({ id: page.id, name: page.name, sectionPath });
+  });
+  return items;
+}
+
+async function runOneNoteImport() {
+  const items = selectedOneNotePages();
+  if (!items.length) {
+    alert('Tick at least one page to import.');
+    return;
+  }
+
+  const dest = document.getElementById('onenote-dest').value || notebookRoot;
+  const label = document.getElementById('onenote-progress-label');
+  const fill = document.getElementById('onenote-progress-fill');
+
+  // The picker has done its job — swap it for the import's own screen rather
+  // than leaving a wall of ticked checkboxes behind a progress line.
+  hideOneNoteModal();
+  document.getElementById('onenote-progress-modal').classList.add('active');
+  label.innerText = `Preparing ${items.length} page${items.length === 1 ? '' : 's'}…`;
+  fill.style.width = '0%';
+
+  const stopProgress = window.api.onOneNoteImportProgress(({ done, total, name }) => {
+    label.innerText = name
+      ? `Page ${done + 1} of ${total} — ${name}`
+      : `Finishing ${total} page${total === 1 ? '' : 's'}…`;
+    fill.style.width = `${total ? Math.round((done / total) * 100) : 0}%`;
+  });
+
+  try {
+    const result = await window.api.oneNoteImport(items, dest);
+    fill.style.width = '100%';
+    label.innerText = 'Rebuilding the notebook…';
+    await refreshNotebook();
+    if (result.firstPath) await openNote(result.firstPath);
+
+    const failed = result.failures || [];
+    if (failed.length) {
+      const detail = failed.slice(0, 5).map(f => `• ${f.name}: ${f.reason}`).join('\n');
+      const more = failed.length > 5 ? `\n…and ${failed.length - 5} more.` : '';
+      alert(`Imported ${result.imported} page${result.imported === 1 ? '' : 's'}.\n\n${failed.length} could not be imported:\n${detail}${more}`);
+    } else {
+      showToast(`Imported ${result.imported} page${result.imported === 1 ? '' : 's'} from OneNote.`);
+    }
+  } catch (err) {
+    alert(`OneNote import failed: ${err}`);
+  } finally {
+    stopProgress();
+    document.getElementById('onenote-progress-modal').classList.remove('active');
+    document.getElementById('onenote-import-btn').disabled = false;
+  }
+}
+
+// The findings of the last diagnostics run, kept so Copy can rebuild the text.
+let oneNoteDiagFindings = [];
+
+async function runOneNoteDiagnostics() {
+  const rows = document.getElementById('onenote-diag-rows');
+  const panel = document.getElementById('onenote-diag');
+  if (!rows || !panel) return;
+  rows.innerHTML = '<tr><td colspan="2">Checking…</td></tr>';
+  panel.style.display = 'block';
+
+  try {
+    oneNoteDiagFindings = await window.api.oneNoteDiagnostics();
+  } catch (err) {
+    oneNoteDiagFindings = [{ label: 'Check failed', value: String(err), problem: true }];
+  }
+
+  rows.innerHTML = '';
+  for (const finding of oneNoteDiagFindings) {
+    const tr = document.createElement('tr');
+    if (finding.problem) tr.className = 'is-problem';
+    const label = document.createElement('td');
+    label.textContent = finding.label;
+    const value = document.createElement('td');
+    value.textContent = finding.value;
+    tr.append(label, value);
+    rows.appendChild(tr);
+  }
+}
+
+function oneNoteDiagnosticsText() {
+  return oneNoteDiagFindings
+    .map(f => `${f.problem ? '[!] ' : '    '}${f.label}: ${f.value}`)
+    .join('\n');
+}
+
+async function copyOneNoteDiagnostics() {
+  const text = oneNoteDiagnosticsText();
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast('Report copied.', 'success');
+  } catch {
+    showToast('Could not copy — select the text and copy it by hand.', 'error');
+  }
+}
+
+function hideOneNoteModal() {
+  document.getElementById('onenote-modal').classList.remove('active');
+  oneNoteBooks = [];
 }
 
 async function importDocFile() {
@@ -4723,9 +5273,11 @@ async function cyclePageWidth() {
 
 function toggleAutoSave(value) {
   autoSaveEnabled = value;
-  document.getElementById('header-autosave').checked = value;
-  document.getElementById('settings-autosave').checked = value;
-  
+  // Settings owns the visible control now, so keep its box in step for when the
+  // modal is next opened (the palette can flip this while the modal is closed).
+  const box = document.getElementById('settings-autosave');
+  if (box) box.checked = value;
+
   if (appSettings) {
     appSettings.autoSaveEnabled = value;
     window.api.saveSettings(appSettings);
@@ -4930,13 +5482,7 @@ function handlePaletteSearch() {
   const commands = [
     { label: 'Create New Page', subtitle: 'Action: /new', action: () => promptCreatePage(notebookRoot) },
     { label: 'Create New Section', subtitle: 'Action: /section', action: () => promptCreateSection(notebookRoot) },
-    { label: 'Toggle Auto-Save Mode', subtitle: 'Action: /autosave', action: () => {
-      const chk = document.getElementById('header-autosave');
-      if (chk) {
-        chk.checked = !chk.checked;
-        toggleAutoSave(chk.checked);
-      }
-    }},
+    { label: 'Toggle Auto-Save Mode', subtitle: 'Action: /autosave', action: () => toggleAutoSave(!autoSaveEnabled) },
     { label: 'Cycle Page Width Layout (Standard / Wide / Full)', subtitle: 'Action: /wide', action: () => cyclePageWidth() },
     { label: 'Toggle Rendered Preview Pane', subtitle: 'Action: /preview', action: () => setViewMode('preview') },
     { label: 'Toggle Raw Source Editor', subtitle: 'Action: /edit', action: () => setViewMode('edit') },
@@ -5207,33 +5753,32 @@ async function closeTabsWhere(predicate, keep) {
   persistTabs();
 }
 
-// Right-click menu on a tab: close / close others / close left / close right
+// One floating menu serves the tab strip and the notebook tree. Only one can be
+// open at a time, so it keeps the single id the dismissal listeners watch for.
 function hideTabContextMenu() {
   const menu = document.getElementById('tab-context-menu');
   if (menu) menu.remove();
 }
 
-function showTabContextMenu(e, fsPath) {
+// `items` are { label, enabled, action }; a falsy entry draws a separator.
+function showContextMenu(e, items) {
   e.preventDefault();
   e.stopPropagation();
   hideTabContextMenu();
-  const idx = openTabs.indexOf(fsPath);
-  if (idx === -1) return;
-
-  const items = [
-    { label: 'Close Tab', enabled: true, action: () => closeTab(fsPath) },
-    { label: 'Close Other Tabs', enabled: openTabs.length > 1, action: () => closeTabsWhere(p => p !== fsPath, fsPath) },
-    { label: 'Close Tabs to the Left', enabled: idx > 0, action: () => closeTabsWhere((p, i) => i < idx, fsPath) },
-    { label: 'Close Tabs to the Right', enabled: idx < openTabs.length - 1, action: () => closeTabsWhere((p, i) => i > idx, fsPath) },
-    { label: 'Close All Tabs', enabled: openTabs.length > 0, action: () => closeTabsWhere(() => true, null) },
-  ];
+  if (!items.some(Boolean)) return;
 
   const menu = document.createElement('div');
   menu.id = 'tab-context-menu';
   menu.className = 'dropdown-menu glass-card tab-context-menu';
   for (const item of items) {
+    if (!item) {
+      menu.appendChild(Object.assign(document.createElement('div'), { className: 'dropdown-divider' }));
+      continue;
+    }
     const el = document.createElement('div');
-    el.className = 'dropdown-item' + (item.enabled ? '' : ' disabled');
+    el.className = 'dropdown-item'
+      + (item.enabled ? '' : ' disabled')
+      + (item.danger ? ' danger' : '');
     el.textContent = item.label;
     if (item.enabled) {
       el.addEventListener('click', () => {
@@ -5249,6 +5794,63 @@ function showTabContextMenu(e, fsPath) {
   const rect = menu.getBoundingClientRect();
   menu.style.left = `${Math.max(4, Math.min(e.clientX, window.innerWidth - rect.width - 8))}px`;
   menu.style.top = `${Math.max(4, Math.min(e.clientY, window.innerHeight - rect.height - 8))}px`;
+}
+
+// Right-click menu on a tab: close / close others / close left / close right
+function showTabContextMenu(e, fsPath) {
+  const idx = openTabs.indexOf(fsPath);
+  if (idx === -1) return;
+  showContextMenu(e, [
+    { label: 'Close Tab', enabled: true, action: () => closeTab(fsPath) },
+    { label: 'Close Other Tabs', enabled: openTabs.length > 1, action: () => closeTabsWhere(p => p !== fsPath, fsPath) },
+    { label: 'Close Tabs to the Left', enabled: idx > 0, action: () => closeTabsWhere((p, i) => i < idx, fsPath) },
+    { label: 'Close Tabs to the Right', enabled: idx < openTabs.length - 1, action: () => closeTabsWhere((p, i) => i > idx, fsPath) },
+    { label: 'Close All Tabs', enabled: openTabs.length > 0, action: () => closeTabsWhere(() => true, null) },
+  ]);
+}
+
+// Tree rows used to carry four hover buttons each. The row now shows the one
+// action it is really for, and everything else lives here — reachable by
+// right-click anywhere on the row or from the row's "..." button.
+function showSectionMenu(e, fsPath, name) {
+  showContextMenu(e, [
+    { label: 'New Page', enabled: true, action: () => promptCreatePage(fsPath) },
+    { label: 'New Subsection', enabled: true, action: () => promptCreateSection(fsPath) },
+    null,
+    { label: 'Rename…', enabled: true, action: () => promptRenameNode(fsPath, name) },
+    { label: 'Delete Section', enabled: true, danger: true, action: () => deleteNode(fsPath) },
+  ]);
+}
+
+function showPageMenu(e, sectionPath, pageName, pageFsPath) {
+  const batch = selectionFor(pageFsPath);
+  // Right-clicking inside a multi-selection acts on all of it, so the menu
+  // has to say so — silently deleting eight notes from a menu that said
+  // "Delete Page" would be a nasty surprise.
+  if (batch.length > 1) {
+    showContextMenu(e, [
+      { label: `${batch.length} notes selected`, enabled: false, action: () => {} },
+      null,
+      { label: 'Clear Selection', enabled: true, action: () => clearSelection() },
+      null,
+      {
+        label: `Delete ${batch.length} Notes`,
+        enabled: true,
+        danger: true,
+        action: () => deleteSelection(batch),
+      },
+    ]);
+    return;
+  }
+
+  showContextMenu(e, [
+    { label: 'Page Info…', enabled: true, action: () => showPageInfoModal(pageFsPath) },
+    null,
+    { label: 'Move Up', enabled: true, action: () => moveNode(sectionPath, pageName, 'up') },
+    { label: 'Move Down', enabled: true, action: () => moveNode(sectionPath, pageName, 'down') },
+    null,
+    { label: 'Delete Page', enabled: true, danger: true, action: () => deleteNode(pageFsPath) },
+  ]);
 }
 
 async function closeTab(fsPath) {
@@ -6472,11 +7074,21 @@ function insertBuilderDiagram() {
 
 // --- Drag & Drop Handlers ---
 let dragSourcePath = null;
+// Every path the current drag carries — one row, or a whole selection.
+let dragSourcePaths = [];
 
 function handleDragStart(e, fsPath) {
   dragSourcePath = fsPath;
+  // Dragging a row inside a multi-selection drags all of it; dragging one
+  // outside collapses the selection onto it first, as Explorer does.
+  dragSourcePaths = selectionFor(fsPath);
+  if (/\.md$/i.test(fsPath) && !selectedPaths.has(fsPath)) {
+    selectedPaths = new Set([fsPath]);
+    selectionAnchor = fsPath;
+    renderSidebarTree();
+  }
   e.dataTransfer.effectAllowed = 'move';
-  e.dataTransfer.setData('text/plain', fsPath);
+  e.dataTransfer.setData('text/plain', dragSourcePaths.join('\n'));
   e.stopPropagation();
 }
 
@@ -6506,15 +7118,21 @@ async function handleDrop(e, targetFsPath) {
     node.classList.remove('drag-over');
   }
   
-  const srcPath = dragSourcePath;
-  if (!srcPath || !targetFsPath || srcPath === targetFsPath) return;
+  const sources = (dragSourcePaths.length ? dragSourcePaths : [dragSourcePath])
+    .filter(p => p && p !== targetFsPath);
+  if (!sources.length || !targetFsPath) return;
 
-  const success = await window.api.relocateNode(srcPath, targetFsPath);
-  if (success) {
-    await refreshNotebook();
-    if (activeNote === srcPath) {
-      closeNoteCanvas();
+  let moved = 0;
+  for (const srcPath of sources) {
+    if (await window.api.relocateNode(srcPath, targetFsPath)) {
+      moved += 1;
+      if (activeNote === srcPath) closeNoteCanvas();
     }
+  }
+  if (moved) {
+    clearSelection();
+    await refreshNotebook();
+    if (sources.length > 1) showToast(`Moved ${moved} notes.`);
   }
 }
 
@@ -6559,7 +7177,6 @@ async function handlePageDrop(e, dirPath, targetName) {
   const srcPath = dragSourcePath;
   if (!srcPath) return;
   const srcDir = nodeParentDir(srcPath);
-  const srcName = srcPath.slice(srcDir.length + 1);
 
   if (!/\.md$/i.test(srcPath)) {
     // A section dropped onto a page row: move it into that page's folder
@@ -6570,24 +7187,45 @@ async function handlePageDrop(e, dirPath, targetName) {
     return;
   }
 
-  if (srcDir === dirPath) {
-    // Same section: rewrite the order file with the page in its new slot
-    if (srcName.toLowerCase() === targetName.toLowerCase()) return;
+  const dragged = (dragSourcePaths.length ? dragSourcePaths : [srcPath])
+    .filter(p => /\.md$/i.test(p));
+  const sameSection = dragged.filter(p => nodeParentDir(p) === dirPath);
+  const fromElsewhere = dragged.filter(p => nodeParentDir(p) !== dirPath);
+
+  // Pages already in this section are reordered; the rest are moved in. A
+  // mixed selection does both, which is the only reading that loses nothing.
+  if (sameSection.length) {
     const section = findSectionByFsPath(treeData, dirPath);
-    if (!section) return;
-    const ord = section.pages.map(p => p.name).filter(n => n.toLowerCase() !== srcName.toLowerCase());
-    let ti = ord.findIndex(n => n.toLowerCase() === targetName.toLowerCase());
-    if (ti === -1) return;
-    if (!before) ti += 1;
-    ord.splice(ti, 0, srcName);
-    const ok = await window.api.setNodeOrder(dirPath, ord);
-    if (ok) await refreshNotebook();
-  } else {
-    // Different section: move the page there (lands at the default position)
-    const ok = await window.api.relocateNode(srcPath, dirPath);
-    if (ok) {
-      await refreshNotebook();
-      if (activeNote === srcPath) closeNoteCanvas();
+    if (section) {
+      const names = sameSection.map(p => p.slice(nodeParentDir(p).length + 1));
+      const lower = new Set(names.map(n => n.toLowerCase()));
+      // Dropping a block onto one of its own members is a no-op, not a
+      // rearrangement of the block around itself.
+      if (!lower.has(targetName.toLowerCase())) {
+        const ord = section.pages
+          .map(p => p.name)
+          .filter(n => !lower.has(n.toLowerCase()));
+        let ti = ord.findIndex(n => n.toLowerCase() === targetName.toLowerCase());
+        if (ti !== -1) {
+          if (!before) ti += 1;
+          // Insert in tree order, so a multi-page drag keeps its shape.
+          ord.splice(ti, 0, ...names);
+          await window.api.setNodeOrder(dirPath, ord);
+        }
+      }
     }
+  }
+
+  let moved = 0;
+  for (const path of fromElsewhere) {
+    if (await window.api.relocateNode(path, dirPath)) {
+      moved += 1;
+      if (activeNote === path) closeNoteCanvas();
+    }
+  }
+
+  if (sameSection.length || moved) {
+    clearSelection();
+    await refreshNotebook();
   }
 }

@@ -72,6 +72,15 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
       kind: 'page', name: 'xss.md', fsPath: '/nb/xss.md', relPath: 'xss.md',
       title: xssTitle, created: '2026-07-01', tags: ['<img src=x onerror=window.__xss4=1>'], pinned: false,
       openTasks: 0, completedTasks: 0, taskLines: [],
+    }, {
+      kind: 'page', name: 'links.md', fsPath: '/nb/links.md', relPath: 'links.md',
+      title: 'Links', created: '2026-07-06', tags: [], pinned: false,
+      openTasks: 0, completedTasks: 0, taskLines: [],
+    }, {
+      kind: 'page', name: 'deep.md', fsPath: '/nb/deep.md', relPath: 'deep.md',
+      // Task counts stay zero: the notebook metrics checks assert exact totals.
+      title: 'Deep Link', created: '2026-07-05', tags: [], pinned: false,
+      openTasks: 0, completedTasks: 0, taskLines: [],
     }],
     sections: [{
       kind: 'section', name: 'Projects', fsPath: '/nb/Projects', relPath: 'Projects',
@@ -90,6 +99,23 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
     '/nb/smoke.md': noteMd,
     '/nb/Projects/alpha.md': '# Alpha\n\n- [ ] task\n- [x] done\n',
     '/nb/xss.md': '# x\n',
+    // Line numbers are load-bearing here — see the deep-link section.
+    // 1 --- / 2 title / 3 --- / 4 blank / 5 # Deep / 6 blank / 7 First para.
+    // 8 blank / 9 ## Second / 10 blank / 11 - [ ] find me / 12 - [x] done
+    '/nb/links.md': [
+      '# Links',
+      '',
+      '- [The spec](file:///C:/docs/spec.pdf)',
+      '- [Our website](https://example.com)',
+      '- [Nearby doc](docs/report.pdf)',
+      '- [Another note](smoke.md)',
+      '',
+    ].join('\n'),
+    '/nb/deep.md': [
+      '---', 'title: Deep Link', '---', '',
+      '# Deep', '', 'First para.', '', '## Second', '',
+      '- [ ] find me', '- [x] done', '',
+    ].join('\n'),
   };
 
   // Instrumentation the test reads back
@@ -139,7 +165,7 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
     text.split('\n').forEach((ln, idx) => {
       const t = ln.match(taskRe);
       if (t) {
-        html += `<div><a href="#" class="task-checkbox-link" data-line="${idx}">` +
+        html += `<div data-source-line="${idx + 1}"><a href="#" class="task-checkbox-link" data-line="${idx}">` +
           `<input class="task-checkbox" type="checkbox"${t[1].toLowerCase() === 'x' ? ' checked' : ''}></a>${esc(t[2])}</div>`;
       }
     });
@@ -199,9 +225,9 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
     setSectionMeta: async (dir, desc) => { window.__sectionMeta = { dir, desc }; return true; },
     checkForUpdates: async () => (window.__updateResult || { status: 'current', version: '1.0.0' }),
     getAppVersion: async () => '1.0.0',
-    deleteNode: async () => true,
+    deleteNode: async (p) => { (window.__deleted = window.__deleted || []).push(p); return true; },
     renameNode: async () => true,
-    relocateNode: async (src, dest) => { window.__relocateCall = { src, dest }; return true; },
+    relocateNode: async (src, dest) => { window.__relocateCall = { src, dest }; (window.__relocated = window.__relocated || []).push([src, dest]); return true; },
     moveNode: async () => true,
     readScratchpad: async () => '',
     appendScratchpad: async () => true,
@@ -236,12 +262,14 @@ await page.addInitScript(({ noteMd, platform, xssTitle }) => {
       return ['/nb/Projects/alpha.md'];
     },
     onFilesChanged: (cb) => { window.__filesCb = cb; return () => {}; },
+    onOpenNoteAt: (cb) => { window.__openAtCb = cb; return () => {}; },
+    takePendingOpen: async () => (window.__pendingOpen || null),
     toggleTaskAtLine: async (p, line) => {
       (window.__toggleCalls = window.__toggleCalls || []).push([p, line]);
       return true;
     },
     toggleMermaidOrientation: () => {},
-    openExternal: async () => true,
+    openExternal: async (u) => { (window.__opened = window.__opened || []).push(u); return true; },
     resolveRelativePath: (base, rel) => rel,
     renderMarkdown: (text, opts) => renderMarkdown(text),
   };
@@ -266,6 +294,71 @@ check('XSS tree title renders literally in sidebar', await page.evaluate(() => {
   const labels = Array.from(document.querySelectorAll('#notebook-tree .tree-node-label'));
   return labels.some(l => l.textContent === '<img src=x onerror=window.__xss=1>') &&
     document.querySelectorAll('#notebook-tree img').length === 0;
+}));
+
+// --- 1b. Toolbar layout: importing lives in the sidebar with the other
+// "add to the notebook" actions; exporting acts on the open note. These are
+// assertions about the static markup, so they run before the suite starts
+// opening modals and swapping views. ---
+check('Export menu lists the sharing entries', await page.evaluate(() => {
+  const items = Array.from(document.querySelectorAll('#dropdown-export .dropdown-item'))
+    .map(d => d.textContent.replace(/\s+/g, ' ').trim());
+  return ['PDF', 'HTML', 'Word (.docx)', 'Copy as Rich Text']
+    .every(t => items.some(i => i.startsWith(t)));
+}));
+check('Import menu lives in the sidebar and lists its sources', await page.evaluate(() => {
+  const menu = document.querySelector('#dropdown-import');
+  if (!menu || !menu.closest('#sidebar')) return false;
+  const items = Array.from(menu.querySelectorAll('.dropdown-item'))
+    .map(d => d.textContent.replace(/\s+/g, ' ').trim());
+  return ['From Clipboard', 'From a File…', 'From OneNote…']
+    .every(t => items.some(i => i.startsWith(t)));
+}));
+check('the import file types are discoverable on hover', await page.evaluate(() => {
+  const item = Array.from(document.querySelectorAll('#dropdown-import .dropdown-item'))
+    .find(d => d.textContent.includes('From a File'));
+  // The app moves title into data-tooltip and removes title, so it can draw
+  // its own tooltip rather than the OS one.
+  const hint = item && (item.dataset.tooltip || item.getAttribute('title'));
+  return !!hint && ['Word', 'PowerPoint', 'Excel', 'OneNote', 'EPUB'].every(f => hint.includes(f));
+}));
+check('no Pandoc jargon in the UI outside settings', await page.evaluate(() => {
+  const toolbarAndSidebar = [
+    ...document.querySelectorAll('#sidebar, .toolbar'),
+  ].map(el => `${el.innerHTML}`).join(' ');
+  return !/pandoc/i.test(toolbarAndSidebar);
+}));
+// Going icon-only removed the visible labels, so the tooltip text is now the
+// only accessible name these controls have — and the tooltip system *removes*
+// the title attribute it reads from. Without the aria-label handoff a screen
+// reader announces bare "button" for most of the toolbar.
+check('every icon-only control keeps an accessible name', await page.evaluate(() => {
+  const unnamed = Array.from(document.querySelectorAll('.icon-btn, .toolbar-btn, .dropdown-toggle'))
+    .filter(el => el.offsetParent !== null)
+    .filter(el => !el.textContent.trim()
+      && !el.getAttribute('aria-label')
+      && !el.getAttribute('title'));
+  return unnamed.length === 0;
+}));
+
+// The toolbar carries twenty-odd controls; at 1280 wide they used to run off
+// the edge of the screen, taking Settings and Search with them.
+check('the toolbar never clips its controls', await page.evaluate(() => {
+  const toolbar = document.querySelector('.toolbar');
+  const overflow = toolbar.scrollWidth - toolbar.clientWidth;
+  const offscreen = Array.from(toolbar.querySelectorAll('button'))
+    .filter(b => b.offsetParent !== null)
+    .some(b => b.getBoundingClientRect().right > window.innerWidth + 1);
+  return overflow <= 1 && !offscreen;
+}));
+
+check('Trash and Note History moved out of the old menu', await page.evaluate(() => {
+  const gone = !document.querySelector('#dropdown-file-actions');
+  const trashInSidebar = Array.from(document.querySelectorAll('#sidebar button'))
+    .some(b => b.textContent.trim() === 'Trash');
+  const historyInToolbar = Array.from(document.querySelectorAll('.toolbar button'))
+    .some(b => (b.dataset.tooltip || b.getAttribute('title') || '').startsWith('Note History'));
+  return gone && trashInSidebar && historyInToolbar;
 }));
 
 // --- 2. Sidebar collapse / expand ---
@@ -489,7 +582,7 @@ await page.locator('[data-tooltip="Zoom In Preview"]').click();
 check('preview zoom label updates', (await page.locator('#label-preview-zoom').innerText()) === '110%');
 
 // --- 9. Templates modal ---
-await page.locator('.sidebar-footer .btn').click();
+await page.locator('.sidebar-footer .btn[onclick*="showTemplatesModal"]').click();
 await page.waitForTimeout(300);
 check('templates modal opens', await page.evaluate(() => document.getElementById('templates-modal').classList.contains('active')));
 check('templates listed', await page.locator('#templates-list .template-item').count() === 2);
@@ -725,7 +818,8 @@ await page.locator('.logo-area').click(); // Notebook Dashboard (root landing)
 await page.waitForTimeout(500);
 check('root landing opens', await page.locator('#landing-workspace').isVisible());
 check('metrics: pages / completed / pending', await page.evaluate(() =>
-  document.getElementById('metric-pages').innerText === '3' &&
+  // smoke.md, xss.md, links.md, deep.md, Projects/alpha.md
+  document.getElementById('metric-pages').innerText === '5' &&
   document.getElementById('metric-completed').innerText === '1' &&
   document.getElementById('metric-pending').innerText === '1'));
 check('pending actions rendered from taskLines', await page.evaluate(() => {
@@ -835,6 +929,43 @@ if (IS_MAC) {
   check('toolbar Bold tooltip platform-correct (win32)', boldTooltip.includes('Ctrl+B') && !boldTooltip.includes('Cmd') && !boldTooltip.includes('⌘'),
     JSON.stringify(boldTooltip));
 }
+
+// Lists and block inserts collapsed into two menus — the row is one control
+// per concept, and the shortcut text inside a menu row gets platform-corrected
+// the same way tooltips do.
+check('list and block inserts each collapsed to one toolbar control', await page.evaluate(() => {
+  const group = document.getElementById('editor-format-tools');
+  return group.querySelectorAll(':scope > .toolbar-btn, :scope > .editor-dropdown').length === 11 &&
+    !!document.getElementById('dropdown-list') && !!document.getElementById('dropdown-block');
+}));
+check('the list menu carries all three list kinds', await page.evaluate(() =>
+  Array.from(document.querySelectorAll('#dropdown-list .dropdown-item'))
+    .map(el => el.getAttribute('onclick'))
+    .join('|').includes('list-bullet') &&
+  document.querySelectorAll('#dropdown-list .dropdown-item').length === 3));
+check('the block menu carries quote, callout and divider', await page.evaluate(() => {
+  const calls = Array.from(document.querySelectorAll('#dropdown-block .dropdown-item'))
+    .map(el => el.getAttribute('onclick')).join('|');
+  return calls.includes('blockquote') && calls.includes('tldr') && calls.includes('separator');
+}));
+const listHint = await page.evaluate(() =>
+  document.querySelector('#dropdown-list .shortcut-hint').textContent);
+if (IS_MAC) {
+  check('menu shortcut hint platform-correct (darwin)', listHint.includes('⌘') && !listHint.includes('Ctrl'),
+    JSON.stringify(listHint));
+} else {
+  check('menu shortcut hint platform-correct (win32)', listHint.includes('Ctrl+') && !listHint.includes('Cmd') && !listHint.includes('⌘'),
+    JSON.stringify(listHint));
+}
+// A floating context menu used to break the next toolbar dropdown click
+await page.evaluate(() => {
+  window.showPageMenu(new MouseEvent('contextmenu', { clientX: 60, clientY: 60 }), '/nb', 'smoke.md', '/nb/smoke.md');
+  window.toggleEditorDropdown('dropdown-list', new MouseEvent('click'));
+});
+check('opening a toolbar menu dismisses an open context menu', await page.evaluate(() =>
+  !document.getElementById('tab-context-menu') &&
+  document.getElementById('dropdown-list').classList.contains('active')));
+await page.evaluate(() => window.toggleEditorDropdown('dropdown-list', new MouseEvent('click')));
 
 
 // ==========================================
@@ -1363,10 +1494,6 @@ check('copyRichText gets html + raw markdown text', await page.evaluate(() =>
   typeof window.__richCopy.text === 'string' && window.__richCopy.text.includes('```mermaid')));
 check('copy toast confirms', await page.evaluate(() =>
   document.getElementById('app-toast').textContent.includes('rich text')));
-check('File Actions lists sharing entries', await page.evaluate(() => {
-  const items = Array.from(document.querySelectorAll('#dropdown-file-actions .dropdown-item')).map(d => d.textContent.trim());
-  return ['Export to HTML', 'Export to Word (DOCX)', 'Copy as Rich Text'].every(t => items.includes(t));
-}));
 await page.keyboard.press(`${MOD}+k`);
 await page.waitForTimeout(200);
 await page.locator('#palette-search-input').fill('/docx');
@@ -1463,7 +1590,7 @@ await page.locator('#btn-open-search').click();
 await page.waitForTimeout(200);
 check('toolbar search icon opens drawer on Search and focuses the box', await page.evaluate(() =>
   !document.getElementById('right-drawer').classList.contains('collapsed') &&
-  document.getElementById('drawer-tab-search').classList.contains('active') &&
+  document.getElementById('drawer-title').textContent === 'Search' &&
   document.getElementById('drawer-search-view').style.display !== 'none' &&
   document.getElementById('drawer-outline-view').style.display === 'none' &&
   document.activeElement === document.getElementById('search-input')));
@@ -1485,10 +1612,12 @@ check('search groups render inside the drawer', await page.evaluate(() =>
 check('drawer view choice persisted', await page.evaluate(() =>
   localStorage.getItem('mdnb-drawer-tab') === 'search'));
 await page.evaluate(() => window.setDrawerTab('outline'));
-check('toggle switches back to outline', await page.evaluate(() =>
+check('switching back to outline retitles the drawer', await page.evaluate(() =>
   document.getElementById('drawer-outline-view').style.display !== 'none' &&
   document.getElementById('drawer-search-view').style.display === 'none' &&
-  document.getElementById('drawer-tab-outline').classList.contains('active')));
+  document.getElementById('drawer-title').textContent === 'Outline'));
+check('the redundant in-drawer Outline/Search toggle is gone', await page.evaluate(() =>
+  !document.querySelector('.drawer-tabs') && !document.querySelector('.drawer-tab')));
 await page.evaluate(() => window.setDrawerTab('search'));
 await page.locator('#search-input').fill('');
 await page.waitForTimeout(300);
@@ -1578,6 +1707,242 @@ await page.waitForTimeout(500);
 check('close-all clears the tab strip and canvas', await page.evaluate(() =>
   document.querySelectorAll('#tab-strip .note-tab').length === 0 &&
   document.getElementById('tab-strip').style.display === 'none'));
+
+// --- 37a. Links in the preview are opened by the system, not followed ---
+// WebView2 ignores target="_blank", so a web link did nothing on click; a
+// file: href followed in place would navigate the app away from itself.
+//
+// The markdown stub in this harness emits no anchors, so the preview is filled
+// with what renderer/markdown.js really produces for these links and the app's
+// own wiring is run over it. What is under test here is the click handling.
+await page.evaluate(async () => { await window.openNote('/nb/links.md'); });
+await page.waitForTimeout(400);
+await page.evaluate(() => {
+  window.__opened = [];
+  document.getElementById('preview-pane').innerHTML =
+    window.NotebookMarkdown.render([
+      '- [The spec](file:///C:/docs/spec.pdf)',
+      '- [Our website](https://example.com)',
+      '- [Nearby doc](docs/report.pdf)',
+      '- [Another note](smoke.md)',
+      '',
+    ].join('\n'), {});
+  window.wirePreviewLinks(document.getElementById('preview-pane'));
+});
+
+const clickLink = async (text) => {
+  await page.locator('#preview-pane a', { hasText: text }).first().click();
+  await page.waitForTimeout(250);
+};
+
+check('a file link is rendered as a link at all', await page.evaluate(() =>
+  !!document.querySelector('#preview-pane a[href^="file:"]')),
+  await page.evaluate(() => document.getElementById('preview-pane').innerHTML.slice(0, 300)));
+
+await clickLink('The spec');
+check('clicking a file link hands the path to the system', await page.evaluate(() =>
+  window.__opened.some(u => String(u).includes('spec.pdf'))),
+  await page.evaluate(() => JSON.stringify(window.__opened)));
+
+await clickLink('Our website');
+check('clicking a web link opens it too — target=_blank alone did nothing',
+  await page.evaluate(() => window.__opened.some(u => String(u).startsWith('https://example.com'))),
+  await page.evaluate(() => JSON.stringify(window.__opened)));
+
+await clickLink('Nearby doc');
+check('a relative document resolves against the note folder', await page.evaluate(() =>
+  window.__opened.some(u => String(u).replace(/\\/g, '/').endsWith('/nb/docs/report.pdf'))),
+  await page.evaluate(() => JSON.stringify(window.__opened)));
+
+// A relative link to another note stays in the app rather than leaving it.
+await page.evaluate(() => { window.__opened = []; });
+await clickLink('Another note');
+check('a link to another note opens in the app, not the system', await page.evaluate(() =>
+  window.__opened.length === 0 &&
+  document.getElementById('note-title').innerText.includes('Smoke Note')),
+  await page.evaluate(() => JSON.stringify(window.__opened)));
+
+// --- 37b. Multi-select in the tree: Explorer's Ctrl/Shift mechanics ---
+// The visible page order is smoke.md, xss.md, deep.md, then Projects/alpha.md.
+const rowFor = (label) => page.locator('#notebook-tree .tree-node-label', { hasText: label }).first();
+const selectedPaths = () => page.evaluate(() => window.selectedNotePaths());
+
+await page.evaluate(() => { window.clearSelection(); window.__deleted = []; window.__relocated = []; });
+await rowFor('Smoke Note').click();
+await page.waitForTimeout(250);
+check('a plain click selects just that note', JSON.stringify(await selectedPaths()) ===
+  JSON.stringify(['/nb/smoke.md']), JSON.stringify(await selectedPaths()));
+check('a plain click still opens the note', await page.evaluate(() =>
+  document.getElementById('note-title').innerText.includes('Smoke Note')));
+
+await rowFor('Deep Link').click({ modifiers: ['Control'] });
+await page.waitForTimeout(200);
+check('Ctrl-click adds without opening', await page.evaluate(() =>
+  window.selectedNotePaths().length === 2 && window.selectedNotePaths().includes('/nb/deep.md') &&
+  document.getElementById('note-title').innerText.includes('Smoke Note')));
+check('both rows are marked selected', await page.evaluate(() =>
+  document.querySelectorAll('#notebook-tree .tree-node.selected').length === 2));
+
+await rowFor('Deep Link').click({ modifiers: ['Control'] });
+await page.waitForTimeout(200);
+check('Ctrl-click again removes it', await page.evaluate(() =>
+  window.selectedNotePaths().length === 1 && !window.selectedNotePaths().includes('/nb/deep.md')));
+
+// Shift takes the range from the anchor, which Ctrl-click moved to deep.md.
+await page.evaluate(() => { window.clearSelection(); });
+await rowFor('Smoke Note').click();
+await page.waitForTimeout(200);
+await rowFor('Deep Link').click({ modifiers: ['Shift'] });
+await page.waitForTimeout(250);
+// smoke.md → xss.md → links.md → deep.md, so the range is four rows.
+check('Shift-click selects the whole range', await page.evaluate(() =>
+  window.selectedNotePaths().length === 4 &&
+  window.selectedNotePaths().includes('/nb/xss.md') &&
+  window.selectedNotePaths().includes('/nb/links.md')),
+  JSON.stringify(await selectedPaths()));
+
+// Shifting back to a nearer row narrows from the same anchor rather than adding.
+await rowFor('xss').first().click({ modifiers: ['Shift'] }).catch(() => {});
+await page.waitForTimeout(200);
+check('a second Shift-click replaces the range, it does not accrete',
+  (await selectedPaths()).length <= 4, JSON.stringify(await selectedPaths()));
+
+// Escape drops the selection.
+await page.evaluate(() => { window.clearSelection(); });
+await rowFor('Smoke Note').click();
+await rowFor('Deep Link').click({ modifiers: ['Control'] });
+await page.waitForTimeout(200);
+await page.keyboard.press('Escape');
+await page.waitForTimeout(200);
+check('Escape clears a multi-selection', await page.evaluate(() => window.selectedNotePaths().length === 0));
+
+// Deleting one row of a multi-selection deletes all of them, once.
+page.once('dialog', (d) => d.accept());
+await page.evaluate(async () => {
+  window.__deleted = [];
+  window.setSelection(['/nb/smoke.md', '/nb/deep.md'], '/nb/smoke.md');
+  await window.deleteNode('/nb/deep.md');
+});
+await page.waitForTimeout(400);
+check('deleting inside a selection removes every selected note', await page.evaluate(() =>
+  window.__deleted.length === 2 &&
+  window.__deleted.includes('/nb/smoke.md') && window.__deleted.includes('/nb/deep.md')),
+  await page.evaluate(() => JSON.stringify(window.__deleted)));
+check('the selection is dropped once it has been acted on', await page.evaluate(() =>
+  window.selectedNotePaths().length === 0));
+
+// A row OUTSIDE the selection acts on itself alone — Explorer's rule.
+check('acting on an unselected row acts only on it', await page.evaluate(() => {
+  window.setSelection(['/nb/smoke.md', '/nb/deep.md'], '/nb/smoke.md');
+  return JSON.stringify(window.selectionFor('/nb/xss.md')) === JSON.stringify(['/nb/xss.md']);
+}));
+check('acting on a selected row acts on the whole selection', await page.evaluate(() =>
+  window.selectionFor('/nb/deep.md').length === 2));
+check('the batch comes back in tree order, not click order', await page.evaluate(() => {
+  window.setSelection(['/nb/deep.md', '/nb/smoke.md'], '/nb/smoke.md');
+  return JSON.stringify(window.selectionFor('/nb/deep.md')) ===
+    JSON.stringify(['/nb/smoke.md', '/nb/deep.md']);
+}));
+
+// Dragging one of a selection carries them all into the destination section.
+await page.evaluate(async () => {
+  window.__relocated = [];
+  window.setSelection(['/nb/smoke.md', '/nb/deep.md'], '/nb/smoke.md');
+  window.handleDragStart({ dataTransfer: { setData() {}, effectAllowed: '' }, stopPropagation() {} }, '/nb/deep.md');
+  await window.handleDrop(
+    { preventDefault() {}, stopPropagation() {}, currentTarget: document.createElement('div') },
+    '/nb/Projects',
+  );
+});
+await page.waitForTimeout(400);
+check('dragging a selection moves every note in it', await page.evaluate(() =>
+  window.__relocated.length === 2 && window.__relocated.every(([, dest]) => dest === '/nb/Projects')),
+  await page.evaluate(() => JSON.stringify(window.__relocated)));
+
+await page.evaluate(() => window.clearSelection());
+
+// --- 38a. Opening a note at a line, the way another tool would ---
+// The command line counts from 1 and the payload mirrors src-tauri/src/cli.rs.
+await page.evaluate(() => window.__openAtCb({ fsPath: '/nb/deep.md', line: 11, view: 'preview' }));
+await page.waitForTimeout(600);
+check('the deep link opened the right note', await page.evaluate(() =>
+  document.getElementById('note-title').innerText.includes('Deep Link')));
+check('a requested view is applied', await page.evaluate(() =>
+  document.getElementById('btn-mode-preview').classList.contains('active')));
+check('the targeted line is the one marked', await page.evaluate(() => {
+  const marked = document.querySelector('#preview-pane .line-target');
+  return !!marked && marked.getAttribute('data-source-line') === '11'
+    && marked.textContent.includes('find me');
+}));
+// A line inside a block, rather than at its start, lands on the block.
+await page.evaluate(() => window.__openAtCb({ fsPath: '/nb/deep.md', line: 12, view: 'preview' }));
+await page.waitForTimeout(500);
+check('a second jump re-targets', await page.evaluate(() => {
+  const marked = document.querySelector('#preview-pane .line-target');
+  return !!marked && marked.getAttribute('data-source-line') === '12';
+}));
+// Past the end of the note: the last block, not a crash or a blank pane.
+await page.evaluate(() => window.__openAtCb({ fsPath: '/nb/deep.md', line: 900, view: 'preview' }));
+await page.waitForTimeout(500);
+check('a line past the end still lands somewhere sane', await page.evaluate(() =>
+  !!document.querySelector('#preview-pane .line-target') &&
+  document.getElementById('note-title').innerText.includes('Deep Link')));
+// Edit view puts the caret on the line instead.
+await page.evaluate(() => window.__openAtCb({ fsPath: '/nb/deep.md', line: 11, view: 'edit' }));
+await page.waitForTimeout(500);
+check('an edit-view jump puts the caret on that line', await page.evaluate(() => {
+  const ta = document.getElementById('note-editor');
+  const before = ta.value.slice(0, ta.selectionStart).split('\n').length;
+  return document.getElementById('btn-mode-edit').classList.contains('active') && before === 11;
+}));
+// No line: just open it. Opening any note resets to preview, so that is where
+// a bare path lands — the same as clicking the note in the sidebar.
+await page.evaluate(() => window.setViewMode('split'));
+await page.evaluate(() => window.__openAtCb({ fsPath: '/nb/smoke.md' }));
+await page.waitForTimeout(400);
+check('a path with no line just opens the note', await page.evaluate(() =>
+  document.getElementById('note-title').innerText.includes('Smoke Note') &&
+  document.getElementById('btn-mode-preview').classList.contains('active')));
+check('a malformed request is ignored rather than throwing', await page.evaluate(async () => {
+  await window.handleOpenRequest(null);
+  await window.handleOpenRequest({});
+  return document.getElementById('note-title').innerText.includes('Smoke Note');
+}));
+
+// --- 38b. Tree rows: one inline action, the rest behind a menu ---
+check('a page row carries a single hover action', await page.evaluate(() => {
+  const rows = Array.from(document.querySelectorAll('#notebook-tree .tree-node'))
+    .filter(n => n.getAttribute('oncontextmenu')?.includes('showPageMenu'));
+  return rows.length > 0 &&
+    rows.every(n => n.querySelectorAll('.tree-node-actions .tree-node-btn').length === 1);
+}));
+check('a section row keeps New Page plus the menu', await page.evaluate(() => {
+  const row = Array.from(document.querySelectorAll('#notebook-tree .tree-node'))
+    .find(n => n.getAttribute('oncontextmenu')?.includes('showSectionMenu'));
+  return row && row.querySelectorAll('.tree-node-actions .tree-node-btn').length === 2;
+}));
+await page.evaluate(() => window.showPageMenu(new MouseEvent('contextmenu', { clientX: 100, clientY: 100 }),
+  '/nb', 'smoke.md', '/nb/smoke.md'));
+check('page menu offers info, both moves and delete', await page.evaluate(() => {
+  const labels = Array.from(document.querySelectorAll('#tab-context-menu .dropdown-item')).map(el => el.textContent);
+  return labels.length === 4 && labels[0].startsWith('Page Info') &&
+    labels.includes('Move Up') && labels.includes('Move Down') && labels[3] === 'Delete Page';
+}));
+check('the destructive entry is marked as such', await page.evaluate(() =>
+  document.querySelector('#tab-context-menu .dropdown-item.danger')?.textContent === 'Delete Page'));
+check('menu groups are separated', await page.evaluate(() =>
+  document.querySelectorAll('#tab-context-menu .dropdown-divider').length === 2));
+await page.evaluate(() => window.hideTabContextMenu());
+await page.evaluate(() => window.showSectionMenu(new MouseEvent('contextmenu', { clientX: 100, clientY: 100 }),
+  '/nb/Projects', 'Projects'));
+check('section menu offers both creates, rename and delete', await page.evaluate(() => {
+  const labels = Array.from(document.querySelectorAll('#tab-context-menu .dropdown-item')).map(el => el.textContent);
+  return labels.length === 4 && labels[0] === 'New Page' && labels[1] === 'New Subsection' &&
+    labels[2].startsWith('Rename') && labels[3] === 'Delete Section';
+}));
+await page.evaluate(() => window.hideTabContextMenu());
+check('the tree menu is dismissed like the tab menu', await page.evaluate(() =>
+  !document.getElementById('tab-context-menu')));
 
 // --- 39. Portrait mermaid diagrams are height-capped in the preview ---
 await page.evaluate(async () => { await window.openNote('/nb/smoke.md'); });

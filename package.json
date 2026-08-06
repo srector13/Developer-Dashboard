@@ -1,99 +1,23 @@
 {
   "name": "markdown-notebook",
-  "version": "1.4.1",
-  "description": "A modern minimalistic Markdown note-taking desktop application.",
-  "main": "./out/main.js",
+  "version": "1.5.0-beta.15",
+  "private": true,
+  "description": "A modern minimalistic Markdown note-taking desktop application — native Windows build (Rust + WebView2, no Electron).",
   "author": "Stephen Rector",
   "license": "MIT",
   "scripts": {
-    "compile": "tsc",
-    "watch": "tsc -w",
-    "start": "tsc && electron .",
-    "pack": "tsc && electron-builder",
-    "pretest:e2e": "tsc",
-    "test:e2e": "playwright test",
-    "test:renderer": "node tests/renderer/smoke.spec.mjs darwin && node tests/renderer/smoke.spec.mjs win32 && node tests/renderer/launcher.spec.mjs",
-    "test:main": "tsc && node tests/main/scan-cache.spec.cjs cold /tmp/mdnb-scan-test && node tests/main/scan-cache.spec.cjs warm /tmp/mdnb-scan-test && node tests/main/desktop-tools.spec.cjs /tmp/mdnb-desktop-test",
+    "dev": "cargo tauri dev",
+    "build": "cargo build --release --manifest-path src-tauri/Cargo.toml",
+    "check": "cargo check --manifest-path src-tauri/Cargo.toml",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:renderer": "node tests/renderer/markdown.spec.mjs && node tests/renderer/smoke.spec.mjs darwin && node tests/renderer/smoke.spec.mjs win32 && node tests/renderer/launcher.spec.mjs && node tests/renderer/onenote.spec.mjs",
     "test:ui-audit": "node tests/renderer/ui-audit.mjs",
     "fonts:sync": "node scripts/sync-fonts.mjs",
-    "pack:win": "tsc && electron-builder --win",
-    "pack:mac": "tsc && electron-builder --mac"
-  },
-  "dependencies": {
-    "chokidar": "^3.6.0",
-    "electron-updater": "^6.8.9",
-    "highlight.js": "^11.11.1",
-    "markdown-it": "^14.1.0"
+    "icons": "node scripts/render-win-icons.mjs"
   },
   "devDependencies": {
     "@fontsource/inter": "^5.2.8",
     "@fontsource/outfit": "^5.2.8",
-    "@playwright/test": "^1.61.1",
-    "@types/markdown-it": "^14.1.1",
-    "@types/node": "^20.11.24",
-    "electron": "^30.0.0",
-    "electron-builder": "^24.13.3",
-    "typescript": "^5.4.2"
-  },
-  "build": {
-    "appId": "com.stephenrector.markdownnotebook",
-    "productName": "Markdown Notebook",
-    "directories": {
-      "output": "dist"
-    },
-    "files": [
-      "out/**/*",
-      "renderer/**/*",
-      "build/icon.png",
-      "!renderer/**/*.map"
-    ],
-    "mac": {
-      "target": [
-        "dmg",
-        "zip"
-      ],
-      "category": "public.app-category.productivity",
-      "icon": "build/icon.png",
-      "hardenedRuntime": true,
-      "gatekeeperAssess": false,
-      "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist",
-      "notarize": false,
-      "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
-    },
-    "win": {
-      "target": [
-        "nsis",
-        "portable",
-        "zip"
-      ],
-      "icon": "build/icon.png",
-      "artifactName": "${productName}-${version}-win-${arch}.${ext}"
-    },
-    "dmg": {
-      "artifactName": "${productName}-${version}.${ext}"
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "deleteAppDataOnUninstall": false,
-      "artifactName": "${productName}-Setup-${version}.${ext}"
-    },
-    "portable": {
-      "artifactName": "${productName}-${version}-portable.${ext}",
-      "splashImage": "build/splash.bmp"
-    },
-    "linux": {
-      "target": [
-        "AppImage"
-      ],
-      "icon": "build/icon.png",
-      "category": "Office"
-    },
-    "publish": {
-      "provider": "github",
-      "releaseType": "draft"
-    }
+    "@playwright/test": "^1.61.1"
   }
 }

@@ -99,12 +99,10 @@ body {
 }
 
 /* Frameless Titlebar (macOS drag handle support) */
-#titlebar {
-  height: 32px;
-  background-color: var(--bg-primary);
-  -webkit-app-region: drag;
-  flex-shrink: 0;
-}
+/* #titlebar is gone: it padded the top of the window for macOS's inset
+   traffic lights, and against the native Windows title bar it just read as a
+   dead 32px band. The export/print stylesheets still list the selector
+   defensively, which costs nothing. */
 
 /* Onboarding Screen Overlay */
 .overlay {
@@ -288,10 +286,14 @@ body.sidebar-collapsed #btn-expand-sidebar {
   padding: 10px 16px;
   border-top: 1px solid var(--border-color);
   flex-shrink: 0;
+  display: flex;
+  gap: 6px;
 }
 
+/* Notebook-wide tools sit side by side; each takes half the footer. */
 .sidebar-footer .btn {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   gap: 6px;
 }
 
@@ -410,17 +412,19 @@ body.sidebar-collapsed #btn-expand-sidebar {
   overflow: hidden;
 }
 
+/* Icon-only, so all four fit one row at any sidebar width. The labels live in
+   the tooltips. */
 .tree-controls {
-  padding: 4px 16px;
+  padding: 4px 16px 8px 16px;
   display: flex;
-  gap: 6px;
+  align-items: center;
+  gap: 2px;
   border-bottom: 1px solid var(--border-color);
-  padding-bottom: 8px;
 }
 
-.tree-controls .btn {
-  flex: 1;
-  gap: 4px;
+/* Tags filters rather than adds, so it sits apart from the other three. */
+.tree-controls-filter {
+  margin-left: auto;
 }
 
 .file-tree {
@@ -460,6 +464,29 @@ body.sidebar-collapsed #btn-expand-sidebar {
   border-color: rgba(88, 166, 255, 0.25);
   border-left-color: var(--accent-blue);
   box-shadow: 0 0 16px rgba(88, 166, 255, 0.15), inset 0 0 8px rgba(88, 166, 255, 0.05);
+}
+
+/* Multi-selected rows. Deliberately different from .active: the open note and
+   the selection are separate ideas, and both can be true of the same row. */
+.tree-node.selected {
+  background-color: var(--surface-active);
+  border-color: var(--border-color);
+  color: var(--text-heading);
+}
+
+.tree-node.selected::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: 3px;
+  background-color: var(--accent-blue);
+}
+
+.tree-node.selected.active {
+  background-color: rgba(88, 166, 255, 0.14);
 }
 
 .tree-node-content {
@@ -559,12 +586,17 @@ body.sidebar-collapsed #btn-expand-sidebar {
 
 /* CANVAS TOOLBAR */
 .toolbar {
-  height: 48px;
+  /* Wraps rather than clips. Twenty-odd controls plus a 260px sidebar do not
+     fit 1280px, which silently cut the right-hand group off the screen; the
+     row now flows onto a second line instead. At 1366 and up it stays on one. */
+  min-height: 48px;
+  flex-wrap: wrap;
+  row-gap: 4px;
+  padding: 6px 16px;
   border-bottom: 1px solid var(--border-color);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
   background-color: var(--bg-secondary);
   backdrop-filter: var(--glass-blur);
   z-index: 5;
@@ -576,8 +608,45 @@ body.sidebar-collapsed #btn-expand-sidebar {
 .toolbar-group {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
   flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+/* A hairline between the editing controls and the document controls, so a row
+   of twenty icons reads as two groups rather than one undifferentiated strip. */
+.toolbar-group + .toolbar-group::before {
+  content: '';
+  width: 1px;
+  height: 18px;
+  margin-right: 4px;
+  background-color: var(--border-color);
+  flex-shrink: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Icon scale
+   ---------------------------------------------------------------------------
+   Set here rather than on each <svg width=…>, which had drifted to seven
+   different sizes (10–18px) for controls sitting side by side. One rule per
+   button class keeps a row visually even and means new icons inherit the
+   right size instead of guessing. Chevrons stay small on purpose — they are
+   punctuation attached to a control, not icons in their own right. */
+.icon-btn > svg,
+.toolbar-btn > svg:not(.chevron) {
+  width: 15px;
+  height: 15px;
+}
+
+.btn > svg {
+  width: 14px;
+  height: 14px;
+}
+
+.dropdown-toggle > svg.chevron {
+  width: 10px;
+  height: 10px;
+  opacity: 0.65;
 }
 
 .mode-toggles {
@@ -619,7 +688,7 @@ body.sidebar-collapsed #btn-expand-sidebar {
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
   height: 28px;
-  padding: 0 8px;
+  padding: 0 6px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1106,6 +1175,31 @@ body.sidebar-collapsed #btn-expand-sidebar {
   opacity: 0.75;
 }
 
+/* The block a "jump to line" landed on. Scrolling alone leaves you hunting for
+   which paragraph was meant; this says so, then gets out of the way. */
+.markdown-body .line-target {
+  animation: line-target-fade 2.2s ease-out;
+  border-radius: var(--radius-sm);
+}
+
+@keyframes line-target-fade {
+  0%, 55% {
+    background-color: var(--surface-active);
+    box-shadow: 0 0 0 6px var(--surface-active);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .markdown-body .line-target {
+    animation: none;
+    background-color: var(--surface-active);
+  }
+}
+
 /* Highlight mark styles (Glowing highlighter effect) */
 .markdown-body mark {
   background-color: var(--mark-bg) !important;
@@ -1252,6 +1346,9 @@ body.sidebar-collapsed #btn-expand-sidebar {
 }
 
 .drawer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   font-family: var(--font-display);
   font-size: 12px;
   text-transform: uppercase;
@@ -1426,6 +1523,34 @@ body.sidebar-collapsed #btn-expand-sidebar {
 .form-group textarea:focus,
 .form-group select:focus {
   border-color: var(--accent-blue);
+}
+
+/* One checkbox everywhere. This used to be repeated inline on every settings
+   and modal checkbox, at two different sizes; the markdown task-list boxes
+   opt out below because they sit in body copy and follow the text size. */
+input[type="checkbox"]:not(.markdown-body input),
+input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-blue);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* A checkbox with its label beside it — the row was written three different
+   ways inline, with two different gaps and a stray font-weight. */
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.check-row label,
+label.check-row {
+  margin-bottom: 0;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
 }
 
 /* Related-links picker in the New Page / Page Info modals */
@@ -1987,6 +2112,21 @@ body.sidebar-collapsed #btn-expand-sidebar {
   margin-left: auto;
 }
 
+/* Groups related entries in the longer menus (tree rows, tabs) */
+.dropdown-divider {
+  height: 1px;
+  background-color: var(--border-color);
+  margin: 4px 0;
+}
+
+/* Destructive entries read as destructive before they are clicked. Hover keeps
+   the red foreground rather than filling with it: white on --accent-red drops
+   under 3.5:1 in the dark themes, where the red is deliberately bright. */
+.dropdown-item.danger,
+.dropdown-item.danger:hover {
+  color: var(--accent-red);
+}
+
 /* TABLE GRID INSERT POPOVER SPECIALTIES */
 .table-grid-menu {
   width: auto !important;
@@ -2451,6 +2591,93 @@ body.sidebar-collapsed #btn-expand-sidebar {
   white-space: pre-wrap;
 }
 
+/* OneNote picker footer: destination, the notebook-folder choice, buttons. */
+.onenote-footer {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.onenote-footer-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+/* The import's own screen. */
+.onenote-progress-spinner {
+  width: 34px;
+  height: 34px;
+  margin: 0 auto;
+  border: 3px solid var(--border-color);
+  border-top-color: var(--accent-blue);
+  border-radius: 50%;
+  animation: onenote-spin 0.9s linear infinite;
+}
+
+@keyframes onenote-spin {
+  to { transform: rotate(360deg); }
+}
+
+.onenote-progress-track {
+  height: 6px;
+  margin-top: 18px;
+  border-radius: 999px;
+  background-color: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.onenote-progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background-color: var(--accent-blue);
+  transition: width 0.25s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .onenote-progress-spinner { animation-duration: 2.4s; }
+  .onenote-progress-fill { transition: none; }
+}
+
+/* OneNote diagnostics: label on the left, what came back on the right. */
+.onenote-diag-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+  font-size: 12px;
+}
+
+.onenote-diag-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: top;
+}
+
+.onenote-diag-table td:first-child {
+  white-space: nowrap;
+  color: var(--text-secondary);
+  width: 1%;
+}
+
+.onenote-diag-table tr.is-problem td {
+  color: var(--accent-red);
+}
+
+/* The OneNote status line carries real prose when something goes wrong — a
+   repair instruction runs to several sentences and has to stay readable. */
+#onenote-status {
+  line-height: 1.55;
+  padding: 4px 0;
+}
+
+#onenote-status.is-error {
+  color: var(--accent-red);
+  border-left: 2px solid var(--accent-red);
+  padding: 8px 0 8px 12px;
+}
+
 .dropdown-item-featured {
   color: var(--accent-teal);
   font-weight: 600;
@@ -2563,39 +2790,6 @@ body.sidebar-collapsed #btn-expand-sidebar {
 
 #drawer-search-view .search-icon {
   left: 10px;
-}
-
-/* Segmented Outline / Search switch in the drawer header */
-.drawer-tabs {
-  display: flex;
-  gap: 2px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  padding: 2px;
-}
-
-.drawer-tab {
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-family: var(--font-display);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  font-weight: 600;
-  padding: 4px 10px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-
-.drawer-tab:hover {
-  color: var(--text-primary);
-}
-
-.drawer-tab.active {
-  background: var(--surface-active);
-  color: var(--text-primary);
 }
 
 .drawer-empty-hint {

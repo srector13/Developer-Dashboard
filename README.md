@@ -4,6 +4,12 @@
 
 By Stephen Rector.
 
+> **This branch is the native Windows build.** Same app, same features, but the
+> Electron shell has been replaced by a small Rust binary drawing into Windows'
+> own WebView2 — a few megabytes instead of ninety, shipped as a single portable
+> `.exe` with no installer. The cross-platform Electron version lives on `main`.
+> See [`docs/rust-port-plan.md`](docs/rust-port-plan.md) for what changed.
+
 Markdown Notebook turns any folder on your computer into a proper notebook: sections and pages, daily notes, to-do tracking, diagrams, and polished PDF exports. Behind the scenes your notes are ordinary text files the whole time — they sync with anything (iCloud, OneDrive, git), open in any editor, and if you ever stop using the app, you lose nothing.
 
 ```mermaid
@@ -15,7 +21,7 @@ flowchart LR
 
 ## Everything in one place
 
-- **Sections and pages.** Folders are sections, files are pages. Drag pages between sections, pin the important ones, and reorder things however you like.
+- **Sections and pages.** Folders are sections, files are pages. Drag pages between sections, pin the important ones, and reorder things however you like. Select several at once the way you would in File Explorer — Ctrl+click to add one, Shift+click for a range — then drag or delete the lot in one go.
 - **Daily notes.** Name a page with a date (`2026-07-13`) and it gets a calendar icon and sorts newest-first — a running work journal with zero setup.
 - **Tabs.** Keep several notes open at once, just like a browser, with a dot marking anything unsaved.
 - **Write your way.** A distraction-free reading view, a plain editor, or both side by side. Checkboxes in the reading view are clickable — tick off tasks without switching modes.
@@ -42,6 +48,8 @@ flowchart LR
 - **HTML** — a single self-contained file (images included) you can email or drop on a shared drive.
 - **Copy as rich text** — paste a fully formatted note directly into an email, Slack, or a wiki.
 - **Import, too.** Paste a copied email or web page as a clean new note, or import Word / PowerPoint / Excel files into the section of your choice.
+- **Bring your OneNote across.** Point the app at OneNote desktop and pick whole notebooks, sections, or individual pages: each OneNote page becomes its own note, and OneNote's sections (and section groups) become sections here. Images come with it. See [`docs/onenote-import.md`](docs/onenote-import.md).
+- **Open a note from another program.** The exe takes a path and a line — `Markdown-Notebook.exe "C:\notes\alpha.md:42"` — and opens that note scrolled to that line, in the window that is already running. Built for companion tools that scan the notebook and want a clickable result. See [`docs/command-line.md`](docs/command-line.md).
 
 ## Little comforts
 
@@ -49,7 +57,6 @@ flowchart LR
 - **Power-editor keys.** Move lines with Alt+↑/↓, duplicate with Shift+Alt+↓, delete a line with ⌘⇧K / Ctrl+Shift+K.
 - **Template fields.** A template with `{{project}}` or `{{attendees}}` asks you to fill those in when you create the page — alongside the automatic `{{date}}`, `{{title}}`, and friends.
 - **Spell check.** Misspelled words get the familiar red underline; right-click one for suggested corrections or to add it to your dictionary.
-- **Auto-update.** The installed app checks for new versions and offers a one-click restart to update — no more manual downloads. (The portable version doesn't self-update.)
 - **Clipboard capture.** A second global shortcut (⌘⇧G / Ctrl+Shift+G) files whatever's on your clipboard straight into a note with no window at all — copy, press, done.
 - **Quick capture.** A system-wide shortcut (⌘⇧N / Ctrl+Shift+N) pops up a small note-jotting window from anywhere — even when the app is in the background — and files what you type into today's daily note.
 - **Six looks.** Light, Dark, Midnight, Forest, Sepia, or follow your system.
@@ -58,15 +65,25 @@ flowchart LR
 
 ## Getting it
 
-Grab the latest release for your platform from the **Releases** page:
-
-- **Windows installer** — installs just for you; it never asks for an administrator password.
-- **Windows portable** — a single `.exe` that runs from anywhere (Downloads folder, USB stick, a locked-down work machine) with nothing to install. Its settings live in a folder right next to it, so it travels well.
-- **macOS** — a standard drag-and-drop disk image.
+Grab the latest `.exe` from the **Releases** page. That's the whole app — a
+single file that runs from anywhere (Downloads folder, USB stick, a locked-down
+work machine) with nothing to install and no administrator password. Its
+settings live in a `MarkdownNotebookData` folder right next to it, so it travels
+well.
 
 First launch: pick (or create) a folder to be your notebook, and start writing.
 
+It needs the Microsoft Edge **WebView2** runtime, which is already on every
+Windows 11 machine and on Windows 10 since the 2020 updates — that's what lets
+the app be a few megabytes instead of ninety. If a machine somehow lacks it,
+Microsoft's [Evergreen Bootstrapper](https://developer.microsoft.com/microsoft-edge/webview2/)
+installs it without admin rights.
+
 The only optional extra is [Pandoc](https://pandoc.org/installing.html), needed just for Word/PowerPoint/Excel import and Word export — everything else works out of the box, entirely offline.
+
+Because a running `.exe` can't replace itself, the portable build doesn't
+self-update: when a new version lands, download it and swap the file. Your notes
+and settings are untouched.
 
 ## Your files stay yours
 
@@ -76,13 +93,24 @@ The app also keeps one tiny reminder file in your home folder (`.markdown-notebo
 
 ## Building from source
 
+You need [Rust](https://rustup.rs) and, for the UI tests, Node. On Windows:
+
 ```bash
-npm install
-npm start          # compile and run the app
-npm run pack       # build installers/portable for your platform (dist/)
+cargo install tauri-cli --version "^2"   # once
+npm install                              # test tooling only
+
+npm run dev            # run the app with hot reload
+npm run build          # release exe → src-tauri/target/release/
+npm run test:rust      # backend unit tests
+npm run test:renderer  # UI suite in headless Chromium
 ```
 
-See `docs/RELEASING.md` for the full release and code-signing setup, and `docs/team-reports/` for the development history.
+The backend's tests are pure logic and run on any platform; the app itself only
+builds and runs on Windows.
+
+See `docs/RELEASING.md` for the release and code-signing setup,
+`docs/rust-port-plan.md` for the architecture, and `docs/team-reports/` for the
+development history.
 
 ## License
 
