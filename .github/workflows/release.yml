@@ -1,8 +1,11 @@
 name: Release
 
-# Pushing a v* tag builds the portable Windows executable and attaches it to a
-# GitHub Release. There is deliberately no installer target: this build ships as
-# a single .exe that runs from anywhere.
+# Pushing a v* tag builds every portable executable in the suite and attaches
+# them to one GitHub Release. There is deliberately no installer target: each
+# app ships as a single .exe that runs from anywhere.
+#
+# One release for the whole suite, not one per app: the apps share crates and a
+# registry format, so a version means something only if they move together.
 #
 # A semver prerelease tag (v0.2.0-beta.1) publishes immediately as a GitHub
 # pre-release; a plain version tag (v0.2.0) lands as a draft so the notes can be
@@ -12,8 +15,9 @@ name: Release
 # single rolling `beta` release with a permanent download URL.
 #
 # Code signing activates automatically when WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD
-# are configured; without them the build still succeeds and produces an
-# unsigned exe.
+# are configured; without them the build still succeeds and produces unsigned
+# exes. Signing is done here, once, for every app — which is the practical
+# reason the suite is one repository.
 on:
   push:
     tags: ['v*']
@@ -47,15 +51,15 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            src-tauri/target
-          key: ${{ runner.os }}-cargo-release-${{ hashFiles('src-tauri/Cargo.lock') }}
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-release-
 
       - name: Unit tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --workspace
 
       - name: Build (release)
-        run: cargo build --release --manifest-path src-tauri/Cargo.toml
+        run: cargo build --release --workspace
 
       # The tag is the source of truth for a tag push, so a release can be cut
       # without the version in package.json and the release name drifting
@@ -76,14 +80,14 @@ jobs:
             *)   echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
           esac
 
-      - name: Name the artifact
+      - name: Name the artifacts
         id: artifact
         shell: bash
         run: |
           mkdir -p dist
-          NAME="Dev-Hub-${{ steps.version.outputs.value }}-win-x64-portable.exe"
-          cp "src-tauri/target/release/dev-hub.exe" "dist/$NAME"
-          echo "path=dist/$NAME" >> "$GITHUB_OUTPUT"
+          V="${{ steps.version.outputs.value }}"
+          cp "target/release/dev-hub.exe"    "dist/Dev-Hub-$V-win-x64-portable.exe"
+          cp "target/release/log-viewer.exe" "dist/Log-Viewer-$V-win-x64-portable.exe"
           ls -l dist
 
       # signtool ships with the Windows SDK that windows-latest already has.
@@ -94,32 +98,46 @@ jobs:
           [IO.File]::WriteAllBytes("cert.pfx", [Convert]::FromBase64String($env:WIN_CSC_LINK))
           $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" |
                       Sort-Object FullName -Descending | Select-Object -First 1
-          & $signtool.FullName sign /f cert.pfx /p $env:WIN_CSC_KEY_PASSWORD `
-            /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "${{ steps.artifact.outputs.path }}"
+          # Every exe in the suite, from one certificate, in one step.
+          Get-ChildItem dist/*.exe | ForEach-Object {
+            & $signtool.FullName sign /f cert.pfx /p $env:WIN_CSC_KEY_PASSWORD `
+              /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $_.FullName
+          }
           Remove-Item cert.pfx
 
       - name: Upload the build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dev-hub-portable
-          path: ${{ steps.artifact.outputs.path }}
+          name: dev-suite-portable
+          path: dist/*.exe
           retention-days: 14
 
       - name: Write the release notes
         shell: bash
         run: |
           cat > release-notes.md <<'NOTES'
-          Portable Windows build — a single `.exe` with nothing to install.
+          Portable Windows builds — one `.exe` per app, nothing to install.
 
-          Download it, put it wherever you like (Downloads, a USB stick, a work
-          machine you can't install software on), and run it. Settings and
-          `hub.config.json` live in a `DevHubData` folder created next to the
-          exe, so the app travels with it.
+          | App | What it is |
+          | --- | --- |
+          | **Dev Hub** | A global quick launcher plus a dashboard of live signal from your repos, services, notes and logs. |
+          | **Log Viewer** | A multi-file tail with saved filters, highlight rules and timestamp alignment across sources. |
+
+          Download what you want, put it wherever you like (Downloads, a USB
+          stick, a work machine you can't install software on), and run it.
+
+          **Put them in the same folder** and they find each other: Dev Hub's
+          Logs card opens files in Log Viewer, and each app registers itself so
+          the others can launch it. Nothing to configure — discovery goes
+          through a per-user registry at `%USERPROFILE%\.dev-suite\registry.json`.
+
+          Each app keeps its state in a folder next to its own exe
+          (`DevHubData`, `LogViewerData`), so an app travels with its file.
 
           Requires the Microsoft Edge WebView2 runtime, which ships with
           Windows 10 (from the 2020 updates) and Windows 11.
 
-          Because a running executable can't replace itself, this build does not
+          Because a running executable can't replace itself, these builds do not
           self-update: when a new version lands, download it and swap the file.
           Your config is untouched.
           NOTES
@@ -140,10 +158,10 @@ jobs:
           # --target pins the tag to the commit that was built. Without it a
           # manual run would tag the default branch instead of this ref.
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "${{ steps.artifact.outputs.path }}" --clobber
+            gh release upload "$TAG" dist/*.exe --clobber
             gh release edit "$TAG" --notes-file release-notes.md "${FLAGS[@]}"
           else
-            gh release create "$TAG" "${{ steps.artifact.outputs.path }}" \
+            gh release create "$TAG" dist/*.exe \
               --target "$GITHUB_SHA" \
               --title "$TAG" --notes-file release-notes.md "${FLAGS[@]}"
           fi

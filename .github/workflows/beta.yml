@@ -4,11 +4,16 @@ name: Beta
 # Windows exe and republishes it under a single, permanent `beta` tag, so the
 # download URL never changes:
 #
-#   https://github.com/srector13/Developer-Dashboard/releases/download/beta/Dev-Hub-beta-win-x64-portable.exe
+#   .../releases/download/beta/Dev-Hub-beta-win-x64-portable.exe
+#   .../releases/download/beta/Log-Viewer-beta-win-x64-portable.exe
 #
-# Bookmark that URL on the work PC: each new build replaces the file at the same
-# address, so testing a change is "download, overwrite, run" with no hunting for
-# a release page. Your DevHubData folder is untouched by a swap.
+# Bookmark those URLs on the work PC: each new build replaces the files at the
+# same addresses, so testing a change is "download, overwrite, run" with no
+# hunting for a release page. Your DevHubData and LogViewerData folders are
+# untouched by a swap.
+#
+# Both exes ship from one build of one workspace, so they are always the same
+# version and always agree about the suite registry between them.
 #
 # `.github/workflows/release.yml` handles real, versioned releases from a v*
 # tag; this workflow is deliberately separate so a beta can never be mistaken
@@ -43,26 +48,25 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            src-tauri/target
-          key: ${{ runner.os }}-cargo-beta-${{ hashFiles('src-tauri/Cargo.lock') }}
+            target
+          key: ${{ runner.os }}-cargo-beta-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-beta-
 
       # A beta you can't trust is worse than no beta, so the same tests that
       # gate CI gate the download.
       - name: Unit tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --workspace
 
       - name: Build (release)
-        run: cargo build --release --manifest-path src-tauri/Cargo.toml
+        run: cargo build --release --workspace
 
-      - name: Name the artifact
+      - name: Name the artifacts
         id: artifact
         shell: bash
         run: |
           mkdir -p dist
-          NAME="Dev-Hub-beta-win-x64-portable.exe"
-          cp "src-tauri/target/release/dev-hub.exe" "dist/$NAME"
-          echo "path=dist/$NAME" >> "$GITHUB_OUTPUT"
+          cp "target/release/dev-hub.exe"    "dist/Dev-Hub-beta-win-x64-portable.exe"
+          cp "target/release/log-viewer.exe" "dist/Log-Viewer-beta-win-x64-portable.exe"
           echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
           ls -l dist
 
@@ -71,7 +75,17 @@ jobs:
         run: |
           cat > release-notes.md <<NOTES
           **Rolling beta** — rebuilt on every push. This tag always points at the
-          newest development build.
+          newest development build of the whole suite.
+
+          | App | Download |
+          | --- | --- |
+          | Dev Hub | \`Dev-Hub-beta-win-x64-portable.exe\` |
+          | Log Viewer | \`Log-Viewer-beta-win-x64-portable.exe\` |
+
+          Both are built from one commit of one workspace, so they always agree
+          about the suite registry. Drop them in the same folder and they find
+          each other — Dev Hub's Logs card will open files in Log Viewer, and
+          Log Viewer's menu will open Dev Hub.
 
           | | |
           | --- | --- |
@@ -83,17 +97,19 @@ jobs:
           ### Running it
 
           Download the \`.exe\`, put it wherever you like, and run it. No
-          installer, no admin rights, nothing to unpack. Settings and your
-          \`hub.config.json\` live in a \`DevHubData\` folder created next to the
-          exe, so the app travels with the file — and swapping in a new build
-          leaves them alone.
+          installer, no admin rights, nothing to unpack. Each app keeps its
+          state in a folder created next to its own exe — \`DevHubData\` and
+          \`LogViewerData\` — so an app travels with its file, and swapping in a
+          new build leaves that state alone.
 
           Requires the Microsoft Edge WebView2 runtime, which ships with
           Windows 10 (from the 2020 updates) and Windows 11.
 
-          First run writes a starter \`DevHubData/hub.config.json\`. Edit it
-          (tray → *Edit hub.config.json*) to point at your repos, URLs and
-          health endpoints; the app hot-reloads on save.
+          Dev Hub's first run writes a starter \`DevHubData/hub.config.json\`.
+          Edit it (tray → *Edit hub.config.json*) to point at your repos, URLs,
+          health endpoints and log files; the app hot-reloads on save. Log
+          Viewer needs no configuration — drop a file on the window, or open one
+          from Dev Hub's Logs card.
 
           ### Expectations
 
@@ -111,17 +127,21 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if gh release view beta >/dev/null 2>&1; then
-            gh release upload beta "${{ steps.artifact.outputs.path }}" --clobber
+            gh release upload beta dist/*.exe --clobber
             gh release edit beta \
               --target "$GITHUB_SHA" \
-              --title "Dev Hub — rolling beta" \
+              --title "Dev Suite — rolling beta" \
               --notes-file release-notes.md \
               --prerelease
           else
-            gh release create beta "${{ steps.artifact.outputs.path }}" \
+            gh release create beta dist/*.exe \
               --target "$GITHUB_SHA" \
-              --title "Dev Hub — rolling beta" \
+              --title "Dev Suite — rolling beta" \
               --notes-file release-notes.md \
               --prerelease
           fi
-          echo "Download: https://github.com/${GITHUB_REPOSITORY}/releases/download/beta/Dev-Hub-beta-win-x64-portable.exe" >> "$GITHUB_STEP_SUMMARY"
+          BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/beta"
+          {
+            echo "Dev Hub: $BASE/Dev-Hub-beta-win-x64-portable.exe"
+            echo "Log Viewer: $BASE/Log-Viewer-beta-win-x64-portable.exe"
+          } >> "$GITHUB_STEP_SUMMARY"
