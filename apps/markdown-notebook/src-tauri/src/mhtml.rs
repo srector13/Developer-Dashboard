@@ -131,10 +131,7 @@ fn split_headers(entity: &[u8]) -> (HashMap<String, String>, &[u8]) {
     let mut offset = 0usize;
     let mut current: Option<(String, String)> = None;
 
-    loop {
-        let Some(line_end) = find_line_end(entity, offset) else {
-            break;
-        };
+    while let Some(line_end) = find_line_end(entity, offset) {
         let raw = &entity[offset..line_end.0];
         let next = line_end.1;
 

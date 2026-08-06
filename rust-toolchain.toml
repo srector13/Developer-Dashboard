@@ -1,0 +1,15 @@
+# Pin the toolchain so "clippy is clean" means the same thing here and in CI.
+#
+# Twice now, a change was reported as lint-clean locally and then failed the
+# Windows job on nothing but a newer clippy: `unnecessary_sort_by` and
+# `while_let_loop` both exist in 1.97 and not in 1.94. Neither was a real
+# defect, and both cost a red build — which is worse than it sounds, because a
+# CI that is red for boring reasons stops being read.
+#
+# rustup honours this file, so a contributor and the runner resolve the same
+# compiler without anyone remembering to. Bumping it is a deliberate act: raise
+# the version, run `cargo clippy --workspace --all-targets -- -D warnings`, fix
+# whatever the new release noticed, and commit the two together.
+[toolchain]
+channel = "1.97.0"
+components = ["clippy", "rustfmt"]
