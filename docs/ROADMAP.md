@@ -54,10 +54,10 @@ The connective tissue, built before app #4 rather than after it.
   so a version means something and code signing will be one step rather than
   three.
 
-*Still outstanding:* Markdown Notebook's code has not moved into the workspace,
-though it now registers itself — see
-[ARCHITECTURE.md](ARCHITECTURE.md#bringing-markdown-notebook-in) for the
-remaining steps and why they can wait.
+All three apps now live here. Markdown Notebook came in with `git subtree`, so
+its history survived the move; the Electron build it replaced is gone. What is
+left of that migration is bookkeeping — issues and the old download URL — see
+[ARCHITECTURE.md](ARCHITECTURE.md#bringing-markdown-notebook-in).
 
 ---
 
@@ -181,7 +181,8 @@ cross-launch and a Dev Hub card. That was the point of Phase 1.5.
 - **Auto-update.** A running exe can't replace itself, and a background updater on
   a locked-down corporate box is a support problem, not a feature.
 - **Telemetry.** Ever.
-- **A note editor.** That's Markdown Notebook.
+- **A note editor in Dev Hub.** That's Markdown Notebook's job; Dev Hub surfaces
+  todos from the notebook and hands the note to it.
 - **Two apps rendering the same thing.** Dev Hub stats log files; Log Viewer
   reads them. Overlapping surfaces are how a suite stops feeling like one
   product.

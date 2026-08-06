@@ -327,8 +327,7 @@ pub fn list_trash(settings: &AppSettings) -> Vec<TrashItem> {
             kind: if is_dir { "section" } else { "page" }.to_string(),
             title: clean_display_name(stripped.strip_suffix(".md").unwrap_or(&stripped)),
         };
-        if let Ok(text) =
-            std::fs::read_to_string(trash_dir.join(format!("{name}.trashmeta.json")))
+        if let Ok(text) = std::fs::read_to_string(trash_dir.join(format!("{name}.trashmeta.json")))
         {
             if let Ok(stored) = serde_json::from_str::<TrashMeta>(&text) {
                 meta = stored;
@@ -509,17 +508,18 @@ pub fn rewrite_wiki_links(
                 Some(pipe) => (&inner[..pipe], &inner[pipe..]),
                 None => (inner, ""),
             };
-            let sub = SUBTARGET_RE
-                .find(target)
-                .map(|m| m.as_str())
-                .unwrap_or("");
+            let sub = SUBTARGET_RE.find(target).map(|m| m.as_str()).unwrap_or("");
             let name_path = &target[..target.len() - sub.len()];
             let (dir_part, name) = match name_path.rfind('/') {
                 Some(idx) => (&name_path[..idx + 1], &name_path[idx + 1..]),
                 None => ("", name_path),
             };
             let has_md = name.to_lowercase().ends_with(".md");
-            let bare = if has_md { &name[..name.len() - 3] } else { name };
+            let bare = if has_md {
+                &name[..name.len() - 3]
+            } else {
+                name
+            };
 
             if bare.trim().to_lowercase() != old_lc {
                 return full;
@@ -664,7 +664,8 @@ fn set_key(block: &str, key: &str, value: &str) -> String {
     let re = Regex::new(&pattern).unwrap();
     let replacement = format!("{key}: {value}");
     if re.is_match(block) {
-        re.replace(block, regex::NoExpand(&replacement)).into_owned()
+        re.replace(block, regex::NoExpand(&replacement))
+            .into_owned()
     } else {
         format!("{block}\n{replacement}")
     }
@@ -690,7 +691,10 @@ pub fn apply_note_meta(text: &str, meta: &NoteMetaPatch) -> String {
     let pinned = meta.pinned.unwrap_or(false);
     let tag_value = format!(
         "[{}]",
-        tags.iter().map(|t| yaml_value(t)).collect::<Vec<_>>().join(", ")
+        tags.iter()
+            .map(|t| yaml_value(t))
+            .collect::<Vec<_>>()
+            .join(", ")
     );
 
     if let Some(caps) = FM_BLOCK_RE.captures(text) {
@@ -812,10 +816,7 @@ pub fn relocate_node(src_path: &Path, dest_dir: &Path) -> bool {
 }
 
 pub fn move_in_order(ord: &mut [String], file_name: &str, direction: &str) -> bool {
-    let Some(idx) = ord
-        .iter()
-        .position(|n| n.eq_ignore_ascii_case(file_name))
-    else {
+    let Some(idx) = ord.iter().position(|n| n.eq_ignore_ascii_case(file_name)) else {
         return false;
     };
     match direction {
@@ -896,23 +897,32 @@ mod tests {
 
     #[test]
     fn matches_folder_case_insensitively() {
-        let out = rewrite_wiki_links("[[Projects/Old-Page]]", "old-page", "new", false, "projects");
+        let out = rewrite_wiki_links(
+            "[[Projects/Old-Page]]",
+            "old-page",
+            "new",
+            false,
+            "projects",
+        );
         assert_eq!(out, "[[Projects/new]]");
     }
 
     #[test]
     fn leaves_unrelated_links_untouched() {
         let src = "[[other]] [[old-pages]] [[old-page-2]]";
-        assert_eq!(
-            rewrite_wiki_links(src, "old-page", "new", true, ""),
-            src
-        );
+        assert_eq!(rewrite_wiki_links(src, "old-page", "new", true, ""), src);
     }
 
     #[test]
     fn updates_frontmatter_title_and_h1() {
         let src = "---\ntitle: Old Title\ntags: [a]\n---\n\n# Old Title\n\nBody\n";
-        let plan = RenamePlan { old_base: "old", new_base: "new", renaming: false, bare_name_unique: true, rel_dir: "" };
+        let plan = RenamePlan {
+            old_base: "old",
+            new_base: "new",
+            renaming: false,
+            bare_name_unique: true,
+            rel_dir: "",
+        };
         let out = update_own_content(src, Some("Old Title"), "New Title", &plan);
         assert!(out.contains("title: New Title"));
         assert!(out.contains("# New Title"));
@@ -923,7 +933,13 @@ mod tests {
     #[test]
     fn adds_a_title_key_when_the_frontmatter_lacks_one() {
         let src = "---\ncreated: 2026-01-01\n---\n\nBody\n";
-        let plan = RenamePlan { old_base: "old", new_base: "new", renaming: false, bare_name_unique: true, rel_dir: "" };
+        let plan = RenamePlan {
+            old_base: "old",
+            new_base: "new",
+            renaming: false,
+            bare_name_unique: true,
+            rel_dir: "",
+        };
         let out = update_own_content(src, None, "New Title", &plan);
         assert!(out.starts_with("---\ntitle: New Title\ncreated: 2026-01-01\n---"));
     }
@@ -931,7 +947,13 @@ mod tests {
     #[test]
     fn only_rewrites_the_h1_that_matches_the_old_title() {
         let src = "# Old Title\n\n# Something Else\n";
-        let plan = RenamePlan { old_base: "o", new_base: "n", renaming: false, bare_name_unique: true, rel_dir: "" };
+        let plan = RenamePlan {
+            old_base: "o",
+            new_base: "n",
+            renaming: false,
+            bare_name_unique: true,
+            rel_dir: "",
+        };
         let out = update_own_content(src, Some("Old Title"), "New", &plan);
         assert!(out.contains("# New\n"));
         assert!(out.contains("# Something Else"));
@@ -983,8 +1005,14 @@ mod tests {
     #[test]
     fn toggles_checkboxes_in_both_directions() {
         let src = "- [ ] one\n- [x] two\nplain\n";
-        assert_eq!(toggle_task_line(src, 0).unwrap(), "- [x] one\n- [x] two\nplain\n");
-        assert_eq!(toggle_task_line(src, 1).unwrap(), "- [ ] one\n- [ ] two\nplain\n");
+        assert_eq!(
+            toggle_task_line(src, 0).unwrap(),
+            "- [x] one\n- [x] two\nplain\n"
+        );
+        assert_eq!(
+            toggle_task_line(src, 1).unwrap(),
+            "- [ ] one\n- [ ] two\nplain\n"
+        );
         assert!(toggle_task_line(src, 2).is_none());
         assert!(toggle_task_line(src, 99).is_none());
     }
@@ -992,8 +1020,12 @@ mod tests {
     #[test]
     fn toggles_indented_and_numbered_checkboxes() {
         let src = "  - [ ] nested\n1. [ ] numbered\n";
-        assert!(toggle_task_line(src, 0).unwrap().starts_with("  - [x] nested"));
-        assert!(toggle_task_line(src, 1).unwrap().contains("1. [x] numbered"));
+        assert!(toggle_task_line(src, 0)
+            .unwrap()
+            .starts_with("  - [x] nested"));
+        assert!(toggle_task_line(src, 1)
+            .unwrap()
+            .contains("1. [x] numbered"));
     }
 
     #[test]
@@ -1019,10 +1051,14 @@ mod tests {
 
     #[test]
     fn composed_pages_carry_frontmatter_and_an_h1() {
-        let mut settings = AppSettings::default();
-        settings.author = "Sam".into();
+        let settings = AppSettings {
+            author: "Sam".into(),
+            ..Default::default()
+        };
         let out = compose_page(&settings, "My Page", "2026-05-05", &["a".into()], "Body");
-        assert!(out.starts_with("---\ntitle: My Page\ncreated: 2026-05-05\nauthor: Sam\ntags: [a]\n---\n"));
+        assert!(out.starts_with(
+            "---\ntitle: My Page\ncreated: 2026-05-05\nauthor: Sam\ntags: [a]\n---\n"
+        ));
         assert!(out.contains("\n# My Page\n"));
         assert!(out.ends_with("Body"));
     }

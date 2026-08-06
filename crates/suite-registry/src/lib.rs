@@ -376,15 +376,14 @@ mod tests {
         assert_eq!(json["capabilities"][0], capability::TAIL_FILE);
     }
 
-    /// Verbatim output of Markdown Notebook's `suite` module, captured from a
-    /// real run of it.
+    /// A registry as already-shipped builds wrote it, captured verbatim from a
+    /// real run of Markdown Notebook back when that app had its own writer.
     ///
-    /// That app writes the registry with its own small implementation rather
-    /// than this crate — it is a separate repository, and the registry is an
-    /// interchange format, so a second implementation is expected. This is
-    /// where the two are held to the same contract: if either side's field
-    /// names or types drift, this fails here rather than as "Dev Hub silently
-    /// stopped offering to open my todos".
+    /// It is kept now as a golden sample of the on-disk format. Betas are out
+    /// there that have written this shape into people's home directories, and
+    /// renaming a field here would strand every one of them — silently, because
+    /// a registry that fails to parse reads as "no apps installed" rather than
+    /// as an error. This test is what makes that rename fail here instead.
     const MARKDOWN_NOTEBOOK_SAMPLE: &str = r#"{
       "apps": {
         "markdown-notebook": {
@@ -403,7 +402,7 @@ mod tests {
     }"#;
 
     #[test]
-    fn what_markdown_notebook_writes_is_what_this_crate_reads() {
+    fn a_registry_written_by_a_shipped_build_still_parses() {
         let raw: serde_json::Value = serde_json::from_str(MARKDOWN_NOTEBOOK_SAMPLE)
             .expect("the captured sample must be valid JSON");
         let registry: Registry = suite_config::merge_onto_defaults(raw);
@@ -418,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn the_notebooks_capability_is_the_one_dev_hub_asks_for() {
+    fn the_notebooks_capability_token_has_not_moved() {
         // The whole point of capability lookup: Dev Hub asks for "something
         // that can open a note at a line", not for Markdown Notebook by name.
         // If these two strings ever disagree, that stops working silently.

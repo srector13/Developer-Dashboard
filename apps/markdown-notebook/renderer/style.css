@@ -1,64 +1,18 @@
-/* Markdown Notebook Desktop Styling */
+/* Markdown Notebook Desktop Styling
+ *
+ * The palette lives in the suite's shared tokens, imported below. This block
+ * used to be duplicated here and in Dev Hub, and the two had already drifted —
+ * the shared copy carries an opaque form-control fix this one never got. Every
+ * class in this file draws from those tokens and adds nothing to the palette.
+ *
+ * The named themes further down (midnight, forest, sepia, light) are still this
+ * app's own. They re-point the same tokens, so they keep working unchanged;
+ * hoisting them into the shared file — and reconciling `body.light-theme` with
+ * the `body[data-theme=...]` selector the other two apps use — is a separate
+ * job from moving the app.
+ */
 
-:root {
-  /* Dark Theme Palette (base). Named themes override these variables in
-     body[data-theme=...] blocks at the end of this file. */
-  --bg-primary: #0d1117;
-  --bg-secondary: rgba(22, 27, 34, 0.7);
-  --bg-tertiary: rgba(13, 17, 23, 0.5);
-
-  --border-color: rgba(240, 246, 252, 0.1);
-  --border-glow: rgba(56, 139, 253, 0.4);
-
-  --text-primary: #c9d1d9;
-  --text-secondary: #8b949e;
-  --text-muted: #484f58;
-
-  --accent-blue: #58a6ff;
-  --accent-teal: #39c5cf;
-  --accent-green: #3fb950;
-  --accent-red: #f85149;
-  --accent-glow: rgba(88, 166, 255, 0.15);
-
-  --glass-bg: rgba(22, 27, 34, 0.6);
-  --glass-border: rgba(255, 255, 255, 0.08);
-  --glass-blur: blur(16px);
-
-  /* Semantic tokens: every component color must come from one of these so
-     light mode and the named themes stay correct everywhere. */
-  --text-heading: #ffffff;         /* titles, hover/active emphasis */
-  --text-strong: #f0f6fc;          /* sub-headings */
-  --text-inverse: #0d1117;         /* text sitting on accent backgrounds */
-  --editor-bg: #090c10;            /* raw editor pane */
-  --editor-text: #e6edf3;
-  --code-bg: #090c10;              /* pre / fenced code */
-  --code-surface: #0d1117;         /* code block wrapper card */
-  --surface-hover: rgba(255, 255, 255, 0.06);
-  --surface-active: rgba(255, 255, 255, 0.1);
-  --chip-bg: rgba(255, 255, 255, 0.06);
-  --menu-bg: rgba(22, 27, 34, 0.95);      /* dropdowns, palette, popout */
-  --tooltip-bg: rgba(22, 27, 34, 0.98);
-  --scrollbar-thumb: rgba(255, 255, 255, 0.08);
-  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.16);
-  --heading-border: rgba(255, 255, 255, 0.1);
-  --blockquote-text: #9ecbff;
-  --mark-text: #f2c94c;
-  --mark-bg: rgba(242, 201, 76, 0.15);
-  --mark-border: rgba(242, 201, 76, 0.3);
-
-  --inset-bg: rgba(0, 0, 0, 0.2);        /* recessed control groups */
-  --overlay-bg: rgba(0, 0, 0, 0.7);      /* modal backdrop */
-
-  /* Shared shape tokens */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --radius-xl: 12px;
-
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-  --font-display: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: 'SFMono-Regular', Consolas, "Liberation Mono", Menlo, Courier, monospace;
-}
+@import url('vendor/suite/tokens.css');
 
 /* Keyboard accessibility: buttons deliberately drop the default outline, so
    give keyboard users a consistent focus ring instead. */

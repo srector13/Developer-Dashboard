@@ -26,6 +26,13 @@
 //! library registrations are actually present, and what each approach returned —
 //! enough to identify the cause from one run instead of one fact per release.
 
+// Everything below that looks unused on a non-Windows build genuinely is:
+// each caller sits behind `#[cfg(windows)]`, because driving OneNote through
+// PowerShell has no meaning anywhere else. It is Windows code, not dead code,
+// so it is silenced only off Windows — on Windows a real dead-code warning
+// here still fails the build.
+#![cfg_attr(not(windows), allow(dead_code))]
+
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -57,7 +64,9 @@ pub fn pe_machine(bytes: &[u8]) -> Option<u16> {
     if bytes.len() < lfanew + 6 || &bytes[lfanew..lfanew + 4] != b"PE\0\0" {
         return None;
     }
-    Some(u16::from_le_bytes(bytes[lfanew + 4..lfanew + 6].try_into().ok()?))
+    Some(u16::from_le_bytes(
+        bytes[lfanew + 4..lfanew + 6].try_into().ok()?,
+    ))
 }
 
 pub fn machine_name(machine: u16) -> &'static str {
@@ -277,11 +286,19 @@ pub struct Finding {
 }
 
 fn ok(label: &str, value: impl Into<String>) -> Finding {
-    Finding { label: label.into(), value: value.into(), problem: false }
+    Finding {
+        label: label.into(),
+        value: value.into(),
+        problem: false,
+    }
 }
 
 fn bad(label: &str, value: impl Into<String>) -> Finding {
-    Finding { label: label.into(), value: value.into(), problem: true }
+    Finding {
+        label: label.into(),
+        value: value.into(),
+        problem: true,
+    }
 }
 
 /// Everything worth knowing about why OneNote automation is or is not working,
@@ -294,7 +311,11 @@ fn bad(label: &str, value: impl Into<String>) -> Finding {
 pub fn diagnose() -> Vec<Finding> {
     let mut findings = Vec::new();
 
-    let app_bits = if cfg!(target_pointer_width = "64") { "64-bit" } else { "32-bit" };
+    let app_bits = if cfg!(target_pointer_width = "64") {
+        "64-bit"
+    } else {
+        "32-bit"
+    };
     findings.push(ok("This app", app_bits));
 
     let exe = crate::onenote::com_onenote_exe();
@@ -331,7 +352,10 @@ pub fn diagnose() -> Vec<Finding> {
     // What each route actually does, which is the ground truth the rest of the
     // report only explains.
     match crate::onenote::hierarchy_probe_in_process() {
-        Ok(bytes) => findings.push(ok("Reading notebooks in this app", format!("worked ({bytes} bytes)"))),
+        Ok(bytes) => findings.push(ok(
+            "Reading notebooks in this app",
+            format!("worked ({bytes} bytes)"),
+        )),
         Err(why) => findings.push(bad("Reading notebooks in this app", why)),
     }
     for host in [Host::Win64, Host::Win32] {
@@ -364,7 +388,9 @@ fn typelib_findings() -> Vec<Finding> {
         let mut key = HKEY::default();
         let opened = unsafe { RegOpenKeyExW(root, &wide, Some(0), KEY_READ, &mut key) };
         if opened.is_ok() {
-            unsafe { let _ = RegCloseKey(key); };
+            unsafe {
+                let _ = RegCloseKey(key);
+            };
             true
         } else {
             false
@@ -373,7 +399,11 @@ fn typelib_findings() -> Vec<Finding> {
 
     for (hive, root, prefix) in [
         ("machine-wide", HKEY_CLASSES_ROOT, "TypeLib"),
-        ("your account", HKEY_CURRENT_USER, r"Software\Classes\TypeLib"),
+        (
+            "your account",
+            HKEY_CURRENT_USER,
+            r"Software\Classes\TypeLib",
+        ),
     ] {
         let base = format!(r"{prefix}\{ONENOTE_TYPELIB}");
         if !exists(root, &base) {
@@ -491,9 +521,15 @@ mod tests {
     #[test]
     fn the_publish_script_carries_the_format_it_was_given() {
         let word = publish_script("{ID}", Path::new(r"C:\tmp\page.docx"), PUBLISH_FORMAT_WORD);
-        assert!(word.contains("$app.Publish('{ID}', 'C:\\tmp\\page.docx', 5, '')"), "{word}");
+        assert!(
+            word.contains("$app.Publish('{ID}', 'C:\\tmp\\page.docx', 5, '')"),
+            "{word}"
+        );
         let mht = publish_script("{ID}", Path::new(r"C:\tmp\page.mht"), PUBLISH_FORMAT_MHTML);
-        assert!(mht.contains("$app.Publish('{ID}', 'C:\\tmp\\page.mht', 2, '')"), "{mht}");
+        assert!(
+            mht.contains("$app.Publish('{ID}', 'C:\\tmp\\page.mht', 2, '')"),
+            "{mht}"
+        );
     }
 
     #[test]

@@ -634,6 +634,15 @@ mod tests {
 
     #[test]
     fn with_no_opener_configured_the_note_can_still_be_opened() {
+        // Deliberately asserts the invariant rather than which tier fired.
+        //
+        // With no opener configured, `item_for` falls to Markdown Notebook if
+        // it can be found on disk, and to the OS default only if it cannot.
+        // Which of those happens here depends on whether a `markdown-notebook`
+        // binary sits beside the test runner — and since all three apps became
+        // one workspace, sharing one `target/`, it does. This test used to pass
+        // only because that app was in another repository, which was never
+        // something it meant to depend on.
         let todo = ParsedTodo {
             line: 1,
             text: "x".into(),
@@ -647,7 +656,17 @@ mod tests {
             &TodosConfig::default(),
             "2026-07-30",
         );
-        assert!(matches!(item.actions[0], Action::OpenPath { .. }));
+
+        match &item.actions[0] {
+            // Found the notebook: open the note *on the line* the todo is on.
+            Action::Run { args, .. } => assert!(
+                args.iter().any(|a| a == "1") && args.iter().any(|a| a.contains("a.md")),
+                "the notebook must be told which file and which line: {args:?}"
+            ),
+            // No notebook installed: hand the file to the OS.
+            Action::OpenPath { path, .. } => assert!(path.contains("a.md")),
+            other => panic!("a todo must always be openable somehow, got {other:?}"),
+        }
     }
 
     #[test]

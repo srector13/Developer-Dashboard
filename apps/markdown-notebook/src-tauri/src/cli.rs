@@ -82,7 +82,7 @@ pub fn parse(args: &[String]) -> Option<OpenRequest> {
             Some((f, v)) => (f, Some(v.to_string())),
             None => (arg, None),
         };
-        let mut take_value = |index: &mut usize| -> Option<String> {
+        let take_value = |index: &mut usize| -> Option<String> {
             if let Some(value) = inline_value.clone() {
                 return Some(value);
             }
@@ -152,7 +152,10 @@ pub fn resolve(request: OpenRequest, cwd: Option<&std::path::Path>) -> Option<Op
     // Windows canonicalisation yields a \\?\ prefix, which nothing downstream
     // (the notebook tree, the renderer's path comparisons) expects to see.
     let cleaned = canonical.to_string_lossy();
-    let cleaned = cleaned.strip_prefix(r"\\?\").unwrap_or(&cleaned).to_string();
+    let cleaned = cleaned
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&cleaned)
+        .to_string();
     Some(OpenRequest {
         fs_path: cleaned,
         ..request

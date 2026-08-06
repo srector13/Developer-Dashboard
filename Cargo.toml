@@ -6,6 +6,7 @@ members = [
     "crates/suite-registry",
     "apps/dev-hub/src-tauri",
     "apps/log-viewer/src-tauri",
+    "apps/markdown-notebook/src-tauri",
 ]
 
 # Every app in the suite ships the same way — one portable exe, copied around by

@@ -25,6 +25,8 @@ fn pandoc_path(settings: &AppSettings) -> String {
 }
 
 fn base_command(settings: &AppSettings) -> Command {
+    // `mut` is used by the Windows-only `creation_flags` call below.
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut cmd = Command::new(pandoc_path(settings));
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
@@ -69,7 +71,12 @@ fn finish(output: std::process::Output) -> Result<String, String> {
 }
 
 /// Convert text piped over stdin (clipboard import).
-pub fn run_stdin(settings: &AppSettings, input: &str, from: &str, to: &str) -> Result<String, String> {
+pub fn run_stdin(
+    settings: &AppSettings,
+    input: &str,
+    from: &str,
+    to: &str,
+) -> Result<String, String> {
     let mut child = base_command(settings)
         .args(["-f", from, "-t", to, "--wrap=none"])
         .stdin(Stdio::piped())
@@ -79,7 +86,9 @@ pub fn run_stdin(settings: &AppSettings, input: &str, from: &str, to: &str) -> R
         .map_err(missing_pandoc)?;
 
     if let Some(stdin) = child.stdin.as_mut() {
-        stdin.write_all(input.as_bytes()).map_err(|e| e.to_string())?;
+        stdin
+            .write_all(input.as_bytes())
+            .map_err(|e| e.to_string())?;
     }
     // Dropping stdin closes the pipe so pandoc stops reading.
     drop(child.stdin.take());
@@ -186,7 +195,9 @@ pub fn reader_for_extension(ext: &str) -> &'static str {
 /// Heuristic for "is the clipboard holding HTML rather than plain text?".
 pub fn looks_like_html(text: &str) -> bool {
     let sample: String = text.chars().take(4000).collect();
-    let strong = regex::Regex::new(r"(?i)<!DOCTYPE html|<html[\s>]|<body[\s>]|<table[\s>]|<blockquote[\s>]").unwrap();
+    let strong =
+        regex::Regex::new(r"(?i)<!DOCTYPE html|<html[\s>]|<body[\s>]|<table[\s>]|<blockquote[\s>]")
+            .unwrap();
     if strong.is_match(&sample) {
         return true;
     }
@@ -209,7 +220,9 @@ mod tests {
 
     #[test]
     fn strong_html_markers_are_detected() {
-        assert!(looks_like_html("<!DOCTYPE html><html><body>hi</body></html>"));
+        assert!(looks_like_html(
+            "<!DOCTYPE html><html><body>hi</body></html>"
+        ));
         assert!(looks_like_html("<table><tr><td>1</td></tr></table>"));
     }
 
@@ -221,22 +234,28 @@ mod tests {
 
     #[test]
     fn plain_markdown_is_not_html() {
-        assert!(!looks_like_html("# Heading\n\nSome *text* with a [link](x).\n"));
+        assert!(!looks_like_html(
+            "# Heading\n\nSome *text* with a [link](x).\n"
+        ));
         assert!(!looks_like_html(""));
     }
 
     #[test]
     fn a_missing_binary_reports_enoent() {
-        let mut settings = AppSettings::default();
-        settings.pandoc_path = Some("definitely-not-a-real-binary-xyz".into());
+        let settings = AppSettings {
+            pandoc_path: Some("definitely-not-a-real-binary-xyz".into()),
+            ..Default::default()
+        };
         let err = run_stdin(&settings, "hi", "markdown", "gfm").unwrap_err();
         assert!(err.contains("ENOENT"), "got: {err}");
     }
 
     #[test]
     fn an_empty_configured_path_falls_back_to_the_default() {
-        let mut settings = AppSettings::default();
-        settings.pandoc_path = Some("   ".into());
+        let settings = AppSettings {
+            pandoc_path: Some("   ".into()),
+            ..Default::default()
+        };
         assert_eq!(pandoc_path(&settings), "pandoc");
     }
 }

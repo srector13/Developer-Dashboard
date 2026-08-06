@@ -121,6 +121,7 @@ pub fn create_template(settings: &AppSettings, name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     fn temp_notebook(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("mdnb-tpl-{name}-{}", std::process::id()));
@@ -129,7 +130,7 @@ mod tests {
         dir
     }
 
-    fn settings_for(root: &PathBuf) -> AppSettings {
+    fn settings_for(root: &Path) -> AppSettings {
         AppSettings {
             notebook_root: root.to_string_lossy().into_owned(),
             ..Default::default()
@@ -181,7 +182,11 @@ mod tests {
     fn templates_without_a_marker_fall_back_to_a_prettified_filename() {
         let root = temp_notebook("fallback");
         let settings = settings_for(&root);
-        std::fs::write(root.join("templates").join("project-kickoff.md"), "## Goals\n").unwrap();
+        std::fs::write(
+            root.join("templates").join("project-kickoff.md"),
+            "## Goals\n",
+        )
+        .unwrap();
         assert_eq!(list_templates(&settings)[0].title, "Project Kickoff");
         let _ = std::fs::remove_dir_all(&root);
     }

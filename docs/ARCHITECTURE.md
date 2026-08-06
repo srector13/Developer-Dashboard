@@ -127,19 +127,23 @@ The order:
    pointer write. Dev Hub already reads the registry first and falls back to
    the old pointer, so this changed nothing for anyone until it lands — and
    nothing breaks if it never does.
-2. **Move the code in**, as `apps/markdown-notebook`, replacing its copies of
-   the model, the settings merge and the design tokens with the crates.
+2. **Move the code in.** ✅ Brought in with `git subtree`, so `git log` and
+   `git blame` still reach its 104 commits rather than starting at the move.
+   Its vendored registry module is gone in favour of the crate, and its
+   duplicated design tokens and fonts in favour of `ui/`.
 3. **Migrate the issues**, and leave the old repository archived with a pointer
    here. The old release download URL is the thing to be careful about: anything
    bookmarking it needs a redirect or a final release that says where to go.
+   **Still to do** — and the only reason not to archive the old repo today.
 
-Steps 2 and 3 can wait for a quiet week.
-
-### Step 1 did not use the crate, and that was right
+### Step 1 did not use the crate, and that was right at the time
 
 The plan above originally said Markdown Notebook would call
-`suite_registry::register`. It doesn't — it has its own ~150-line `suite`
-module writing the same file.
+`suite_registry::register`. While it lived in another repository it didn't —
+it had its own ~150-line module writing the same file. Step 2 deleted that
+module and switched it to the crate, which is what the module's own doc comment
+said should happen. The reasoning is kept here because it applies to the next
+app that has to interoperate before it can move in.
 
 Depending on the crate would have meant a Cargo git dependency from one
 repository to another, for the sake of writing a small JSON file. That is worse
@@ -149,15 +153,13 @@ of it. The registry is an **interchange format**, and a second implementation of
 a format is ordinary. The `last-notebook.json` pointer it replaces always worked
 exactly this way.
 
-What that costs is the risk of the two implementations drifting, so the contract
-is pinned from the reader's side: `suite-registry` has a test carrying the
-verbatim output of Markdown Notebook's writer, captured from a real run, and
-asserts this crate parses it and finds the capability. If either side's field
-names or types move, that test fails — rather than Dev Hub silently ceasing to
-offer "open this todo".
-
-When the app moves in at step 2, the module is deleted in favour of the crate.
-Its own doc comment says so.
+What that cost was the risk of two implementations drifting, so the contract was
+pinned from the reader's side: `suite-registry` carries a test with the verbatim
+output of that writer, captured from a real run. There is one implementation
+again now, but the test stays — betas are out there that have already written
+that shape into people's home directories, and a renamed field would strand
+every one of them *silently*, because a registry that fails to parse reads as
+"no apps installed" rather than as an error.
 
 ## Deliberately not doing
 

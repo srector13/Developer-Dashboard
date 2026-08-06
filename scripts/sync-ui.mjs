@@ -19,7 +19,7 @@ import { fileURLToPath } from 'url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SOURCE = path.join(ROOT, 'ui');
-const APPS = ['dev-hub', 'log-viewer'];
+const APPS = ['dev-hub', 'log-viewer', 'markdown-notebook'];
 
 /** Every file under `dir`, as paths relative to it. */
 function walk(dir, prefix = '') {

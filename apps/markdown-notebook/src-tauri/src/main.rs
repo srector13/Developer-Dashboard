@@ -12,15 +12,14 @@ mod exports;
 mod html_clean;
 mod mhtml;
 mod notebook;
+mod notes;
 mod onenote;
 mod onenote_shell;
-mod notes;
 mod pandoc;
 mod platform;
 mod search;
 mod settings;
 mod state;
-mod suite;
 mod templates;
 mod util;
 
@@ -152,7 +151,12 @@ fn main() {
             // asked to do — before anything else, so a sibling launched a
             // second later can already find us. Dev Hub's Todos card uses this
             // to open a note on the line a todo is on, with nothing configured.
-            suite::register();
+            suite_registry::register(
+                suite_registry::MARKDOWN_NOTEBOOK,
+                "Markdown Notebook",
+                env!("CARGO_PKG_VERSION"),
+                &[suite_registry::capability::OPEN_NOTE_AT_LINE],
+            );
 
             // Seed the per-user pointer for installs that predate it. This
             // also records the notebook root in the suite registry.

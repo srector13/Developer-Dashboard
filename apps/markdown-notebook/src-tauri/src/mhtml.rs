@@ -182,7 +182,11 @@ fn find_line_end(buf: &[u8], from: usize) -> Option<(usize, usize)> {
     if i >= buf.len() {
         return Some((buf.len(), buf.len()));
     }
-    let content_end = if i > from && buf[i - 1] == b'\r' { i - 1 } else { i };
+    let content_end = if i > from && buf[i - 1] == b'\r' {
+        i - 1
+    } else {
+        i
+    };
     Some((content_end, i + 1))
 }
 
@@ -198,7 +202,11 @@ fn header_param(value: &str, name: &str) -> Option<String> {
 }
 
 fn strip_angle_brackets(value: &str) -> String {
-    value.trim().trim_start_matches('<').trim_end_matches('>').to_string()
+    value
+        .trim()
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .to_string()
 }
 
 /// Split a multipart body on its boundary delimiters.
@@ -232,7 +240,9 @@ fn split_parts<'a>(body: &'a [u8], boundary: &str) -> Vec<&'a [u8]> {
         if body[after..].starts_with(b"--") {
             break;
         }
-        let next_line = find_line_end(body, after).map(|(_, n)| n).unwrap_or(body.len());
+        let next_line = find_line_end(body, after)
+            .map(|(_, n)| n)
+            .unwrap_or(body.len());
         part_start = Some(next_line);
         search = next_line;
     }
@@ -369,6 +379,9 @@ pub struct RewriteOutcome {
     pub unresolved: usize,
 }
 
+/// The ordered rewrite without the ordering — only the tests want this, so it
+/// is compiled only for them rather than carried in the shipped binary.
+#[cfg(test)]
 pub fn rewrite_sources(html: &str, replacements: &HashMap<String, String>) -> String {
     rewrite_sources_ordered(html, replacements, &[]).html
 }
@@ -421,7 +434,11 @@ pub fn rewrite_sources_ordered(
         })
         .into_owned();
 
-    RewriteOutcome { html, linked, unresolved }
+    RewriteOutcome {
+        html,
+        linked,
+        unresolved,
+    }
 }
 
 fn lookup(reference: &str, replacements: &HashMap<String, String>) -> Option<String> {
@@ -517,28 +534,51 @@ mod tests {
 
     #[test]
     fn header_params_handle_quotes_and_bare_values() {
-        assert_eq!(header_param(r#"x; boundary="a-b""#, "boundary").unwrap(), "a-b");
-        assert_eq!(header_param("x; boundary=plain", "boundary").unwrap(), "plain");
-        assert_eq!(header_param("text/html; charset=\"utf-8\"", "charset").unwrap(), "utf-8");
+        assert_eq!(
+            header_param(r#"x; boundary="a-b""#, "boundary").unwrap(),
+            "a-b"
+        );
+        assert_eq!(
+            header_param("x; boundary=plain", "boundary").unwrap(),
+            "plain"
+        );
+        assert_eq!(
+            header_param("text/html; charset=\"utf-8\"", "charset").unwrap(),
+            "utf-8"
+        );
         assert!(header_param("text/html", "charset").is_none());
     }
 
     #[test]
     fn a_onenote_style_export_yields_html_and_its_image() {
         let parsed = parse(&sample_mht()).unwrap();
-        assert!(parsed.html.contains("<h1>Meeting Notes</h1>"), "{}", parsed.html);
+        assert!(
+            parsed.html.contains("<h1>Meeting Notes</h1>"),
+            "{}",
+            parsed.html
+        );
         // Soft break rejoined, and the UTF-8 escape decoded
-        assert!(parsed.html.contains("Café budget review"), "{}", parsed.html);
+        assert!(
+            parsed.html.contains("Café budget review"),
+            "{}",
+            parsed.html
+        );
         assert_eq!(parsed.resources.len(), 1);
         assert_eq!(parsed.resources[0].mime, "image/png");
-        assert_eq!(parsed.resources[0].location, "http://example.com/image001.png");
+        assert_eq!(
+            parsed.resources[0].location,
+            "http://example.com/image001.png"
+        );
         assert!(parsed.resources[0].bytes.starts_with(b"\x89PNG"));
     }
 
     #[test]
     fn sources_are_rewritten_by_location_filename_or_cid() {
         let mut map = HashMap::new();
-        map.insert("http://example.com/image001.png".to_string(), "../attachments/a.png".to_string());
+        map.insert(
+            "http://example.com/image001.png".to_string(),
+            "../attachments/a.png".to_string(),
+        );
         map.insert("logo.gif".to_string(), "../attachments/b.gif".to_string());
         map.insert("abc123".to_string(), "../attachments/c.jpg".to_string());
 
@@ -605,7 +645,10 @@ mod tests {
     // --- image sources -----------------------------------------------------
 
     fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]

@@ -34,7 +34,7 @@ jobs:
       # difference fails the build.
       - name: The vendored copies of ui/ are current
         run: npm run ui:check
-      - name: Renderer suites (Dev Hub + Log Viewer)
+      - name: Renderer suites (Dev Hub, Log Viewer, Markdown Notebook)
         run: npm run test:renderer
       # Not a byte-for-byte diff against the committed icons: zlib's output
       # varies between Node versions, so that check fails for reasons that have
@@ -122,4 +122,5 @@ jobs:
           path: |
             target/release/dev-hub.exe
             target/release/log-viewer.exe
+            target/release/markdown-notebook.exe
           retention-days: 7

@@ -299,7 +299,7 @@ pub fn write_notebook_pointer(root: &str) {
     if root.is_empty() {
         return;
     }
-    crate::suite::set_notebook_root(root);
+    suite_registry::set_notebook_root(root);
 
     let Some(file) = pointer_file() else { return };
     if let Some(dir) = file.parent() {

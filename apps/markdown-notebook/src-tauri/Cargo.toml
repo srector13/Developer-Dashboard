@@ -1,11 +1,17 @@
 [package]
 name = "markdown-notebook"
+# Its own version, deliberately not the workspace's. This app is at 1.5 and
+# shipping; Dev Hub and Log Viewer are at 0.2. Forcing a common number would
+# mean either pushing a mature app *backwards* for the people using it, or
+# claiming a maturity the other two have not earned. What has to agree between
+# the apps is the registry's own `version` field, and that is checked where it
+# is read — see crates/suite-registry.
 version = "1.5.0-beta.15"
 description = "A modern minimalistic Markdown note-taking desktop application."
-authors = ["Stephen Rector"]
-license = "MIT"
-edition = "2021"
-rust-version = "1.77"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 
 # One binary, no installer. `windows_subsystem` in main.rs keeps the console
 # window from flashing on launch.
@@ -17,6 +23,11 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# The suite's shared plumbing. This app used to carry its own copy of the
+# registry writer, because it lived in another repository; now that it doesn't,
+# there is one implementation again.
+suite-registry = { workspace = true }
+
 tauri = { version = "2", features = ["tray-icon", "image-png", "protocol-asset"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-global-shortcut = "2"
@@ -69,11 +80,5 @@ windows = { version = "0.61", features = [
   "Win32_UI_Input_KeyboardAndMouse",
 ] }
 
-[profile.release]
-# A portable exe gets copied around by hand (USB stick, email to self), so
-# size matters more here than the last few percent of speed.
-opt-level = "s"
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
+# `[profile.release]` lives in the workspace root now — a profile set on a
+# member is ignored, and every app in the suite ships the same way anyway.
