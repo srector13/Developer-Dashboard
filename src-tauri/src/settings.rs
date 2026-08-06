@@ -289,10 +289,18 @@ pub fn read_notebook_pointer() -> String {
         .unwrap_or_default()
 }
 
+/// Record where the notebook lives, in both places that care.
+///
+/// The suite registry is where the other apps look now. The older pointer file
+/// is still written beside it, because a build of Dev Hub that predates the
+/// registry reads only that — and an app that quietly stops working when its
+/// sibling is a version behind is not a suite.
 pub fn write_notebook_pointer(root: &str) {
     if root.is_empty() {
         return;
     }
+    crate::suite::set_notebook_root(root);
+
     let Some(file) = pointer_file() else { return };
     if let Some(dir) = file.parent() {
         let _ = std::fs::create_dir_all(dir);

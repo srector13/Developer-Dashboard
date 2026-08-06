@@ -20,6 +20,7 @@ mod platform;
 mod search;
 mod settings;
 mod state;
+mod suite;
 mod templates;
 mod util;
 
@@ -147,7 +148,14 @@ fn main() {
             let handle = app.handle().clone();
             let settings = app.state::<AppState>().settings();
 
-            // Seed the per-user pointer for installs that predate it.
+            // Tell the rest of the suite this app exists, and what it can be
+            // asked to do — before anything else, so a sibling launched a
+            // second later can already find us. Dev Hub's Todos card uses this
+            // to open a note on the line a todo is on, with nothing configured.
+            suite::register();
+
+            // Seed the per-user pointer for installs that predate it. This
+            // also records the notebook root in the suite registry.
             settings::write_notebook_pointer(&settings.notebook_root);
 
             // Park a command-line request for the renderer to collect. It
