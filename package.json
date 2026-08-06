@@ -19,7 +19,7 @@
     "test:rust": "cargo test --workspace",
     "test:renderer": "npm run test:renderer:hub && npm run test:renderer:logs && npm run test:renderer:notes",
     "test:renderer:hub": "node apps/dev-hub/tests/renderer/launcher.spec.mjs && node apps/dev-hub/tests/renderer/dashboard.spec.mjs && node apps/dev-hub/tests/renderer/settings.spec.mjs && node apps/dev-hub/tests/renderer/setup.spec.mjs",
-    "test:renderer:logs": "node apps/log-viewer/tests/renderer/viewer.spec.mjs",
+    "test:renderer:logs": "node apps/log-viewer/tests/renderer/viewer.spec.mjs && node apps/log-viewer/tests/renderer/settings.spec.mjs",
     "test:renderer:notes": "node apps/markdown-notebook/tests/renderer/markdown.spec.mjs && node apps/markdown-notebook/tests/renderer/smoke.spec.mjs darwin && node apps/markdown-notebook/tests/renderer/smoke.spec.mjs win32 && node apps/markdown-notebook/tests/renderer/launcher.spec.mjs && node apps/markdown-notebook/tests/renderer/onenote.spec.mjs",
     "ui:sync": "node scripts/sync-ui.mjs",
     "ui:check": "node scripts/sync-ui.mjs --check",

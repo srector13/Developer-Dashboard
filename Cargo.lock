@@ -2510,6 +2510,8 @@ name = "log-viewer"
 version = "0.2.0-beta.1"
 dependencies = [
  "chrono",
+ "notify",
+ "notify-debouncer-mini",
  "once_cell",
  "regex",
  "serde",

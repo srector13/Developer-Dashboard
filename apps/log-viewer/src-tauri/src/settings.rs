@@ -132,6 +132,17 @@ pub struct LogSource {
     /// identifiable in a merged view without reading the source column.
     #[serde(default)]
     pub colour: String,
+    /// Which application this file belongs to — "Payments", "Gateway". The
+    /// first level the source list groups by.
+    #[serde(default)]
+    pub app: String,
+    /// Which environment it is from — "prod", "uat", "local". The second level.
+    ///
+    /// Both are free text rather than an enum. Every organisation names its
+    /// environments differently, and a viewer that insists on dev/test/prod is
+    /// wrong for the first person whose company says "sit" and "preprod".
+    #[serde(default)]
+    pub env: String,
 }
 
 impl Default for LogSource {
@@ -142,6 +153,8 @@ impl Default for LogSource {
             path: String::new(),
             enabled: true,
             colour: String::new(),
+            app: String::new(),
+            env: String::new(),
         }
     }
 }
@@ -262,14 +275,20 @@ pub fn migrate_config(raw: serde_json::Value) -> LogsConfig {
 /// The config shipped on first run — an empty source list, because the app
 /// cannot guess which files matter, and the two highlight rules everyone wants.
 pub const DEFAULT_CONFIG: &str = r#"{
-  "//": "Log Viewer content config. Edit and save — the app reloads it, no restart.",
+  "//": "Log Viewer content config. Settings ▸ Sources edits all of this, so you",
+  "//2": "never have to touch this file — but editing it works, and saving reloads",
+  "//3": "the app straight away, no restart.",
 
   "//sources": [
-    "Each entry is one file to tail. `name` is what the source list shows;",
-    "leave it out and the file name is used. `colour` is one of:",
+    "Each entry is one file to tail. `name` is the nickname the source list",
+    "shows; leave it out and the file name is used. `app` and `env` are free",
+    "text — the source list groups by application, then by environment, and",
+    "anything without them is listed under Other. `colour` is one of:",
     "blue, teal, violet, amber, green, pink.",
+    "  { \"path\": \"\\\\\\\\prod-01\\\\logs\\\\api.log\", \"name\": \"api\",",
+    "    \"app\": \"Payments\", \"env\": \"prod\" }",
     "Files opened with --file, or dropped on the window, are session-only:",
-    "use Save to config to keep one."
+    "use the pin button to keep one."
   ],
   "sources": [],
 
@@ -446,10 +465,37 @@ mod tests {
             path: "/x.log".into(),
             colour: "violet".into(),
             enabled: true,
+            ..Default::default()
         }
         .completed(3);
         assert_eq!(source.id, "api");
         assert_eq!(source.colour, "violet");
+    }
+
+    #[test]
+    fn a_source_can_name_the_application_and_environment_it_belongs_to() {
+        let config = migrate_config(serde_json::json!({
+            "sources": [{
+                "path": "\\\\prod-01\\logs\\payments.log",
+                "name": "payments api",
+                "app": "Payments",
+                "env": "prod"
+            }]
+        }));
+        assert_eq!(config.sources[0].name, "payments api");
+        assert_eq!(config.sources[0].app, "Payments");
+        assert_eq!(config.sources[0].env, "prod");
+    }
+
+    #[test]
+    fn a_source_that_names_no_group_is_left_ungrouped_rather_than_guessed_at() {
+        // The renderer shows these under "Other". Inventing an application name
+        // from a directory would be wrong more often than it was right.
+        let config = migrate_config(serde_json::json!({
+            "sources": [{ "path": "/var/log/syslog" }]
+        }));
+        assert_eq!(config.sources[0].app, "");
+        assert_eq!(config.sources[0].env, "");
     }
 
     #[test]

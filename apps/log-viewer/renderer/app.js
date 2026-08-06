@@ -16,10 +16,18 @@
 (function () {
   'use strict';
 
-  const api = window.logsApi;
-  if (!api) return; // opened outside Tauri with no stub installed
-
   const $ = (id) => document.getElementById(id);
+
+  const api = window.logsApi;
+  if (!api) {
+    // Opened outside Tauri with no stub installed. Saying so is the whole
+    // point: an inert window that quietly reads "No lines yet" is
+    // indistinguishable from a working one watching a quiet log, and that is
+    // exactly how "I added a log and can't see anything" starts.
+    $('no-bridge').hidden = false;
+    document.body.dataset.ready = 'no-bridge';
+    return;
+  }
 
   const els = {
     query: $('query'),
@@ -27,13 +35,15 @@
     regex: $('regex'),
     case: $('case'),
     level: $('level'),
+    interval: $('interval'),
     filterError: $('filter-error'),
     sourceList: $('source-list'),
     sourcesEmpty: $('sources-empty'),
     filtersPanel: $('filters-panel'),
     filterList: $('filter-list'),
-    highlightsPanel: $('highlights-panel'),
+    filtersEmpty: $('filters-empty'),
     highlightList: $('highlight-list'),
+    highlightsEmpty: $('highlights-empty'),
     scroller: $('scroller'),
     sizer: $('sizer'),
     rows: $('rows'),
@@ -45,7 +55,7 @@
     copy: $('copy'),
     clear: $('clear'),
     openFile: $('open-file'),
-    revealConfig: $('reveal-config'),
+    openSettings: $('open-settings'),
     dropHint: $('drop-hint'),
   };
 
@@ -75,13 +85,20 @@
   }
 
   const sourceById = new Map();
+  /** Rule id → palette token, so a custom rule's colour reaches the row. */
+  const highlightColours = new Map();
 
   function buildRow(view) {
     const line = view.line;
     const row = document.createElement('div');
     row.className = 'row';
     row.dataset.level = line.level;
-    if (view.highlight) row.dataset.highlight = view.highlight;
+    if (view.highlight) {
+      row.dataset.highlight = view.highlight;
+      // The colour is looked up rather than derived from the rule id: the ids
+      // of user-created rules are arbitrary, so CSS cannot know them.
+      row.dataset.highlightColour = highlightColours.get(view.highlight) || 'blue';
+    }
     if (line.continuation) row.dataset.continuation = 'true';
 
     if (state.settings.showTimestamps) {
@@ -128,6 +145,13 @@
    * is the expensive mode.
    */
   function paint() {
+    // Every path into paint can fire before boot has resolved the context —
+    // a scroll event, a batch of lines from a source that was already being
+    // tailed when the window opened. Reading settings that are not there yet
+    // throws inside a listener, where nothing reports it, and the window stops
+    // drawing with no clue why.
+    if (!state.settings) return;
+
     const wrapping = state.settings.wrap;
     const count = state.lines.length;
 
@@ -223,6 +247,7 @@
       caseSensitive: els.case.classList.contains('on'),
       minLevel: els.level.value,
       sources: [],
+      sinceMins: Number(els.interval.value) || 0,
     };
   }
 
@@ -266,6 +291,7 @@
   els.query.addEventListener('input', scheduleFilter);
   els.exclude.addEventListener('input', scheduleFilter);
   els.level.addEventListener('change', applyFilter);
+  els.interval.addEventListener('change', applyFilter);
 
   for (const toggle of [els.regex, els.case]) {
     toggle.addEventListener('click', () => {
@@ -306,68 +332,148 @@
     return button;
   }
 
+  /** What to call a group nobody named. */
+  const UNGROUPED = 'Other';
+
+  /**
+   * Group the sources by application, then by environment.
+   *
+   * Returns a Map of app → Map of env → sources, both in the order the sources
+   * arrived. Insertion order rather than alphabetical: the config file's order
+   * is a choice someone made, and re-sorting it means the list stops matching
+   * the file they edited.
+   */
+  function groupSources(sources) {
+    const byApp = new Map();
+    for (const source of sources) {
+      const app = (source.app || '').trim() || UNGROUPED;
+      const env = (source.env || '').trim();
+      if (!byApp.has(app)) byApp.set(app, new Map());
+      const byEnv = byApp.get(app);
+      if (!byEnv.has(env)) byEnv.set(env, []);
+      byEnv.get(env).push(source);
+    }
+    return byApp;
+  }
+
+  /** A one-word note about a file that isn't there, or null when it is. */
+  function troubleWith(source) {
+    if (!source.missing) return null;
+    return source.seen
+      ? { label: 'gone', title: `${source.path}\n\nThis file was being read and has now disappeared.` }
+      : { label: 'not found', title: `${source.path}\n\nNothing at this path. Check it in Settings ▸ Sources — a typo, or a share that isn't mounted, looks exactly like a log with nothing in it.` };
+  }
+
+  function buildSourceRow(source) {
+    const item = document.createElement('li');
+    item.className = 'source';
+    item.dataset.colour = source.colour;
+    if (!source.enabled) item.dataset.off = 'true';
+
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    item.appendChild(dot);
+
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = source.name;
+    name.title = source.path;
+    item.appendChild(name);
+
+    // A file that cannot be read says so, right where its line count would be.
+    // This is the whole answer to "I added a log and nothing happened".
+    const trouble = troubleWith(source);
+    if (trouble) {
+      item.dataset.trouble = 'true';
+      const warn = document.createElement('span');
+      warn.className = 'trouble';
+      warn.textContent = trouble.label;
+      warn.title = trouble.title;
+      item.appendChild(warn);
+    } else {
+      const count = document.createElement('span');
+      count.className = 'count';
+      count.textContent = source.lines.toLocaleString();
+      item.appendChild(count);
+    }
+
+    const actions = document.createElement('span');
+    actions.className = 'actions';
+    actions.appendChild(iconButton(
+      source.enabled ? 'eye' : 'eyeOff',
+      source.enabled ? 'Stop reading this file' : 'Read this file again',
+      async () => {
+        await api.setSourceEnabled(source.id, !source.enabled);
+        await refreshSources();
+      },
+    ));
+    if (!source.pinned) {
+      actions.appendChild(iconButton('pin', 'Keep this file in the config', async () => {
+        await api.pinSource(source.id);
+        await refreshSources();
+      }));
+    }
+    actions.appendChild(iconButton('refresh', 'Re-read from the top of the file', async () => {
+      await api.reloadSource(source.id);
+    }));
+    actions.appendChild(iconButton('file', 'Show in Explorer', () => {
+      api.revealSource(source.id).catch(() => {});
+    }));
+    actions.appendChild(iconButton('trash', 'Close this file', async () => {
+      await api.removeSource(source.id);
+      await refreshSources();
+      await applyFilter();
+    }));
+    item.appendChild(actions);
+    return item;
+  }
+
+  function plainList(sources) {
+    const list = document.createElement('ul');
+    for (const source of sources) list.appendChild(buildSourceRow(source));
+    return list;
+  }
+
   async function refreshSources() {
     const sources = await api.listSources();
     sourceById.clear();
     for (const source of sources) sourceById.set(source.id, source);
 
     els.sourcesEmpty.hidden = sources.length > 0;
-    const list = document.createDocumentFragment();
 
-    for (const source of sources) {
-      const item = document.createElement('li');
-      item.className = 'source';
-      item.dataset.colour = source.colour;
-      if (!source.enabled) item.dataset.off = 'true';
-
-      const dot = document.createElement('span');
-      dot.className = 'dot';
-      item.appendChild(dot);
-
-      const name = document.createElement('span');
-      name.className = 'name';
-      name.textContent = source.name;
-      name.title = source.path;
-      item.appendChild(name);
-
-      const count = document.createElement('span');
-      count.className = 'count';
-      count.textContent = source.lines.toLocaleString();
-      item.appendChild(count);
-
-      const actions = document.createElement('span');
-      actions.className = 'actions';
-      actions.appendChild(iconButton(
-        source.enabled ? 'eye' : 'eyeOff',
-        source.enabled ? 'Stop reading this file' : 'Read this file again',
-        async () => {
-          await api.setSourceEnabled(source.id, !source.enabled);
-          await refreshSources();
-        },
-      ));
-      if (!source.pinned) {
-        actions.appendChild(iconButton('pin', 'Keep this file in the config', async () => {
-          await api.pinSource(source.id);
-          await refreshSources();
-        }));
-      }
-      actions.appendChild(iconButton('refresh', 'Re-read from the top of the file', async () => {
-        await api.reloadSource(source.id);
-      }));
-      actions.appendChild(iconButton('file', 'Show in Explorer', () => {
-        api.revealSource(source.id).catch(() => {});
-      }));
-      actions.appendChild(iconButton('trash', 'Close this file', async () => {
-        await api.removeSource(source.id);
-        await refreshSources();
-        await applyFilter();
-      }));
-      item.appendChild(actions);
-
-      list.appendChild(item);
+    // Headings only earn their space once something has been grouped. Watching
+    // three files from one service should not put every one of them under a
+    // heading called "Other".
+    const grouped = sources.some(s => (s.app || '').trim() || (s.env || '').trim());
+    if (!grouped) {
+      els.sourceList.replaceChildren(plainList(sources));
+      paint();
+      return;
     }
 
-    els.sourceList.replaceChildren(list);
+    const fragment = document.createDocumentFragment();
+    for (const [app, byEnv] of groupSources(sources)) {
+      const group = document.createElement('section');
+      group.className = 'source-group';
+
+      const heading = document.createElement('h3');
+      heading.textContent = app;
+      group.appendChild(heading);
+
+      for (const [env, members] of byEnv) {
+        // An environment nobody named needs no sub-heading; its files just sit
+        // under the application.
+        if (env) {
+          const envHeading = document.createElement('h4');
+          envHeading.textContent = env;
+          group.appendChild(envHeading);
+        }
+        group.appendChild(plainList(members));
+      }
+      fragment.appendChild(group);
+    }
+
+    els.sourceList.replaceChildren(fragment);
     // A source's colour and name are shown on every row, so a change to the
     // list means the log needs redrawing too.
     paint();
@@ -379,7 +485,10 @@
 
   function renderSavedFilters() {
     const filters = state.config.filters || [];
-    els.filtersPanel.hidden = filters.length === 0;
+    // The panel stays put even when empty, because its heading carries the
+    // "Edit" link that is how you create the first one.
+    els.filtersPanel.hidden = false;
+    els.filtersEmpty.hidden = filters.length > 0;
 
     const list = document.createDocumentFragment();
     for (const saved of filters) {
@@ -394,6 +503,7 @@
         els.regex.classList.toggle('on', !!saved.regex);
         els.case.classList.toggle('on', !!saved.caseSensitive);
         els.level.value = saved.minLevel || 'unknown';
+        els.interval.value = String(saved.sinceMins || 0);
         applyFilter();
       });
       item.appendChild(button);
@@ -404,7 +514,10 @@
 
   function renderHighlights() {
     const rules = state.config.highlights || [];
-    els.highlightsPanel.hidden = rules.length === 0;
+    els.highlightsEmpty.hidden = rules.length > 0;
+
+    highlightColours.clear();
+    for (const rule of rules) highlightColours.set(rule.id, rule.colour || 'blue');
 
     const list = document.createDocumentFragment();
     for (const rule of rules) {
@@ -421,7 +534,7 @@
       const name = document.createElement('span');
       name.className = 'name';
       name.textContent = rule.name || rule.id;
-      name.title = rule.pattern;
+      name.title = rule.regex ? `/${rule.pattern}/` : rule.pattern;
       item.appendChild(name);
 
       item.appendChild(iconButton(
@@ -450,7 +563,13 @@
     await applyFilter();
   });
 
-  els.revealConfig.addEventListener('click', () => api.revealConfigFile().catch(() => {}));
+  els.openSettings.addEventListener('click', () => window.LogViewerSettings.open());
+
+  // The "Edit" link on each sidebar panel opens settings at that section, so
+  // the thing you were looking at is the thing you land on.
+  for (const button of document.querySelectorAll('[data-settings]')) {
+    button.addEventListener('click', () => window.LogViewerSettings.open(button.dataset.settings));
+  }
 
   els.clear.addEventListener('click', async () => {
     applyView(await api.clear());
@@ -487,6 +606,11 @@
       els.openFile.click();
       return;
     }
+    if (event.ctrlKey && event.key === ',') {
+      event.preventDefault();
+      window.LogViewerSettings.open();
+      return;
+    }
     if (typing) return;
 
     if (event.key === 'f') {
@@ -520,6 +644,12 @@
 
   api.onLinesAppended((payload) => {
     if (!payload || !payload.lines) return;
+    // The tail loop starts polling in `setup`, before this window has finished
+    // asking for its context, so the first batch can land while `settings` is
+    // still null. Dropping it is right: `boot` runs a full query afterwards and
+    // picks up everything, whereas throwing here kills the listener silently
+    // and the view never updates again.
+    if (!state.settings) return;
 
     state.matched = payload.matched;
     state.total = payload.total;
@@ -538,6 +668,21 @@
 
   if (api.onSourcesChanged) {
     api.onSourcesChanged(async () => {
+      await refreshSources();
+      await applyFilter();
+    });
+  }
+
+  // logs.config.json changed on disk. Adopt it without a restart — an edited
+  // config that does nothing until the next launch is exactly what made adding
+  // a source look like it had failed.
+  if (api.onConfigChanged) {
+    api.onConfigChanged(async () => {
+      const context = await api.context();
+      state.config = context.config;
+      showFilterError(context.configError || null);
+      renderSavedFilters();
+      renderHighlights();
       await refreshSources();
       await applyFilter();
     });
@@ -569,8 +714,23 @@
     els.regex.classList.toggle('on', !!context.filter.regex);
     els.case.classList.toggle('on', !!context.filter.caseSensitive);
     els.level.value = context.filter.minLevel || 'unknown';
+    els.interval.value = String(context.filter.sinceMins || 0);
 
     if (context.configError) showFilterError(context.configError);
+
+    // The settings pane edits both files and hands back what it saved, so the
+    // window can adopt it without a round trip.
+    window.LogViewerSettings.init(api, {
+      onSaved: async ({ settings, config }) => {
+        applySettings(settings);
+        state.config = config;
+        renderSavedFilters();
+        renderHighlights();
+        measureRowHeight();
+        await refreshSources();
+        await applyFilter();
+      },
+    });
 
     measureRowHeight();
     renderSavedFilters();

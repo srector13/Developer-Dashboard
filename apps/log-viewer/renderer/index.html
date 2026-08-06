@@ -46,13 +46,25 @@
         <option value="warn">Warn+</option>
         <option value="error">Error+</option>
       </select>
+
+      <!-- The interval counts back from the newest line held, not from the wall
+           clock, so a log that stopped an hour ago still shows its last few
+           minutes rather than nothing. See Matcher::build_at. -->
+      <select id="interval" title="How much of the log to show">
+        <option value="0">Full log</option>
+        <option value="5">Last 5 min</option>
+        <option value="15">Last 15 min</option>
+        <option value="60">Last hour</option>
+        <option value="360">Last 6 hours</option>
+        <option value="1440">Last 24 hours</option>
+      </select>
     </div>
 
     <span class="topbar-spacer"></span>
 
     <button id="open-file" class="icon-button" type="button" title="Open a log file (Ctrl+O)"
             data-icon="plus"></button>
-    <button id="reveal-config" class="icon-button" type="button" title="Show logs.config.json"
+    <button id="open-settings" class="icon-button" type="button" title="Settings (Ctrl+,)"
             data-icon="settings"></button>
   </div>
 
@@ -61,22 +73,41 @@
   <div id="body">
     <aside id="sidebar">
       <section class="panel">
-        <h2>Sources</h2>
-        <ul id="source-list"></ul>
+        <h2>
+          <span>Sources</span>
+          <button class="panel-action" type="button" data-settings="sources">Edit</button>
+        </h2>
+        <!-- Filled by app.js: one group per application, then per environment.
+             A source with neither is listed under "Other". -->
+        <div id="source-list"></div>
         <p class="empty" id="sources-empty">
-          Nothing open yet. Drop a log file on this window, or press
-          <kbd>Ctrl</kbd>+<kbd>O</kbd>.
+          Nothing open yet. Drop a log file on this window, press
+          <kbd>Ctrl</kbd>+<kbd>O</kbd>, or add one in Settings.
         </p>
       </section>
 
       <section class="panel" id="filters-panel" hidden>
-        <h2>Saved filters</h2>
+        <h2>
+          <span>Saved filters</span>
+          <button class="panel-action" type="button" data-settings="filters">Edit</button>
+        </h2>
         <ul id="filter-list"></ul>
+        <p class="empty" id="filters-empty" hidden>
+          No saved filters. Set up the filter bar the way you want it, then keep
+          it from Settings.
+        </p>
       </section>
 
-      <section class="panel" id="highlights-panel" hidden>
-        <h2>Highlights</h2>
+      <section class="panel" id="highlights-panel">
+        <h2>
+          <span>Highlights</span>
+          <button class="panel-action" type="button" data-settings="highlights">Edit</button>
+        </h2>
         <ul id="highlight-list"></ul>
+        <p class="empty" id="highlights-empty" hidden>
+          No colouring rules. Add one in Settings to mark the lines you care
+          about — plain words, or a regular expression.
+        </p>
       </section>
     </aside>
 
@@ -109,8 +140,41 @@
 
   <div id="drop-hint" hidden><span>Drop to open</span></div>
 
+  <div id="settings-overlay">
+    <section id="settings-panel" role="dialog" aria-label="Settings">
+      <header id="settings-head">
+        <h2>Settings</h2>
+        <button class="text-button" id="settings-close" type="button">Close</button>
+      </header>
+      <div id="settings-main">
+        <nav id="settings-nav"></nav>
+        <div id="settings-body"></div>
+      </div>
+      <footer id="settings-foot">
+        <span class="set-hint" id="settings-status">Changes apply when you save.</span>
+        <button class="btn-primary" id="settings-save" type="button" disabled>Save</button>
+      </footer>
+    </section>
+  </div>
+
+  <!-- Shown when the page is loaded without the Tauri bridge — a stale
+       localhost tab, a broken CSP. Before this existed the window simply sat
+       there saying "No lines yet", which is the same thing it says when
+       everything is working and the log is quiet. -->
+  <div id="no-bridge" hidden>
+    <div>
+      <h2>The window isn't connected to the app</h2>
+      <p>
+        Nothing here can read a log file: the page loaded without the Log Viewer
+        backend behind it. Close this window and start
+        <code>log-viewer.exe</code> again.
+      </p>
+    </div>
+  </div>
+
   <script src="vendor/suite/icons.js"></script>
   <script src="api-tauri.js"></script>
+  <script src="settings.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

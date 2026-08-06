@@ -53,8 +53,25 @@ crates/
 ui/                  tokens.css, icons.js, the vendored fonts
 apps/
 ├─ dev-hub/
-└─ log-viewer/
+├─ log-viewer/
+└─ markdown-notebook/
 ```
+
+### Each app watches its own config file
+
+Dev Hub and Log Viewer both watch the JSON file that holds their content and
+reload it in place. This is not shared code — it is thirty lines each, over
+`notify-debouncer-mini`, and the thing it reloads is different in both — but it
+*is* a shared rule, and the reason is worth writing down: a config file that is
+only read at startup makes an edit look like a failure. Log Viewer went a whole
+beta without one, and the bug it produced was reported as "I added a log and I
+can't see the lines" — everything downstream was correct, and the app had simply
+never been told.
+
+Both watch the *directory* rather than the file. Most editors save by writing a
+temp file and renaming it over the original, which destroys the handle a file
+watch is bound to; a file watch therefore works exactly once, which is worse
+than not having one.
 
 ### The crates carry no Tauri dependency
 

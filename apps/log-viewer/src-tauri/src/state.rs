@@ -8,10 +8,29 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use serde::Serialize;
+
 use crate::filter::FilterSpec;
 use crate::settings::{self, LogSource, LogsConfig, ViewerSettings};
 use crate::store::LineStore;
 use crate::tail::Tail;
+
+/// What the last poll of one source found.
+///
+/// This exists because of the bug it fixes. `Tail::poll` has always reported
+/// `missing`, and nothing ever read it: a source whose path had a typo in it, or
+/// pointed at a share that wasn't mounted, produced no lines and no complaint,
+/// which from the outside is identical to a quiet log. "I added a file and see
+/// nothing" has to have an answer on screen.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceHealth {
+    /// The file could not be read on the last poll.
+    pub missing: bool,
+    /// True once the file has been read successfully at least once, so the UI
+    /// can tell "never showed up" from "was there and went away".
+    pub seen: bool,
+}
 
 pub struct AppState {
     settings: Mutex<ViewerSettings>,
@@ -27,6 +46,8 @@ pub struct AppState {
     /// Reported to the renderer so a config error is visible rather than
     /// looking like an empty config.
     config_error: Mutex<Option<String>>,
+    /// What the last poll found, per source id.
+    health: Mutex<HashMap<String, SourceHealth>>,
 }
 
 impl AppState {
@@ -45,6 +66,7 @@ impl AppState {
             tails: Mutex::new(HashMap::new()),
             filter: Mutex::new(FilterSpec::default()),
             config_error: Mutex::new(config_error),
+            health: Mutex::new(HashMap::new()),
         }
     }
 
@@ -70,6 +92,13 @@ impl AppState {
 
     pub fn config_error(&self) -> Option<String> {
         self.config_error.lock().unwrap().clone()
+    }
+
+    /// Report a config that would not parse, without touching the config that
+    /// is currently working. The watcher uses this: a file caught mid-edit is
+    /// something to say, not a reason to stop tailing.
+    pub fn set_config_error(&self, error: String) {
+        *self.config_error.lock().unwrap() = Some(error);
     }
 
     pub fn filter(&self) -> FilterSpec {
@@ -133,6 +162,7 @@ impl AppState {
         self.session.lock().unwrap().retain(|s| s.id != id);
         self.tails.lock().unwrap().remove(id);
         self.store.lock().unwrap().clear_source(id);
+        self.health.lock().unwrap().remove(id);
     }
 
     pub fn set_source_enabled(&self, id: &str, enabled: bool) {
@@ -160,6 +190,26 @@ impl AppState {
         drop(session);
         self.config.lock().unwrap().sources.push(source.clone());
         Some(source)
+    }
+
+    /// Record what a poll found. Returns true when this changed the answer, so
+    /// the tail loop can tell the window only when there is something new to
+    /// say rather than on every tick.
+    pub fn set_health(&self, id: &str, missing: bool) -> bool {
+        let mut health = self.health.lock().unwrap();
+        let entry = health.entry(id.to_string()).or_default();
+        let before = *entry;
+        entry.missing = missing;
+        entry.seen |= !missing;
+        *entry != before
+    }
+
+    pub fn health(&self, id: &str) -> SourceHealth {
+        self.health.lock().unwrap().get(id).copied().unwrap_or(
+            // Nothing polled yet. Not missing — claiming a file is gone before
+            // anyone has looked for it would be its own kind of wrong.
+            SourceHealth::default(),
+        )
     }
 
     pub fn with_store<T>(&self, f: impl FnOnce(&mut LineStore) -> T) -> T {
@@ -212,6 +262,7 @@ mod tests {
             tails: Mutex::new(HashMap::new()),
             filter: Mutex::new(FilterSpec::default()),
             config_error: Mutex::new(None),
+            health: Mutex::new(HashMap::new()),
         }
     }
 
@@ -241,6 +292,7 @@ mod tests {
                 path: "/var/log/api.log".into(),
                 enabled: true,
                 colour: "blue".into(),
+                ..Default::default()
             }],
             ..Default::default()
         });
@@ -330,6 +382,44 @@ mod tests {
     }
 
     #[test]
+    fn a_source_nobody_has_polled_yet_is_not_reported_as_missing() {
+        let state = state();
+        assert_eq!(state.health("api"), SourceHealth::default());
+        assert!(!state.health("api").missing);
+    }
+
+    #[test]
+    fn a_file_that_never_turned_up_is_distinguishable_from_one_that_went_away() {
+        let state = state();
+
+        assert!(state.set_health("typo", true), "first answer is news");
+        assert!(!state.set_health("typo", true), "the same answer is not");
+        assert!(state.health("typo").missing);
+        assert!(
+            !state.health("typo").seen,
+            "it has never once been readable — probably a wrong path"
+        );
+
+        state.set_health("rotating", false);
+        assert!(state.set_health("rotating", true));
+        let health = state.health("rotating");
+        assert!(health.missing && health.seen, "it was there and now is not");
+    }
+
+    #[test]
+    fn closing_a_source_forgets_what_was_known_about_its_file() {
+        let state = state();
+        let source = state.add_session_source("/var/log/api.log").unwrap();
+        state.set_health(&source.id, true);
+
+        state.remove_source(&source.id);
+        assert!(
+            !state.health(&source.id).missing,
+            "reopening the same path must not inherit the old complaint"
+        );
+    }
+
+    #[test]
     fn a_config_that_failed_to_parse_is_reported_rather_than_looking_empty() {
         let state = state();
         *state.config_error.lock().unwrap() = Some("logs.config.json is not valid JSON".into());
@@ -337,5 +427,110 @@ mod tests {
 
         state.set_config(LogsConfig::default());
         assert_eq!(state.config_error(), None, "a successful save clears it");
+    }
+}
+
+#[cfg(test)]
+mod integration {
+    use super::*;
+    use crate::filter::{Highlighter, Matcher};
+
+    fn fresh() -> AppState {
+        AppState {
+            settings: Mutex::new(ViewerSettings::default()),
+            config: Mutex::new(LogsConfig::default()),
+            session: Mutex::new(Vec::new()),
+            store: Mutex::new(LineStore::with_capacity(1000)),
+            tails: Mutex::new(HashMap::new()),
+            filter: Mutex::new(FilterSpec::default()),
+            config_error: Mutex::new(None),
+            health: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// End to end, exactly what the app does when you add a file: register the
+    /// source, reconcile the readers, poll, and ask for the view.
+    ///
+    /// Written to chase "I added a log and see nothing". It passes, which is
+    /// what ruled the backend out: the reading path is correct, and the two
+    /// things that made a real file look empty were both above it — a config
+    /// that was never re-read (`desktop::watch_config`) and a file that could
+    /// not be opened at all, which nothing reported
+    /// (`a_file_that_cannot_be_read_is_reported_rather_than_silent`).
+    #[test]
+    fn adding_a_file_then_polling_shows_its_lines() {
+        let dir = std::env::temp_dir().join("log-viewer-repro-add");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("app.log");
+        std::fs::write(&path, "line one\nline two\nline three\n").unwrap();
+
+        let state = fresh();
+
+        let source = state
+            .add_session_source(&path.to_string_lossy())
+            .expect("the file is added as a source");
+        assert!(source.enabled, "a newly added source must be read");
+
+        state.reconcile_tails();
+        assert_eq!(
+            state.with_tails(|t| t.len()),
+            1,
+            "one reader for one source"
+        );
+
+        // What the tail loop does each tick.
+        let polls = state.with_tails(|tails| {
+            tails
+                .iter_mut()
+                .map(|(id, tail)| (id.clone(), tail.poll()))
+                .collect::<Vec<_>>()
+        });
+        for (id, poll) in polls {
+            assert!(!poll.missing, "the file exists");
+            state.with_store(|store| store.extend(&id, poll.lines));
+        }
+
+        let matcher = Matcher::build(&state.filter()).unwrap();
+        let view = state.with_store(|store| {
+            store.query(&matcher, &Highlighter::default(), state.settings().window)
+        });
+
+        let texts: Vec<&str> = view.lines.iter().map(|l| l.line.text.as_str()).collect();
+        assert_eq!(texts, vec!["line one", "line two", "line three"]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The other half of "I added a log and see nothing": the path was wrong.
+    ///
+    /// Every step here succeeds. The source is added, a reader is created, the
+    /// poll runs — and there is nothing to show, because there is no file. The
+    /// only thing that separates this from a quiet log is that the poll said
+    /// `missing`, so that has to reach the window.
+    #[test]
+    fn a_file_that_cannot_be_read_is_reported_rather_than_silent() {
+        let state = fresh();
+        let source = state
+            .add_session_source("/no/such/directory/typo.log")
+            .expect("a path that does not exist is still added — it may appear");
+
+        state.reconcile_tails();
+        let polls = state.with_tails(|tails| {
+            tails
+                .iter_mut()
+                .map(|(id, tail)| (id.clone(), tail.poll()))
+                .collect::<Vec<_>>()
+        });
+        for (id, poll) in polls {
+            state.set_health(&id, poll.missing);
+        }
+
+        let health = state.health(&source.id);
+        assert!(health.missing, "the sidebar has to be able to say so");
+        assert!(
+            !health.seen,
+            "and that it was never there in the first place"
+        );
     }
 }

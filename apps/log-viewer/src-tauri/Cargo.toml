@@ -31,3 +31,5 @@ regex = { workspace = true }
 once_cell = { workspace = true }
 chrono = { workspace = true }
 tokio = { workspace = true }
+notify = { workspace = true }
+notify-debouncer-mini = { workspace = true }

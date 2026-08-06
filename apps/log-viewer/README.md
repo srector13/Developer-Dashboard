@@ -30,7 +30,37 @@ Four ways, none of which need configuration:
 
 Files opened this way are for the session only — looking at a log once is not a
 preference. The **pin** button on a source keeps it in `logs.config.json` so it
-comes back next time.
+comes back next time, and **Settings ▸ Sources** is where you add one that
+should have been there all along.
+
+### When a file isn't there
+
+A source whose path doesn't resolve is marked **not found** in the sidebar,
+where its line count would be; one that was being read and then disappeared says
+**gone**. Hovering gives the path and what to do about it.
+
+This matters more than it sounds. A typo in a path, or a share that isn't
+mounted, produces a source with no lines — which looks exactly like a log that
+has nothing in it. The two have to be tellable apart at a glance.
+
+## Naming and grouping
+
+A source has a **nickname** — what the log's source column shows, and what the
+sidebar lists it as. "api", not
+`C:\services\payments\logs\application.log`. Leave it out and the file name is
+used.
+
+Two more free-text fields decide how the sidebar is arranged:
+
+- **Application** — "Payments", "Gateway"
+- **Environment** — "prod", "uat", "local"
+
+The list groups by application, then by environment within it. Both are free
+text rather than a fixed set: every organisation names its environments
+differently, and a viewer that insists on dev/test/prod is wrong for the first
+person whose company says "sit" and "preprod". Headings only appear once
+something has been grouped — three files from one service stay a flat list, and
+anything with neither field is listed under **Other**.
 
 ## The merged view
 
@@ -68,9 +98,18 @@ position of the line above it.
 | **.\*** | Treat both as regular expressions. |
 | **Aa** | Match case. |
 | **Level** | Hide anything below a severity. |
+| **Interval** | The full log, or just the last 5 minutes / 15 / hour / 6 hours / 24. |
 
 Exclude is the one that does the real work during an incident — a health-check
 endpoint logging every second buries everything else.
+
+The interval counts back from the **newest line held**, not from the wall clock.
+Anchoring it to the clock is the obvious choice and the wrong one: a service that
+stopped an hour ago has a perfectly good log, and "last 15 minutes" against the
+clock would empty the window with no explanation. Counting back from the newest
+line means the interval always shows the end of the log, which is what someone
+asking for it wants. A line the parser could not place in time is kept rather
+than hidden, for the same reason a level floor keeps a stack trace.
 
 A level floor never hides a line whose level couldn't be read. Filtering to
 `error` is exactly when you need the stack trace, and its continuation lines
@@ -80,15 +119,57 @@ An invalid regular expression is reported inline, naming which of the two boxes
 is wrong. The previous results stay on screen: blanking the window on every
 keystroke of a half-typed `(\d` would make the feature unusable.
 
-Filters you want back live in `logs.config.json` under `filters`, and appear in
-the sidebar.
+Filters you want back appear in the sidebar. **Settings ▸ Saved filters ▸ Save
+what the filter bar says now** keeps the current one, which is the path that
+actually gets used: you narrow things down during an incident and then want to
+keep what worked.
 
 ## Highlight rules
 
-Colouring, never hiding — lines you want to spot while scrolling past
-everything else. Errors and warnings are coloured out of the box; the rest is
-config. The first matching rule wins, so the order in the list is how you decide
-which one takes precedence.
+Colouring, never hiding — lines you want to spot while scrolling past everything
+else. Errors and warnings are coloured out of the box; everything after that is
+yours, in **Settings ▸ Highlights**.
+
+A rule is a name, a pattern, a colour and two switches:
+
+| | |
+| --- | --- |
+| **.\*** | The pattern is a regular expression rather than words to look for. |
+| **Aa** | Match case. |
+
+Regular expressions are Rust's `regex` syntax: character classes, alternation,
+anchors, repetition and non-greedy quantifiers all work; backreferences and
+lookaround do not. The pattern is checked *by the backend* as you type — not by
+the browser's own `RegExp`, which is a different dialect and would happily accept
+a lookahead that then silently matched nothing.
+
+That check is the point. A rule whose pattern will not compile is skipped, so it
+colours nothing — which is indistinguishable from a rule that matched nothing.
+The editor says which it is.
+
+The first matching rule wins, so the order in the list is how you decide which
+takes precedence: put the specific rules above the general ones, and use the
+arrows to move them.
+
+## Settings
+
+**Ctrl+,**, the gear in the toolbar, or the **Edit** link on any sidebar panel —
+which opens on the section that panel belongs to.
+
+| Section | Holds |
+| --- | --- |
+| **Sources** | Path, nickname, application, environment, colour, on/off |
+| **Highlights** | The colouring rules, in order |
+| **Saved filters** | Named filter-bar presets |
+| **Display** | Theme, text size, wrapping, which columns, poll interval, buffer sizes |
+| **Advanced** | `logs.config.json` as raw text, and a way to it in Explorer |
+
+Saving is explicit: the form edits a working copy and nothing reaches disk until
+**Save**, so a half-typed path never restarts a tail.
+
+Nothing here *requires* the settings screen — the file underneath is still a
+plain, hand-editable document, and editing it takes effect immediately (see
+below). The screen exists so that it never has to be.
 
 ## Following
 
@@ -108,6 +189,7 @@ is handled the same way. Neither replays lines you have already seen.
 | --- | --- |
 | <kbd>Ctrl</kbd>+<kbd>F</kbd> or <kbd>/</kbd> | Focus the filter box |
 | <kbd>Ctrl</kbd>+<kbd>O</kbd> | Open a file |
+| <kbd>Ctrl</kbd>+<kbd>,</kbd> | Settings |
 | <kbd>Ctrl</kbd>+<kbd>L</kbd> | Clear the buffer |
 | <kbd>F</kbd> | Toggle following |
 | <kbd>End</kbd> | Jump to newest |
@@ -128,14 +210,22 @@ They are separate so the config can be hand-edited and version-controlled
 without dragging app state along. Both are merged onto their defaults on read,
 so a partial file never silently loses keys.
 
+`logs.config.json` is **watched**: save it and the running app adopts it, no
+restart. A file caught mid-edit — a trailing comma, a half-typed path — is
+reported in the bar under the toolbar and the previous config is kept, rather
+than a working set of sources being replaced by nothing.
+
 ```jsonc
 {
   "sources": [
-    { "name": "api", "path": "C:\\services\\payments\\logs\\application.log", "colour": "blue" },
-    { "name": "worker", "path": "C:\\services\\worker\\logs\\application.log", "colour": "teal" }
+    { "name": "api", "path": "C:\\services\\payments\\logs\\application.log",
+      "app": "Payments", "env": "prod", "colour": "blue" },
+    { "name": "worker", "path": "C:\\services\\worker\\logs\\application.log",
+      "app": "Payments", "env": "uat", "colour": "teal" }
   ],
   "filters": [
     { "id": "errors", "name": "Errors only", "minLevel": "error" },
+    { "id": "recent", "name": "Last 15 minutes", "sinceMins": 15 },
     { "id": "quiet", "name": "No health checks", "exclude": "/actuator/health" }
   ],
   "highlights": [
@@ -196,6 +286,7 @@ npm run test:renderer:logs   # the renderer spec, node-run in Chromium
 src-tauri/src/
 ├─ main.rs      Tauri wiring, CLI, the poll loop
 ├─ commands.rs  every #[tauri::command]
+├─ desktop.rs   the logs.config.json watcher
 ├─ tail.rs      incremental reads, rotation, partial lines
 ├─ parse.rs     timestamp and level extraction
 ├─ line.rs      what a parsed line is
@@ -207,6 +298,7 @@ src-tauri/src/
 
 renderer/
 ├─ index.html + app.js   the window
+├─ settings.js           the settings screen
 ├─ api-tauri.js          the renderer↔Rust bridge
 └─ style.css             component classes; palette from ui/tokens.css
 ```

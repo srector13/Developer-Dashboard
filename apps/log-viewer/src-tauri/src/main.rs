@@ -4,6 +4,7 @@
 
 mod cli;
 mod commands;
+mod desktop;
 mod filter;
 mod line;
 mod parse;
@@ -50,11 +51,13 @@ fn main() {
             commands::pin_source,
             commands::reload_source,
             commands::set_filter,
+            commands::check_pattern,
             commands::refresh,
             commands::clear,
             commands::copy_view,
             commands::reveal_source,
             commands::pick_files,
+            commands::browse_file,
             commands::open_sibling,
             commands::reveal_config_file,
         ])
@@ -75,6 +78,11 @@ fn main() {
                 state.set_settings(settings);
             }
             state.reconcile_tails();
+
+            // Editing logs.config.json has to take effect while the app is
+            // running. Without this a source added by hand is invisible until
+            // the next launch, which reads as "the viewer doesn't work".
+            desktop::watch_config(&handle);
 
             spawn_tail_loop(handle);
             Ok(())
@@ -125,8 +133,14 @@ fn spawn_tail_loop(app: tauri::AppHandle) {
 
             let mark = state.with_store(|store| store.next_seq());
             let mut appended = false;
+            let mut health_changed = false;
 
             for (id, poll) in polls {
+                // Whether the file could be read is the answer to "I added a
+                // log and see nothing", so it is recorded even when — especially
+                // when — there are no lines to go with it.
+                health_changed |= state.set_health(&id, poll.missing);
+
                 if poll.rotated {
                     state.with_store(|store| store.mark_rotation(&id));
                     appended = true;
@@ -137,11 +151,21 @@ fn spawn_tail_loop(app: tauri::AppHandle) {
                 }
             }
 
+            // Only when the answer changed: this loop runs four times a second,
+            // and a window that redraws its sidebar that often is a battery
+            // problem rather than a feature.
+            if health_changed {
+                let _ = app.emit("sources-changed", ());
+            }
+
             if appended {
                 let filter = state.filter();
+                let anchor = state
+                    .with_store(|store| store.newest_timestamp())
+                    .unwrap_or_else(filter::now_millis);
                 // A filter that no longer compiles — the user is mid-edit —
                 // just means no incremental push this tick.
-                if let Ok(matcher) = filter::Matcher::build(&filter) {
+                if let Ok(matcher) = filter::Matcher::build_at(&filter, anchor) {
                     let highlighter = filter::Highlighter::build(&state.config().highlights);
                     let batch =
                         state.with_store(|store| store.query_since(mark, &matcher, &highlighter));
