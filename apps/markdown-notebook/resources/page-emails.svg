@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <defs>
+    <linearGradient id="emailPageGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ea580c" />
+      <stop offset="100%" stop-color="#fb923c" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="1.5" stdDeviation="1" flood-opacity="0.15" />
+    </filter>
+  </defs>
+  <path d="M6 2a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6H6zm0 2h7v5h5v11H6V4zm8 0.5L17.5 8H14V4.5z" fill="url(#emailPageGrad)" filter="url(#shadow)"/>
+  <!-- Email Envelope symbol -->
+  <path d="M9 11.5h6a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1z" fill="none" stroke="#ffffff" stroke-width="1.1" stroke-linejoin="round"/>
+  <path d="M8.5 12.2l3.5 2.2 3.5-2.2" fill="none" stroke="#ffffff" stroke-width="1.1" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,18 @@
+node_modules/
+out/
+output/
+dist/
+*.vsix
+*.zip
+.DS_Store
+
+# Rust / Tauri
+/src-tauri/target/
+/src-tauri/gen/
+
+# Playwright
+/playwright-report/
+/test-results/
+/blob-report/
+/playwright/.cache/
+/tests/renderer/ui-audit-output/

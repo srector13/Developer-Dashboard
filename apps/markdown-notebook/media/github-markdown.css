@@ -1,0 +1,638 @@
+/* GitHub-flavored Markdown preview theme for VS Code.
+   Light styling by default; dark overrides when <body> has vscode-dark.
+   Scoped tokens follow GitHub Primer color values. */
+
+:root {
+  --gh-fg: #1f2328;
+  --gh-muted: #59636e;
+  --gh-border: #d1d9e0;
+  --gh-bg: #ffffff;
+  --gh-code-bg: #eff1f3;
+  --gh-code-fg: #1f2328;
+  --gh-block-bg: #f6f8fa;
+  --gh-accent: #0969da;
+  --gh-quote-fg: #59636e;
+  --gh-quote-border: #d1d9e0;
+  --gh-table-stripe: #f6f8fa;
+  --gh-mark-bg: #fff8c5;
+  --gh-mark-fg: #1f2328;
+}
+
+body.vscode-dark,
+body.vscode-high-contrast:not(.vscode-high-contrast-light) {
+  --gh-fg: #e6edf3;
+  --gh-muted: #9198a1;
+  --gh-border: #3d444d;
+  --gh-bg: #0d1117;
+  --gh-code-bg: #6e76811a;
+  --gh-code-fg: #e6edf3;
+  --gh-block-bg: #151b23;
+  --gh-accent: #4493f8;
+  --gh-quote-fg: #9198a1;
+  --gh-quote-border: #3d444d;
+  --gh-table-stripe: #151b23;
+  --gh-mark-bg: #bb800926;
+  --gh-mark-fg: #f8e3a1;
+}
+
+/* Apply only when the user opts in via our setting (class added by config). */
+body.notebook-github-theme {
+  color: var(--gh-fg);
+  background-color: var(--gh-bg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 24px 32px 64px;
+}
+
+body.notebook-github-theme h1,
+body.notebook-github-theme h2 {
+  border-bottom: 1px solid var(--gh-border);
+  padding-bottom: .3em;
+  font-weight: 600;
+}
+body.notebook-github-theme h1 { font-size: 2em; margin: .67em 0 .5em; }
+body.notebook-github-theme h2 { font-size: 1.5em; margin: 1.2em 0 .5em; }
+body.notebook-github-theme h3 { font-size: 1.25em; font-weight: 600; }
+body.notebook-github-theme h4 { font-size: 1em; font-weight: 600; }
+
+body.notebook-github-theme a { color: var(--gh-accent); text-decoration: none; }
+body.notebook-github-theme a:hover { text-decoration: underline; }
+
+body.notebook-github-theme code {
+  background-color: var(--gh-code-bg);
+  color: var(--gh-code-fg);
+  padding: .2em .4em;
+  border-radius: 6px;
+  font-size: 85%;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+body.notebook-github-theme pre {
+  background-color: var(--gh-block-bg);
+  border-radius: 6px;
+  padding: 16px;
+  overflow: auto;
+  line-height: 1.45;
+}
+body.notebook-github-theme pre code {
+  background: transparent;
+  padding: 0;
+  font-size: 85%;
+}
+
+body.notebook-github-theme blockquote {
+  color: var(--gh-quote-fg);
+  border-left: .25em solid var(--gh-quote-border);
+  padding: 0 1em;
+  margin-left: 0;
+}
+
+body.notebook-github-theme table {
+  border-collapse: collapse;
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow: auto;
+  margin: 0 0 16px;
+}
+body.notebook-github-theme table th,
+body.notebook-github-theme table td {
+  border: 1px solid var(--gh-border);
+  padding: 6px 13px;
+}
+body.notebook-github-theme table tr:nth-child(2n) { background-color: var(--gh-table-stripe); }
+body.notebook-github-theme table th { font-weight: 600; }
+
+body.notebook-github-theme hr {
+  border: 0;
+  border-top: 1px solid var(--gh-border);
+  height: 0;
+  margin: 24px 0;
+}
+
+body.notebook-github-theme mark {
+  background-color: var(--gh-mark-bg);
+  color: var(--gh-mark-fg);
+  border-radius: 3px;
+  padding: .1em .2em;
+}
+
+/* Task lists */
+body.notebook-github-theme .task-list-item { list-style-type: none; }
+body.notebook-github-theme .task-list-item-checkbox { margin: 0 .35em .25em -1.4em; vertical-align: middle; cursor: pointer; }
+
+/* Mermaid */
+body.notebook-github-theme pre.mermaid,
+body.notebook-github-theme pre.notebook-mermaid,
+body.notebook-github-theme .mermaid-svg {
+  background: transparent !important;
+  background-color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 8px 0;
+  text-align: center;
+}
+body.notebook-github-theme pre.mermaid:not(.mermaid-rendered),
+body.notebook-github-theme pre.notebook-mermaid:not(.mermaid-rendered) {
+  /* While rendering, show the source dimmed rather than a flash of nothing. */
+  color: var(--gh-muted);
+  font-family: ui-monospace, monospace;
+  font-size: 85%;
+  text-align: left;
+  white-space: pre-wrap;
+}
+body.notebook-github-theme .mermaid-error-note {
+  color: #cf222e;
+  font-family: -apple-system, sans-serif;
+  font-size: 13px;
+  margin-top: 6px;
+}
+body.vscode-dark .mermaid-error-note { color: #ff7b72; }
+
+/* Table of Contents Stats Strip styles */
+body.notebook-github-theme .toc-stats-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 28px;
+  margin-top: 20px;
+}
+
+body.notebook-github-theme .toc-stat-card {
+  flex: 1;
+  min-width: 160px;
+  padding: 18px 22px;
+  background: var(--gh-block-bg);
+  border: 1px solid var(--gh-border);
+  border-radius: 10px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.01);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+body.notebook-github-theme .toc-stat-val {
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1;
+  color: #059669; /* Emerald green */
+}
+body.vscode-dark.notebook-github-theme .toc-stat-val {
+  color: #34d399;
+}
+
+body.notebook-github-theme .toc-stat-lbl {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--gh-muted);
+}
+
+
+/* Table of Contents elegant grid dashboard cards */
+body.notebook-github-theme ul:not(.tasks-dashboard-view ul):has(a[href*="./"]) {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+  padding: 0;
+  list-style-type: none;
+  margin-top: 24px;
+}
+
+body.notebook-github-theme ul:not(.tasks-dashboard-view ul):has(a[href*="./"]) li {
+  margin: 0;
+  padding: 0;
+}
+
+body.notebook-github-theme ul:not(.tasks-dashboard-view ul):has(a[href*="./"]) li a {
+  display: block;
+  padding: 18px 22px;
+  background: var(--gh-block-bg);
+  border: 1px solid var(--gh-border);
+  border-radius: 10px;
+  font-weight: 600;
+  color: var(--gh-fg);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.01);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Hover effects with elegant left-border mint-green accent */
+body.notebook-github-theme ul:not(.tasks-dashboard-view ul):has(a[href*="./"]) li a:hover {
+  text-decoration: none;
+  border-color: #34d399; /* Mint green */
+  box-shadow: 0 6px 20px rgba(52, 211, 153, 0.12);
+  transform: translateY(-3px);
+}
+
+body.notebook-github-theme ul:not(.tasks-dashboard-view ul):has(a[href*="./"]) li a::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background-color: #34d399; /* Mint green accent band */
+  transform: scaleY(0);
+  transition: transform 0.2s ease;
+}
+
+body.notebook-github-theme ul:not(.tasks-dashboard-view ul):has(a[href*="./"]) li a:hover::before {
+  transform: scaleY(1);
+}
+
+/* Layout width overrides */
+body.notebook-github-theme.notebook-width-standard {
+  max-width: 980px !important;
+}
+body.notebook-github-theme.notebook-width-wide {
+  max-width: 1400px !important;
+}
+body.notebook-github-theme.notebook-width-full {
+  max-width: 100% !important;
+  padding-left: 48px !important;
+  padding-right: 48px !important;
+}
+
+/* Floating Page Width Controller */
+.notebook-width-controller {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 9999;
+  display: flex;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 20px;
+  padding: 3px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+  opacity: 0.85;
+  transition: opacity 0.2s ease, transform 0.2s ease, background 0.2s ease;
+}
+.notebook-width-controller:hover {
+  opacity: 1;
+  transform: translateY(1px);
+}
+body.vscode-dark .notebook-width-controller {
+  background: rgba(21, 27, 35, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+.notebook-width-btn {
+  background: transparent;
+  border: none;
+  border-radius: 17px;
+  color: var(--gh-muted);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  outline: none;
+}
+.notebook-width-btn:hover {
+  color: var(--gh-fg);
+}
+.notebook-width-btn.active {
+  background: var(--gh-bg);
+  color: #059669; /* Emerald green */
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+  border: 1px solid var(--gh-border);
+  padding: 5px 11px; /* Offset border padding */
+}
+body.vscode-dark .notebook-width-btn.active {
+  color: #34d399; /* Mint green */
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+/* Hover Action Toolbar for Mermaid Diagrams */
+pre.notebook-mermaid {
+  position: relative !important;
+}
+.mermaid-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 100;
+  display: flex;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 6px;
+  padding: 2px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s ease, visibility 0.2s ease;
+}
+pre.notebook-mermaid:hover .mermaid-actions {
+  opacity: 1;
+  visibility: visible;
+}
+body.vscode-dark .mermaid-actions {
+  background: rgba(21, 27, 35, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.mermaid-action-btn {
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--gh-muted);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  outline: none;
+}
+.mermaid-action-btn:hover {
+  background: var(--gh-code-bg);
+  color: var(--gh-fg);
+}
+
+/* Fullscreen Glassmorphic Modal */
+.mermaid-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 100000;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.25s ease, visibility 0.25s ease;
+  overflow: auto;
+}
+body.vscode-dark .mermaid-modal {
+  background: rgba(13, 17, 23, 0.92);
+}
+.mermaid-modal.active {
+  opacity: 1;
+  visibility: visible;
+}
+.mermaid-modal-content {
+  width: 85vw;
+  height: 85vh;
+  max-width: 90%;
+  max-height: 90%;
+  overflow: auto;
+  padding: 24px;
+  background: var(--gh-bg);
+  border: 1px solid var(--gh-border);
+  border-radius: 12px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  transform: scale(0.95);
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  box-sizing: border-box;
+}
+body.vscode-dark .mermaid-modal-content {
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+}
+.mermaid-modal.active .mermaid-modal-content {
+  transform: scale(1);
+}
+.mermaid-modal-close {
+  position: absolute;
+  top: 20px;
+  right: 24px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--gh-block-bg);
+  border: 1px solid var(--gh-border);
+  color: var(--gh-fg);
+  font-size: 20px;
+  font-weight: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  z-index: 100001;
+  outline: none;
+}
+.mermaid-modal-close:hover {
+  background: var(--gh-code-bg);
+  transform: rotate(90deg);
+}
+.mermaid-modal-content svg {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+}
+
+/* Theme separator */
+.notebook-toolbar-separator {
+  width: 1px;
+  background: var(--gh-border);
+  margin: 3px 6px;
+  align-self: stretch;
+}
+
+/* Force light theme overrides */
+body.notebook-preview-light,
+body.vscode-dark.notebook-preview-light {
+  --gh-fg: #1f2328;
+  --gh-muted: #59636e;
+  --gh-border: #d1d9e0;
+  --gh-bg: #ffffff;
+  --gh-code-bg: #eff1f3;
+  --gh-code-fg: #1f2328;
+  --gh-block-bg: #f6f8fa;
+  --gh-accent: #0969da;
+  --gh-quote-fg: #59636e;
+  --gh-quote-border: #d1d9e0;
+  --gh-table-stripe: #f6f8fa;
+  --gh-mark-bg: #fff8c5;
+  --gh-mark-fg: #1f2328;
+}
+
+body.notebook-preview-light.notebook-github-theme .toc-stat-val,
+body.vscode-dark.notebook-preview-light.notebook-github-theme .toc-stat-val {
+  color: #059669;
+}
+
+body.notebook-preview-light .notebook-width-controller,
+body.vscode-dark.notebook-preview-light .notebook-width-controller {
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+}
+
+body.notebook-preview-light .notebook-width-btn.active,
+body.vscode-dark.notebook-preview-light .notebook-width-btn.active {
+  color: #059669;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+}
+
+body.notebook-preview-light .mermaid-actions,
+body.vscode-dark.notebook-preview-light .mermaid-actions {
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+body.notebook-preview-light .mermaid-modal,
+body.vscode-dark.notebook-preview-light .mermaid-modal {
+  background: rgba(255, 255, 255, 0.9);
+}
+
+body.notebook-preview-light .mermaid-modal-content,
+body.vscode-dark.notebook-preview-light .mermaid-modal-content {
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+}
+
+/* Force dark theme overrides */
+body.notebook-preview-dark {
+  --gh-fg: #e6edf3;
+  --gh-muted: #9198a1;
+  --gh-border: #3d444d;
+  --gh-bg: #0d1117;
+  --gh-code-bg: #6e76811a;
+  --gh-code-fg: #e6edf3;
+  --gh-block-bg: #151b23;
+  --gh-accent: #4493f8;
+  --gh-quote-fg: #9198a1;
+  --gh-quote-border: #3d444d;
+  --gh-table-stripe: #151b23;
+  --gh-mark-bg: #bb800926;
+  --gh-mark-fg: #f8e3a1;
+}
+
+body.notebook-preview-dark.notebook-github-theme .toc-stat-val {
+  color: #34d399;
+}
+
+body.notebook-preview-dark .notebook-width-controller {
+  background: rgba(21, 27, 35, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+body.notebook-preview-dark .notebook-width-btn.active {
+  color: #34d399;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+}
+
+body.notebook-preview-dark .mermaid-actions {
+  background: rgba(21, 27, 35, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+body.notebook-preview-dark .mermaid-modal {
+  background: rgba(13, 17, 23, 0.92);
+}
+
+body.notebook-preview-dark .mermaid-modal-content {
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+}
+
+/* Tasks Dashboard View custom styling */
+body.notebook-github-theme .tasks-dashboard-view ul {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 10px !important;
+  padding-left: 0 !important;
+  list-style-type: none !important;
+  margin-top: 20px !important;
+}
+
+body.notebook-github-theme .tasks-dashboard-view .task-list-item {
+  display: flex;
+  align-items: center;
+  padding: 14px 18px;
+  background: var(--gh-block-bg);
+  border: 1px solid var(--gh-border);
+  border-radius: 8px;
+  margin-bottom: 0px;
+  transition: all 0.2s ease;
+  width: 100%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+body.notebook-github-theme .tasks-dashboard-view .task-list-item:hover {
+  border-color: #34d399; /* Mint green */
+  box-shadow: 0 4px 12px rgba(52, 211, 153, 0.08);
+  transform: translateY(-1px);
+}
+
+body.notebook-github-theme .tasks-dashboard-view .task-list-item-checkbox {
+  margin: 0 !important;
+  margin-right: 12px !important;
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  flex-shrink: 0;
+  accent-color: #34d399;
+}
+
+body.notebook-github-theme .tasks-dashboard-view .task-list-item a:not([href^="command:"]) {
+  font-weight: 500;
+  color: var(--gh-fg);
+  text-decoration: none;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+}
+
+body.notebook-github-theme .tasks-dashboard-view .task-list-item a[href^="command:"] {
+  display: flex;
+  align-items: center;
+  margin-right: 12px;
+}
+
+body.notebook-github-theme .tasks-dashboard-view .task-list-item a:hover {
+  text-decoration: none;
+  color: var(--gh-accent);
+}
+
+body.notebook-github-theme .tasks-dashboard-view .task-list-item .task-text {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* Style the file reference part in the link as a small tag/badge */
+body.notebook-github-theme .tasks-dashboard-view .task-list-item .task-note-badge {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gh-muted);
+  background: var(--gh-code-bg);
+  padding: 4px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--gh-border);
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+body.notebook-github-theme .tasks-dashboard-view .task-list-item a:hover .task-note-badge {
+  border-color: var(--gh-accent);
+  color: var(--gh-accent);
+}

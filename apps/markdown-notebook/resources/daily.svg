@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <defs>
+    <linearGradient id="calPageGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0284c7" />
+      <stop offset="100%" stop-color="#38bdf8" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="1.5" stdDeviation="1" flood-opacity="0.15" />
+    </filter>
+  </defs>
+  <path d="M6 2a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6H6zm0 2h7v5h5v11H6V4zm8 0.5L17.5 8H14V4.5z" fill="url(#calPageGrad)" filter="url(#shadow)"/>
+  <!-- Calendar grid representation inside document -->
+  <rect x="9" y="11" width="6" height="5" rx="0.8" fill="none" stroke="#ffffff" stroke-width="1.1"/>
+  <line x1="9" y1="12.8" x2="15" y2="12.8" stroke="#ffffff" stroke-width="1.1"/>
+  <!-- Small grid dots -->
+  <circle cx="10.5" cy="14.3" r="0.5" fill="#ffffff"/>
+  <circle cx="12" cy="14.3" r="0.5" fill="#ffffff"/>
+  <circle cx="13.5" cy="14.3" r="0.5" fill="#ffffff"/>
+</svg>

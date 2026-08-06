@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Quick Capture</title>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --border: #d0d7de;
+      --text: #1f2328;
+      --muted: #6a737d;
+      --accent: #4f8cff;
+      --ok: #2da44e;
+      --surface: #f6f8fa;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #1c2128;
+        --border: #3a414b;
+        --text: #d6dde5;
+        --muted: #8b949e;
+        --accent: #6ea8ff;
+        --ok: #3fb950;
+        --surface: #262c34;
+      }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 12px 14px;
+      -webkit-app-region: drag; /* frameless window: the chrome is the drag handle */
+    }
+    .capture-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 10px;
+    }
+    .capture-title { font-size: 12px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+    .capture-status { font-size: 11px; color: var(--ok); font-weight: 600; opacity: 0; transition: opacity 0.15s ease; white-space: nowrap; }
+    .capture-status.visible { opacity: 1; }
+    .capture-status.error { color: #d1242f; }
+    /* Toolbar mirrors the main editor bar: same buttons, icons, and titles */
+    .capture-toolbar {
+      -webkit-app-region: no-drag;
+      display: flex;
+      gap: 3px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .capture-dropdown { position: relative; }
+    .fmt-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1;
+      min-width: 26px;
+      min-height: 26px;
+      justify-content: center;
+      padding: 5px 7px;
+      border-radius: 5px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .fmt-btn:hover { border-color: var(--accent); }
+    .fmt-btn .chevron { opacity: 0.7; }
+    .dropdown-menu {
+      display: none;
+      position: absolute;
+      top: 100%;
+      left: 0;
+      margin-top: 4px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+      z-index: 100;
+      width: 190px;
+      max-height: 220px;
+      overflow-y: auto;
+      padding: 4px;
+    }
+    .dropdown-menu.open { display: block; }
+    .dropdown-item {
+      font-size: 12px;
+      padding: 6px 10px;
+      border-radius: 5px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .dropdown-item:hover { background: var(--surface); }
+    .item-desc { font-size: 11px; color: var(--muted); }
+    textarea {
+      -webkit-app-region: no-drag;
+      flex: 1;
+      resize: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: transparent;
+      color: var(--text);
+      font: inherit;
+      font-size: 13px;
+      line-height: 1.45;
+      padding: 8px 10px;
+      outline: none;
+    }
+    textarea:focus { border-color: var(--accent); }
+    .capture-foot {
+      -webkit-app-region: no-drag;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .capture-foot label { font-size: 11px; color: var(--muted); white-space: nowrap; }
+    select {
+      flex: 1;
+      min-width: 0;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--text);
+      font: inherit;
+      font-size: 12px;
+      padding: 5px 6px;
+      outline: none;
+    }
+    .save-btn {
+      border: none;
+      background: var(--accent);
+      color: #fff;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 6px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .save-btn:hover { filter: brightness(1.1); }
+    .hint { font-size: 10px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="capture-head">
+    <span class="capture-title">Quick Capture</span>
+    <span class="capture-status" id="capture-status"></span>
+    <span class="hint">Save button or ⌘/Ctrl+Enter to save · Esc closes</span>
+  </div>
+  <!-- Same buttons, icons, and titles as the main editor bar (up to Code) -->
+  <div class="capture-toolbar">
+    <div class="capture-dropdown">
+      <button class="fmt-btn" data-menu="menu-heading" title="Insert Heading Level (H1-H4)">
+        <span style="font-weight: 700; font-size: 13px; line-height: 1; padding: 0 2px;">H</span>
+        <svg class="chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+      <div id="menu-heading" class="dropdown-menu">
+        <div class="dropdown-item" data-fmt="h1" title="Heading H1 (Title / Main Header)">H1 &nbsp;<span class="item-desc">Title</span></div>
+        <div class="dropdown-item" data-fmt="h2" title="Heading H2 (Major Section Header)">H2 &nbsp;<span class="item-desc">Major Section</span></div>
+        <div class="dropdown-item" data-fmt="h3" title="Heading H3 (Subsection Header)">H3 &nbsp;<span class="item-desc">Subsection</span></div>
+        <div class="dropdown-item" data-fmt="h4" title="Heading H4 (Sub-subsection Header)">H4 &nbsp;<span class="item-desc">Sub-subsection</span></div>
+      </div>
+    </div>
+    <button class="fmt-btn" data-fmt="bold" title="Bold text formatting"><strong>B</strong></button>
+    <button class="fmt-btn" data-fmt="italic" title="Italic text formatting"><em>I</em></button>
+    <button class="fmt-btn" data-fmt="bullet" title="Bullet List item">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+    </button>
+    <button class="fmt-btn" data-fmt="numbered" title="Numbered List item">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/></svg>
+    </button>
+    <button class="fmt-btn" data-fmt="task" title="Task Checklist item">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+    </button>
+    <button class="fmt-btn" data-fmt="separator" title="Horizontal rule separator line">&mdash;</button>
+    <button class="fmt-btn" data-fmt="blockquote" title="Blockquote text highlight">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+    </button>
+    <div class="capture-dropdown">
+      <button class="fmt-btn" data-menu="menu-code" title="Insert syntax-highlighted code block">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        <svg class="chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+      <div id="menu-code" class="dropdown-menu">
+        <div class="dropdown-item" data-lang="bash" title="Bash/Shell Command Script">Bash / Shell</div>
+        <div class="dropdown-item" data-lang="csharp" title="C# Code Block">C#</div>
+        <div class="dropdown-item" data-lang="cpp" title="C++ Source File Block">C++</div>
+        <div class="dropdown-item" data-lang="css" title="CSS Stylesheet Block">CSS</div>
+        <div class="dropdown-item" data-lang="dart" title="Dart App Code Block">Dart</div>
+        <div class="dropdown-item" data-lang="go" title="Go Programming Block">Go</div>
+        <div class="dropdown-item" data-lang="html" title="HTML Markup Block">HTML</div>
+        <div class="dropdown-item" data-lang="java" title="Java Class Code Block">Java</div>
+        <div class="dropdown-item" data-lang="javascript" title="JavaScript Code Block">JavaScript</div>
+        <div class="dropdown-item" data-lang="json" title="JSON Data Format Block">JSON</div>
+        <div class="dropdown-item" data-lang="kotlin" title="Kotlin Code Block">Kotlin</div>
+        <div class="dropdown-item" data-lang="lua" title="Lua Script Block">Lua</div>
+        <div class="dropdown-item" data-lang="markdown" title="Markdown Text Block">Markdown</div>
+        <div class="dropdown-item" data-lang="perl" title="Perl Script Block">Perl</div>
+        <div class="dropdown-item" data-lang="php" title="PHP Server Script Block">PHP</div>
+        <div class="dropdown-item" data-lang="python" title="Python Code Block">Python</div>
+        <div class="dropdown-item" data-lang="r" title="R Statistics Block">R</div>
+        <div class="dropdown-item" data-lang="ruby" title="Ruby Script Block">Ruby</div>
+        <div class="dropdown-item" data-lang="rust" title="Rust Safety Code Block">Rust</div>
+        <div class="dropdown-item" data-lang="scala" title="Scala Code Block">Scala</div>
+        <div class="dropdown-item" data-lang="sql" title="SQL Query Block">SQL</div>
+        <div class="dropdown-item" data-lang="swift" title="Swift iOS App Code Block">Swift</div>
+        <div class="dropdown-item" data-lang="typescript" title="TypeScript Code Block">TypeScript</div>
+        <div class="dropdown-item" data-lang="xml" title="XML Format Block">XML</div>
+        <div class="dropdown-item" data-lang="yaml" title="YAML Config Format Block">YAML</div>
+      </div>
+    </div>
+  </div>
+  <textarea id="capture-input" placeholder="Jot something down, or paste a code snippet…" autofocus></textarea>
+  <div class="capture-foot">
+    <label for="capture-target">Append to</label>
+    <select id="capture-target">
+      <option value="">Today's daily note</option>
+    </select>
+    <button class="save-btn" id="capture-save">Save</button>
+  </div>
+  <script src="api-tauri.js"></script>
+  <script>
+    const input = document.getElementById('capture-input');
+    const status = document.getElementById('capture-status');
+    const targetSelect = document.getElementById('capture-target');
+    let statusTimer = null;
+    let sending = false;
+
+    function flashStatus(text, isError) {
+      status.textContent = text;
+      status.classList.toggle('error', !!isError);
+      status.classList.add('visible');
+      if (statusTimer) clearTimeout(statusTimer);
+      statusTimer = setTimeout(() => status.classList.remove('visible'), 1600);
+    }
+
+    // --- Destination picker ------------------------------------------------
+    // Refreshed every time the window gains focus so new notes show up.
+    // The last-used target is remembered (falls back to daily note when the
+    // note no longer exists).
+    async function loadTargets() {
+      let targets = [];
+      try { targets = await window.captureApi.listCaptureTargets(); } catch {}
+      const remembered = localStorage.getItem('mdnb-capture-target') || '';
+      const current = targetSelect.value || remembered;
+      targetSelect.innerHTML = '<option value="">Today’s daily note</option>';
+      for (const t of targets) {
+        const opt = document.createElement('option');
+        opt.value = t.fsPath;
+        opt.textContent = t.relPath.replace(/\.md$/i, '');
+        targetSelect.appendChild(opt);
+      }
+      targetSelect.value = current;
+      if (targetSelect.selectedIndex === -1) targetSelect.value = '';
+    }
+    targetSelect.addEventListener('change', () => {
+      try { localStorage.setItem('mdnb-capture-target', targetSelect.value); } catch {}
+    });
+
+    // --- Formatting toolbar ------------------------------------------------
+    function setValue(next, selStart, selEnd) {
+      input.value = next;
+      input.selectionStart = selStart;
+      input.selectionEnd = selEnd;
+      input.focus();
+    }
+
+    // Wrap the selection (or insert placeholder) with before/after markers
+    function wrapSelection(before, after, placeholder) {
+      const s = input.selectionStart, e = input.selectionEnd;
+      const sel = input.value.slice(s, e) || placeholder;
+      const next = input.value.slice(0, s) + before + sel + after + input.value.slice(e);
+      setValue(next, s + before.length, s + before.length + sel.length);
+    }
+
+    // Prefix every line the selection touches (numbered lists count up).
+    // Caret lands at the END (collapsed) so you can type the item right away
+    // instead of typing over the marker we just inserted.
+    function prefixLines(prefix, numbered) {
+      const s = input.selectionStart, e = input.selectionEnd;
+      const lineStart = input.value.lastIndexOf('\n', s - 1) + 1;
+      const lineEndIdx = input.value.indexOf('\n', Math.max(e, s));
+      const lineEnd = lineEndIdx === -1 ? input.value.length : lineEndIdx;
+      const block = input.value.slice(lineStart, lineEnd);
+      const replaced = block.split('\n')
+        .map((ln, i) => (numbered ? `${i + 1}. ` : prefix) + ln)
+        .join('\n');
+      const next = input.value.slice(0, lineStart) + replaced + input.value.slice(lineEnd);
+      const end = lineStart + replaced.length;
+      setValue(next, end, end);
+    }
+
+    // Same insertion shape as the main editor's insertCodeBlock(language)
+    function insertCodeBlock(language) {
+      const s = input.selectionStart, e = input.selectionEnd;
+      const sel = input.value.slice(s, e);
+      const insertion = '\n```' + language + '\n' + sel + '\n```\n';
+      const next = input.value.slice(0, s) + insertion + input.value.slice(e);
+      const caret = s + 1 + 3 + language.length + 1; // start of the code line
+      setValue(next, caret, caret + sel.length);
+    }
+
+    function insertSeparator() {
+      const s = input.selectionStart;
+      const needsNL = s > 0 && input.value[s - 1] !== '\n';
+      const insertion = (needsNL ? '\n' : '') + '---\n';
+      const next = input.value.slice(0, s) + insertion + input.value.slice(input.selectionEnd);
+      const caret = s + insertion.length;
+      setValue(next, caret, caret);
+    }
+
+    const FORMATS = {
+      h1: () => prefixLines('# '),
+      h2: () => prefixLines('## '),
+      h3: () => prefixLines('### '),
+      h4: () => prefixLines('#### '),
+      bold: () => wrapSelection('**', '**', 'bold text'),
+      italic: () => wrapSelection('*', '*', 'italic text'),
+      bullet: () => prefixLines('- '),
+      numbered: () => prefixLines('', true),
+      task: () => prefixLines('- [ ] '),
+      separator: () => insertSeparator(),
+      blockquote: () => prefixLines('> '),
+    };
+
+    function closeMenus() {
+      document.querySelectorAll('.dropdown-menu.open').forEach(m => m.classList.remove('open'));
+    }
+
+    document.querySelectorAll('.fmt-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        if (btn.dataset.menu) {
+          const menu = document.getElementById(btn.dataset.menu);
+          const wasOpen = menu.classList.contains('open');
+          closeMenus();
+          if (!wasOpen) menu.classList.add('open');
+          e.stopPropagation();
+          return;
+        }
+        const fn = FORMATS[btn.dataset.fmt];
+        if (fn) fn();
+      });
+    });
+    document.querySelectorAll('.dropdown-item').forEach(item => {
+      item.addEventListener('click', () => {
+        closeMenus();
+        if (item.dataset.lang !== undefined) insertCodeBlock(item.dataset.lang);
+        else if (FORMATS[item.dataset.fmt]) FORMATS[item.dataset.fmt]();
+      });
+    });
+    document.addEventListener('click', closeMenus);
+
+    // --- Saving --------------------------------------------------------------
+    async function submit() {
+      const text = input.value.replace(/^\n+|\s+$/g, '');
+      if (!text || sending) return;
+      sending = true;
+      try {
+        const target = targetSelect.value || undefined;
+        const result = await window.captureApi.appendQuickCapture(text, target);
+        if (result && result.success) {
+          input.value = '';
+          flashStatus('Captured ✓', false);
+          setTimeout(() => window.captureApi.hideCaptureWindow(), 450);
+        } else {
+          flashStatus((result && result.reason) || 'Capture failed', true);
+        }
+      } catch (err) {
+        flashStatus('Capture failed', true);
+      } finally {
+        sending = false;
+      }
+    }
+    document.getElementById('capture-save').addEventListener('click', submit);
+
+    // Is the caret inside an unclosed ``` fence? Then Enter should type a
+    // newline (you're writing code), not save the capture.
+    function caretInCodeFence() {
+      const before = input.value.slice(0, input.selectionStart);
+      const fences = (before.match(/^\s*```/gm) || []).length;
+      return fences % 2 === 1;
+    }
+
+    // Shift+Enter continues the current list (bullet / numbered / task), same
+    // as the main editor. Returns true when it handled the newline.
+    function continueList() {
+      const pos = input.selectionStart;
+      const val = input.value;
+      const lineStart = val.lastIndexOf('\n', pos - 1) + 1;
+      const line = val.slice(lineStart, pos);
+      const task = line.match(/^(\s*)([-*+])\s+\[[ xX]\]\s+/);
+      const num = line.match(/^(\s*)(\d+)\.\s+/);
+      const bullet = line.match(/^(\s*)([-*+])\s+/);
+      let marker = null, full = null;
+      if (task) { marker = `${task[1]}${task[2]} [ ] `; full = task[0]; }
+      else if (num) { marker = `${num[1]}${parseInt(num[2], 10) + 1}. `; full = num[0]; }
+      else if (bullet) { marker = `${bullet[1]}${bullet[2]} `; full = bullet[0]; }
+      if (marker === null) return false;
+      // Empty item (just the marker) ends the list — clear the marker instead
+      if (line.length === full.length) {
+        input.value = val.slice(0, lineStart) + val.slice(pos);
+        input.selectionStart = input.selectionEnd = lineStart;
+        return true;
+      }
+      const insert = '\n' + marker;
+      input.value = val.slice(0, pos) + insert + val.slice(pos);
+      input.selectionStart = input.selectionEnd = pos + insert.length;
+      return true;
+    }
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+        // Cmd/Ctrl+Enter saves
+        e.preventDefault();
+        submit();
+      } else if (e.key === 'Enter' && !e.shiftKey) {
+        // Plain Enter drops a new line; continue a list if we're in one
+        if (continueList()) e.preventDefault();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        window.captureApi.hideCaptureWindow();
+      }
+    });
+
+    // Whenever the window is (re)shown and focused: caret back + fresh targets
+    window.addEventListener('focus', () => {
+      input.focus();
+      loadTargets();
+    });
+    loadTargets();
+  </script>
+</body>
+</html>
