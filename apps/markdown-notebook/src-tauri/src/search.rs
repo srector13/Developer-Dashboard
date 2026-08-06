@@ -104,7 +104,11 @@ fn make_snippet(line: &str, lower: &str, terms: &[String], line_idx: usize) -> S
 
 /// A line matches when it contains every whitespace-separated term
 /// (case-insensitive). Results are capped and carry highlight ranges.
-pub fn search_docs(docs: &[SearchDoc], query: &str, max_results: Option<usize>) -> Vec<SearchResult> {
+pub fn search_docs(
+    docs: &[SearchDoc],
+    query: &str,
+    max_results: Option<usize>,
+) -> Vec<SearchResult> {
     let q = query.trim();
     if q.chars().count() < 2 {
         return Vec::new();
@@ -187,7 +191,11 @@ pub fn launcher_search_docs(docs: &[SearchDoc], query: &str) -> Vec<LauncherResu
             continue;
         }
         let score = (if title_hit { 100.0 } else { 0.0 })
-            + (if title_lower.starts_with(&q) { 50.0 } else { 0.0 })
+            + (if title_lower.starts_with(&q) {
+                50.0
+            } else {
+                0.0
+            })
             - doc.rel_path.chars().count() as f64 * 0.01;
         scored.push((
             score,
@@ -218,18 +226,26 @@ pub fn backlinks(settings: &AppSettings, file_path: &Path) -> Vec<String> {
     if root.as_os_str().is_empty() {
         return Vec::new();
     }
-    let Some(stem) = file_path.file_stem().map(|s| s.to_string_lossy().into_owned()) else {
+    let Some(stem) = file_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+    else {
         return Vec::new();
     };
-    let Some(full_name) = file_path.file_name().map(|s| s.to_string_lossy().into_owned()) else {
+    let Some(full_name) = file_path
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+    else {
         return Vec::new();
     };
 
-    let wiki_re = match regex::Regex::new(&format!(r"(?i)\[\[{}(\||#|\]\])", regex::escape(&stem))) {
+    let wiki_re = match regex::Regex::new(&format!(r"(?i)\[\[{}(\||#|\]\])", regex::escape(&stem)))
+    {
         Ok(re) => re,
         Err(_) => return Vec::new(),
     };
-    let md_re = match regex::Regex::new(&format!(r"(?i)\(\.*/?.*?{}\)", regex::escape(&full_name))) {
+    let md_re = match regex::Regex::new(&format!(r"(?i)\(\.*/?.*?{}\)", regex::escape(&full_name)))
+    {
         Ok(re) => re,
         Err(_) => return Vec::new(),
     };

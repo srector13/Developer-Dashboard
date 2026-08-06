@@ -62,8 +62,7 @@ pub fn clean_onenote_html(html: &str) -> String {
     out = unwrap_single_cell_tables(&out);
 
     // A span with nothing left on it is pure noise once its style is gone.
-    static BARE_SPAN: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"(?i)</?span\s*>").unwrap());
+    static BARE_SPAN: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)</?span\s*>").unwrap());
     out = BARE_SPAN.replace_all(&out, "").into_owned();
 
     // Non-breaking spaces read as normal spaces in a note, and left alone they
@@ -137,8 +136,7 @@ fn has_text_outside(inner: &str, cell: &str) -> bool {
 /// inside a nested table belong to that table, not this one, so the scan tracks
 /// table depth and only counts what sits at depth zero.
 fn single_cell_content(inner: &str) -> Option<&str> {
-    static TAG: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"(?i)<(/?)(table|td|th)\b[^>]*>").unwrap());
+    static TAG: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)<(/?)(table|td|th)\b[^>]*>").unwrap());
 
     let mut table_depth = 0usize;
     let mut cell_depth = 0usize;
@@ -149,7 +147,11 @@ fn single_cell_content(inner: &str) -> Option<&str> {
     for caps in TAG.captures_iter(inner) {
         let whole = caps.get(0)?;
         let closing = caps.get(1).map(|m| m.as_str()) == Some("/");
-        let tag = caps.get(2).map(|m| m.as_str()).unwrap_or("").to_ascii_lowercase();
+        let tag = caps
+            .get(2)
+            .map(|m| m.as_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
 
         if tag == "table" {
             if closing {
@@ -230,7 +232,11 @@ pub fn html_images_to_markdown(markdown: &str) -> String {
                 .or_else(|| attr.get(5))
                 .map(|m| m.as_str())
                 .unwrap_or("");
-            match attr.get(1).map(|m| m.as_str().to_ascii_lowercase()).as_deref() {
+            match attr
+                .get(1)
+                .map(|m| m.as_str().to_ascii_lowercase())
+                .as_deref()
+            {
                 Some("src") => src = value.to_string(),
                 Some("alt") => alt = value.to_string(),
                 Some("title") => title = value.to_string(),
@@ -314,10 +320,7 @@ pub fn replace_ranges(text: &str, mut edits: Vec<(std::ops::Range<usize>, String
 /// Tidy what pandoc produced.
 pub fn tidy_markdown(md: &str) -> String {
     // Trailing spaces are invisible and become accidental hard line breaks.
-    let mut lines: Vec<String> = md
-        .lines()
-        .map(|line| line.trim_end().to_string())
-        .collect();
+    let mut lines: Vec<String> = md.lines().map(|line| line.trim_end().to_string()).collect();
 
     // A line holding only punctuation-free whitespace artefacts from the export
     // is not content; blanking it lets the blank-run collapse below remove it.
@@ -365,7 +368,10 @@ mod tests {
     #[test]
     fn an_unquoted_attribute_value_is_removed_too() {
         // Office emits these; a quoted-only pattern would leave them behind.
-        assert_eq!(clean_onenote_html("<td width=120 valign=top>x</td>"), "<td>x</td>");
+        assert_eq!(
+            clean_onenote_html("<td width=120 valign=top>x</td>"),
+            "<td>x</td>"
+        );
     }
 
     #[test]
@@ -408,7 +414,10 @@ mod tests {
 
     #[test]
     fn non_breaking_spaces_become_ordinary_ones() {
-        assert_eq!(clean_onenote_html("<p>a&nbsp;b\u{00A0}c</p>"), "<p>a b c</p>");
+        assert_eq!(
+            clean_onenote_html("<p>a&nbsp;b\u{00A0}c</p>"),
+            "<p>a b c</p>"
+        );
     }
 
     #[test]
@@ -436,7 +445,10 @@ mod tests {
         // The cell's own contents come through as-is — it held bare text, so
         // bare text is what is left once the wrapper goes.
         let html = "<p>before</p><table><tr><td>only</td></tr></table><p>after</p>";
-        assert_eq!(unwrap_single_cell_tables(html), "<p>before</p>only<p>after</p>");
+        assert_eq!(
+            unwrap_single_cell_tables(html),
+            "<p>before</p>only<p>after</p>"
+        );
     }
 
     #[test]

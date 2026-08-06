@@ -6,8 +6,8 @@
 //! Electron main process's behaviour.
 
 use crate::attachments::{store_attachment, AttachmentResult};
-use crate::cli;
 use crate::capture::{self, CaptureResult};
+use crate::cli;
 use crate::desktop::{self, notify_files_changed};
 use crate::exports;
 use crate::notebook::{
@@ -222,7 +222,11 @@ pub async fn read_note_history(
     file_path: String,
     id: String,
 ) -> Res<String> {
-    Ok(notes::read_history(&state.settings(), &path(&file_path), &id))
+    Ok(notes::read_history(
+        &state.settings(),
+        &path(&file_path),
+        &id,
+    ))
 }
 
 #[tauri::command]
@@ -349,7 +353,10 @@ pub async fn get_template_variables(
     state: State<'_, AppState>,
     template_name: String,
 ) -> Res<Vec<String>> {
-    Ok(templates::template_variables(&state.settings(), &template_name))
+    Ok(templates::template_variables(
+        &state.settings(),
+        &template_name,
+    ))
 }
 
 #[tauri::command]
@@ -369,7 +376,8 @@ pub async fn create_page(
     let mut body = String::new();
     if let Some(name) = template_name.filter(|n| !n.is_empty()) {
         if let Some(raw) = templates::read_template_body(&settings, &name) {
-            let mut filled = apply_template_vars(&raw, &builtin_template_vars(&title, &created_date));
+            let mut filled =
+                apply_template_vars(&raw, &builtin_template_vars(&title, &created_date));
             // User-provided custom fields ({{project}}, {{attendees}}, …)
             if let Some(vars) = custom_vars {
                 let pairs: Vec<(String, String)> = vars.into_iter().collect();
@@ -403,7 +411,10 @@ pub async fn create_section(
     let full_path = path(&dir_path).join(name.trim());
     if !full_path.exists() {
         std::fs::create_dir_all(&full_path).map_err(|e| e.to_string())?;
-        if let Some(text) = description.map(|d| d.trim().to_string()).filter(|d| !d.is_empty()) {
+        if let Some(text) = description
+            .map(|d| d.trim().to_string())
+            .filter(|d| !d.is_empty())
+        {
             let meta = serde_json::json!({ "description": text });
             std::fs::write(
                 full_path.join(crate::settings::SECTION_META_FILE),
@@ -596,11 +607,7 @@ pub async fn rename_node(
 }
 
 #[tauri::command]
-pub async fn update_note_meta(
-    app: AppHandle,
-    file_path: String,
-    meta: NoteMetaPatch,
-) -> Res<bool> {
+pub async fn update_note_meta(app: AppHandle, file_path: String, meta: NoteMetaPatch) -> Res<bool> {
     let file = path(&file_path);
     if !file.exists() {
         return Ok(false);
@@ -728,7 +735,11 @@ pub async fn search_notes(
     // Cold-start scans defer search-doc building to the background; wait for it
     // so results are never silently partial.
     let _gate = state.index_gate.lock().await;
-    Ok(search::search_docs(&state.index_docs(), &query, max_results))
+    Ok(search::search_docs(
+        &state.index_docs(),
+        &query,
+        max_results,
+    ))
 }
 
 #[tauri::command]
@@ -877,10 +888,7 @@ pub async fn ai_transform(
 }
 
 #[tauri::command]
-pub async fn ai_complete(
-    state: State<'_, AppState>,
-    context: String,
-) -> Res<crate::ai::AiResult> {
+pub async fn ai_complete(state: State<'_, AppState>, context: String) -> Res<crate::ai::AiResult> {
     let settings = state.settings();
     Ok(crate::ai::complete(&settings, &context).await)
 }
@@ -996,7 +1004,8 @@ pub async fn import_clipboard(
         tags
     };
 
-    let full_path = write_imported_note(&settings, &path(&dest_dir), &title, &created, &tags, &body)?;
+    let full_path =
+        write_imported_note(&settings, &path(&dest_dir), &title, &created, &tags, &body)?;
     notify_files_changed(&app);
     Ok(ImportResult {
         success: true,
@@ -1105,7 +1114,10 @@ fn mhtml_to_markdown(settings: &AppSettings, bytes: &[u8], note_dir: &Path) -> R
         let name = resource.suggested_name(index);
         // The fallback extension has to follow the part's own media type. A
         // JPEG saved as .png is a file nothing will open.
-        let fallback_ext = name.rsplit('.').next().filter(|e| !e.is_empty() && *e != name);
+        let fallback_ext = name
+            .rsplit('.')
+            .next()
+            .filter(|e| !e.is_empty() && *e != name);
         let stored = store_attachment(
             settings,
             &resource.bytes,
@@ -1514,7 +1526,9 @@ pub async fn export_to_pdf(
     match render_pdf(&app, document, &pdf_path, width, height).await {
         Ok(()) => {
             if open_after {
-                let _ = app.opener().open_path(pdf_path.to_string_lossy(), None::<&str>);
+                let _ = app
+                    .opener()
+                    .open_path(pdf_path.to_string_lossy(), None::<&str>);
             }
             if reveal {
                 let _ = app.opener().reveal_item_in_dir(&pdf_path);
@@ -1552,7 +1566,8 @@ async fn render_pdf(
 
     // Load via a temp file: data: URLs have practical size limits that notes
     // with large embedded images can exceed.
-    let temp_html = std::env::temp_dir().join(format!("mdnb-export-{}.html", crate::notebook::now_ms()));
+    let temp_html =
+        std::env::temp_dir().join(format!("mdnb-export-{}.html", crate::notebook::now_ms()));
     std::fs::write(&temp_html, document).map_err(|e| e.to_string())?;
 
     let cleanup = |window: Option<tauri::WebviewWindow>, temp: &Path| {
@@ -1572,20 +1587,21 @@ async fn render_pdf(
 
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
     let tx = std::sync::Mutex::new(Some(tx));
-    let window = tauri::WebviewWindowBuilder::new(app, PRINT_WINDOW, tauri::WebviewUrl::External(url))
-        .title("Exporting…")
-        .inner_size(1024.0, 1400.0)
-        .visible(false)
-        .skip_taskbar(true)
-        .on_page_load(move |_window, payload| {
-            if payload.event() == PageLoadEvent::Finished {
-                if let Some(tx) = tx.lock().unwrap().take() {
-                    let _ = tx.send(());
+    let window =
+        tauri::WebviewWindowBuilder::new(app, PRINT_WINDOW, tauri::WebviewUrl::External(url))
+            .title("Exporting…")
+            .inner_size(1024.0, 1400.0)
+            .visible(false)
+            .skip_taskbar(true)
+            .on_page_load(move |_window, payload| {
+                if payload.event() == PageLoadEvent::Finished {
+                    if let Some(tx) = tx.lock().unwrap().take() {
+                        let _ = tx.send(());
+                    }
                 }
-            }
-        })
-        .build()
-        .map_err(|e| e.to_string())?;
+            })
+            .build()
+            .map_err(|e| e.to_string())?;
 
     // Page load fires before images have necessarily painted; give the layout a
     // moment to settle so diagrams and screenshots make it into the PDF.
@@ -1989,7 +2005,10 @@ mod tests {
             suggested_name(r"C:\notes\weekly-review.md", "pdf"),
             "weekly-review.pdf"
         );
-        assert_eq!(suggested_name("/n/weekly-review.md", "pdf"), "weekly-review.pdf");
+        assert_eq!(
+            suggested_name("/n/weekly-review.md", "pdf"),
+            "weekly-review.pdf"
+        );
         assert_eq!(suggested_name("/n/a.md", "docx"), "a.docx");
         assert_eq!(suggested_name("", "pdf"), "note.pdf");
     }

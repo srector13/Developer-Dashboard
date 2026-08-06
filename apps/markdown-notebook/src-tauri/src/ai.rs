@@ -123,7 +123,10 @@ pub fn clean_model_output(content: &str) -> String {
         Lazy::new(|| Regex::new(r"(?s)^```(?:markdown|md)?\s*\n(.*?)\n```\s*$").unwrap());
     let stripped = THINK.replace(content, "").into_owned();
     match FENCE.captures(&stripped) {
-        Some(caps) => caps.get(1).map(|m| m.as_str().to_string()).unwrap_or(stripped),
+        Some(caps) => caps
+            .get(1)
+            .map(|m| m.as_str().to_string())
+            .unwrap_or(stripped),
         None => stripped,
     }
 }
@@ -173,7 +176,10 @@ async fn chat(
             .await
             .map_err(|e| describe(e, settings))?;
         let json = check(res).await?;
-        json["message"]["content"].as_str().unwrap_or("").to_string()
+        json["message"]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
     };
 
     Ok(clean_model_output(&content))
@@ -353,7 +359,10 @@ mod tests {
 
     #[test]
     fn a_wrapping_code_fence_is_unwrapped() {
-        assert_eq!(clean_model_output("```markdown\n# Note\nbody\n```"), "# Note\nbody");
+        assert_eq!(
+            clean_model_output("```markdown\n# Note\nbody\n```"),
+            "# Note\nbody"
+        );
         assert_eq!(clean_model_output("```\ntext\n```"), "text");
     }
 

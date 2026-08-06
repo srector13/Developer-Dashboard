@@ -97,8 +97,9 @@ pub fn reveal_main_window_for_export(app: &AppHandle, fs_path: String) {
 const DISMISS_GRACE: std::time::Duration = std::time::Duration::from_millis(700);
 
 /// When each helper window was last shown, keyed by window label.
-static SHOWN_AT: once_cell::sync::Lazy<Mutex<std::collections::HashMap<String, std::time::Instant>>> =
-    once_cell::sync::Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
+static SHOWN_AT: once_cell::sync::Lazy<
+    Mutex<std::collections::HashMap<String, std::time::Instant>>,
+> = once_cell::sync::Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
 
 fn mark_shown(label: &str) {
     if let Ok(mut map) = SHOWN_AT.lock() {
@@ -151,8 +152,10 @@ fn force_foreground(window: &WebviewWindow) {
         let other = GetWindowThreadProcessId(foreground, None);
         let ours = GetWindowThreadProcessId(handle, None);
         // Attaching a thread to itself is both pointless and an error.
-        let attached =
-            other != 0 && ours != 0 && other != ours && AttachThreadInput(other, ours, true).as_bool();
+        let attached = other != 0
+            && ours != 0
+            && other != ours
+            && AttachThreadInput(other, ours, true).as_bool();
         let _ = SetForegroundWindow(handle);
         let _ = SetActiveWindow(handle);
         let _ = SetFocus(Some(handle));
@@ -372,12 +375,7 @@ pub fn pin_scratchpad_window(app: &AppHandle, pinned: bool) {
 // ---------------------------------------------------------------------------
 
 pub fn notify_desktop(app: &AppHandle, title: &str, body: &str) {
-    let _ = app
-        .notification()
-        .builder()
-        .title(title)
-        .body(body)
-        .show();
+    let _ = app.notification().builder().title(title).body(body).show();
 }
 
 /// Grab the display under the cursor and open the crop overlay on top of it.
@@ -391,7 +389,9 @@ pub fn start_screenshot_capture(app: &AppHandle) {
         return;
     }
 
-    let cursor = app.cursor_position().unwrap_or(tauri::PhysicalPosition::new(0.0, 0.0));
+    let cursor = app
+        .cursor_position()
+        .unwrap_or(tauri::PhysicalPosition::new(0.0, 0.0));
     let monitor = match app.monitor_from_point(cursor.x, cursor.y) {
         Ok(Some(m)) => m,
         _ => match app.primary_monitor() {
@@ -432,17 +432,18 @@ pub fn start_screenshot_capture(app: &AppHandle) {
 
     let x = monitor.position().x as f64 / scale;
     let y = monitor.position().y as f64 / scale;
-    let built = WebviewWindowBuilder::new(app, REGION, WebviewUrl::App("region-select.html".into()))
-        .title("Select a region")
-        .position(x, y)
-        .inner_size(logical_w as f64, logical_h as f64)
-        .decorations(false)
-        .transparent(true)
-        .resizable(false)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .shadow(false)
-        .build();
+    let built =
+        WebviewWindowBuilder::new(app, REGION, WebviewUrl::App("region-select.html".into()))
+            .title("Select a region")
+            .position(x, y)
+            .inner_size(logical_w as f64, logical_h as f64)
+            .decorations(false)
+            .transparent(true)
+            .resizable(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .shadow(false)
+            .build();
 
     if let Err(err) = built {
         eprintln!("Could not open the region overlay: {err}");
@@ -467,7 +468,14 @@ pub fn close_region_window(app: &AppHandle) {
 }
 
 /// Crop `png` to a rect given in the overlay's CSS pixels.
-pub fn crop_png(png: &[u8], scale: f64, x: f64, y: f64, width: f64, height: f64) -> Result<Vec<u8>, String> {
+pub fn crop_png(
+    png: &[u8],
+    scale: f64,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<Vec<u8>, String> {
     let full = image::load_from_memory(png).map_err(|e| e.to_string())?;
     let full = full.to_rgba8();
     let (max_w, max_h) = (full.width(), full.height());
@@ -542,10 +550,7 @@ pub fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                         match capture::resolve_or_create_daily_note(&settings) {
                             Ok(path) => {
                                 notify_files_changed(&app);
-                                reveal_main_window(
-                                    &app,
-                                    Some(path.to_string_lossy().into_owned()),
-                                );
+                                reveal_main_window(&app, Some(path.to_string_lossy().into_owned()));
                             }
                             Err(err) => eprintln!("Could not open the daily note: {err}"),
                         }
@@ -575,15 +580,17 @@ pub fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 pub fn normalize_accelerator(accelerator: &str) -> String {
     accelerator
         .split('+')
-        .map(|part| match part.trim().to_lowercase().as_str() {
-            "commandorcontrol" | "cmdorctrl" | "command" | "cmd" => "Control",
-            "control" | "ctrl" => "Control",
-            "alt" | "option" => "Alt",
-            "shift" => "Shift",
-            "super" | "meta" => "Super",
-            _ => return part.trim().to_string(),
-        }
-        .to_string())
+        .map(|part| {
+            match part.trim().to_lowercase().as_str() {
+                "commandorcontrol" | "cmdorctrl" | "command" | "cmd" => "Control",
+                "control" | "ctrl" => "Control",
+                "alt" | "option" => "Alt",
+                "shift" => "Shift",
+                "super" | "meta" => "Super",
+                _ => return part.trim().to_string(),
+            }
+            .to_string()
+        })
         .collect::<Vec<_>>()
         .join("+")
 }
@@ -649,7 +656,11 @@ pub fn capture_clipboard_to_note(app: &AppHandle) {
     let settings = app.state::<AppState>().settings();
     let text = crate::platform::read_clipboard_text();
     if text.trim().is_empty() {
-        notify_desktop(app, "Nothing captured", "The clipboard has no text to file.");
+        notify_desktop(
+            app,
+            "Nothing captured",
+            "The clipboard has no text to file.",
+        );
         return;
     }
     let target = capture::resolve_clipboard_target(&settings);
@@ -759,7 +770,10 @@ mod tests {
 
     #[test]
     fn electron_accelerators_are_translated() {
-        assert_eq!(normalize_accelerator("CommandOrControl+Shift+N"), "Control+Shift+N");
+        assert_eq!(
+            normalize_accelerator("CommandOrControl+Shift+N"),
+            "Control+Shift+N"
+        );
         assert_eq!(normalize_accelerator("CmdOrCtrl+G"), "Control+G");
         assert_eq!(normalize_accelerator("Alt+Space"), "Alt+Space");
         assert_eq!(normalize_accelerator("Control+Shift+G"), "Control+Shift+G");

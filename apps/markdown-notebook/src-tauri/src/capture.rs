@@ -253,7 +253,10 @@ mod tests {
         let text = std::fs::read_to_string(&note).unwrap();
         assert!(text.contains("## Quick Capture"));
         // Verbatim: the checkbox survives untouched, no timestamp added
-        assert!(text.contains("- [ ] a typed task\nsecond line"), "got: {text}");
+        assert!(
+            text.contains("- [ ] a typed task\nsecond line"),
+            "got: {text}"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

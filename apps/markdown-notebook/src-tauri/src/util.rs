@@ -124,9 +124,19 @@ pub fn builtin_template_vars(title: &str, created_date: &str) -> Vec<(String, St
     };
     // Node's toLocaleTimeString/toLocaleString on an en-US Windows box; close
     // enough that templates written against the Electron build still read well.
-    let hour12 = if now.hour() % 12 == 0 { 12 } else { now.hour() % 12 };
+    let hour12 = if now.hour() % 12 == 0 {
+        12
+    } else {
+        now.hour() % 12
+    };
     let ampm = if now.hour() < 12 { "AM" } else { "PM" };
-    let time = format!("{}:{:02}:{:02} {}", hour12, now.minute(), now.second(), ampm);
+    let time = format!(
+        "{}:{:02}:{:02} {}",
+        hour12,
+        now.minute(),
+        now.second(),
+        ampm
+    );
     let datetime = format!("{}, {}", now.format("%-m/%-d/%Y"), time);
 
     vec![
@@ -173,7 +183,10 @@ pub fn tags_yaml_line(tags: &[String]) -> String {
 /// the end when it's absent. Fence-aware so a `#` inside a code block in the
 /// section can't be mistaken for the next heading.
 pub fn append_lines_under_heading(content: &str, heading: &str, entry_lines: &[String]) -> String {
-    let mut lines: Vec<String> = content.split('\n').map(|l| l.trim_end_matches('\r').to_string()).collect();
+    let mut lines: Vec<String> = content
+        .split('\n')
+        .map(|l| l.trim_end_matches('\r').to_string())
+        .collect();
     let heading_re = Regex::new(&format!(r"(?i)^##\s+{}\s*$", regex::escape(heading))).unwrap();
     let heading_idx = lines.iter().position(|l| heading_re.is_match(l));
 
@@ -228,8 +241,8 @@ pub fn parent_of(p: &Path) -> PathBuf {
 /// folders that cannot be opened or deleted, so it is handled up front.
 pub fn sanitize_folder_name(raw: &str) -> String {
     const RESERVED: [&str; 22] = [
-        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
-        "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     ];
 
     let replaced: String = raw
@@ -306,7 +319,10 @@ mod tests {
         let src = "## Tasks\n\n- [ ] first\n\n## Notes\n\ntext\n";
         let out = append_lines_under_heading(src, "Tasks", &["- [ ] second".into()]);
         let tasks_block = out.split("## Notes").next().unwrap();
-        assert!(tasks_block.contains("- [ ] first\n\n- [ ] second"), "got: {out:?}");
+        assert!(
+            tasks_block.contains("- [ ] first\n\n- [ ] second"),
+            "got: {out:?}"
+        );
         assert!(out.contains("## Notes"));
     }
 

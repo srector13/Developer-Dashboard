@@ -262,7 +262,12 @@ fn exe_from_command_line(raw: &str) -> Option<String> {
     } else {
         // Unquoted, so a space can only be the start of a switch — an unquoted
         // path with a space in it would already be ambiguous to the shell.
-        raw.split(" -").next().unwrap_or(raw).split(" /").next().unwrap_or(raw)
+        raw.split(" -")
+            .next()
+            .unwrap_or(raw)
+            .split(" /")
+            .next()
+            .unwrap_or(raw)
     }
     .trim();
     if path.is_empty() {
@@ -287,7 +292,7 @@ mod com {
     use windows::core::{BSTR, GUID, HSTRING, PCWSTR};
     use windows::Win32::System::Com::{
         CLSIDFromProgID, CoCreateInstance, CoInitializeEx, IDispatch, ITypeLib, CLSCTX_ALL,
-        DISPATCH_METHOD, DISPPARAMS, COINIT_APARTMENTTHREADED, EXCEPINFO,
+        COINIT_APARTMENTTHREADED, DISPATCH_METHOD, DISPPARAMS, EXCEPINFO,
     };
     use windows::Win32::System::Ole::{LoadTypeLibEx, REGKIND_NONE};
     use windows::Win32::System::Variant::{VARIANT, VT_BSTR, VT_BYREF, VT_I4};
@@ -328,9 +333,8 @@ mod com {
         let exe = local_server_path(clsid)
             .ok_or_else(|| "OneNote's program file is not listed in the registry".to_string())?;
         let wide = HSTRING::from(exe.as_os_str());
-        let lib: ITypeLib = unsafe { LoadTypeLibEx(&wide, REGKIND_NONE) }.map_err(|e| {
-            format!("no type library could be read from {}: {e}", exe.display())
-        })?;
+        let lib: ITypeLib = unsafe { LoadTypeLibEx(&wide, REGKIND_NONE) }
+            .map_err(|e| format!("no type library could be read from {}: {e}", exe.display()))?;
         unsafe { RegisterTypeLibForUser(&lib, &wide, PCWSTR::null()) }
             .map_err(|e| format!("registering it for your account failed: {e}"))
     }
@@ -372,9 +376,7 @@ mod com {
     /// `HKCR\CLSID\{clsid}\LocalServer32`. The value is a command line, so it
     /// can be quoted and can carry switches (`"...\ONENOTE.EXE" -Embedding`).
     fn local_server_path(clsid: &GUID) -> Option<std::path::PathBuf> {
-        use windows::Win32::System::Registry::{
-            RegGetValueW, HKEY_CLASSES_ROOT, RRF_RT_REG_SZ,
-        };
+        use windows::Win32::System::Registry::{RegGetValueW, HKEY_CLASSES_ROOT, RRF_RT_REG_SZ};
 
         let key = HSTRING::from(format!(
             "CLSID\\{{{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}\\LocalServer32",
@@ -468,7 +470,13 @@ mod com {
         let names = [PCWSTR(name.as_ptr())];
         let mut id = 0i32;
         let direct = unsafe {
-            dispatch.GetIDsOfNames(&GUID::zeroed(), names.as_ptr(), 1, LOCALE_USER_DEFAULT, &mut id)
+            dispatch.GetIDsOfNames(
+                &GUID::zeroed(),
+                names.as_ptr(),
+                1,
+                LOCALE_USER_DEFAULT,
+                &mut id,
+            )
         };
 
         let resolved = match direct {
@@ -591,7 +599,10 @@ mod com {
             } else {
                 format!(" — {description}")
             };
-            (e.code().0, format!("OneNote rejected {method}{detail} ({e})"))
+            (
+                e.code().0,
+                format!("OneNote rejected {method}{detail} ({e})"),
+            )
         })
     }
 
@@ -611,17 +622,19 @@ mod com {
             // for this user — no administrator rights needed — and try again.
             Err((code, _)) if code == TYPE_E_LIBNOTREGISTERED => {
                 match register_typelib_for_user(clsid) {
-                    Ok(()) => invoke_once(dispatch, id, method, &mut args).map_err(|(code, why)| {
-                        if code == TYPE_E_LIBNOTREGISTERED {
-                            registration_advice(
-                                method,
-                                "the library registered successfully but OneNote still could \
+                    Ok(()) => {
+                        invoke_once(dispatch, id, method, &mut args).map_err(|(code, why)| {
+                            if code == TYPE_E_LIBNOTREGISTERED {
+                                registration_advice(
+                                    method,
+                                    "the library registered successfully but OneNote still could \
                                  not load it",
-                            )
-                        } else {
-                            why
-                        }
-                    }),
+                                )
+                            } else {
+                                why
+                            }
+                        })
+                    }
                     Err(why) => Err(registration_advice(method, &why)),
                 }
             }
@@ -943,7 +956,9 @@ mod tests {
     #[test]
     fn a_quoted_server_command_line_yields_the_program_path() {
         assert_eq!(
-            exe_from_command_line("\"C:\\Program Files\\Microsoft Office\\Office16\\ONENOTE.EXE\" -Embedding"),
+            exe_from_command_line(
+                "\"C:\\Program Files\\Microsoft Office\\Office16\\ONENOTE.EXE\" -Embedding"
+            ),
             Some("C:\\Program Files\\Microsoft Office\\Office16\\ONENOTE.EXE".to_string())
         );
     }

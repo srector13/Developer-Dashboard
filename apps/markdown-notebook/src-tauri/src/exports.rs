@@ -279,13 +279,21 @@ pub fn inline_images(html: &str) -> String {
         if replacements.contains_key(&url) {
             continue;
         }
-        let Some(path) = url_to_path(&url) else { continue };
-        let Some(mime) = image_mime(&path) else { continue };
-        let Ok(meta) = std::fs::metadata(&path) else { continue };
+        let Some(path) = url_to_path(&url) else {
+            continue;
+        };
+        let Some(mime) = image_mime(&path) else {
+            continue;
+        };
+        let Ok(meta) = std::fs::metadata(&path) else {
+            continue;
+        };
         if meta.len() > HTML_INLINE_IMAGE_MAX || total + meta.len() > HTML_INLINE_TOTAL_MAX {
             continue;
         }
-        let Ok(bytes) = std::fs::read(&path) else { continue };
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
         total += meta.len();
         let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
         replacements.insert(url, format!("data:{mime};base64,{encoded}"));
@@ -403,7 +411,10 @@ mod tests {
         let path = PathBuf::from(r"C:\notes\my folder\shot.png");
         let url = path_to_file_url(&path);
         assert_eq!(url, "file:///C:/notes/my%20folder/shot.png");
-        assert_eq!(url_to_path(&url).unwrap(), PathBuf::from("C:/notes/my folder/shot.png"));
+        assert_eq!(
+            url_to_path(&url).unwrap(),
+            PathBuf::from("C:/notes/my folder/shot.png")
+        );
     }
 
     #[test]

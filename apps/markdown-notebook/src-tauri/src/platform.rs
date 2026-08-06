@@ -120,9 +120,9 @@ mod imp {
                             } else {
                                 // WebView2 reports a clean "didn't print" (for
                                 // example: the target path is not writable).
-                                Err(windows::core::Error::from_hresult(
-                                    windows::core::HRESULT(-1),
-                                ))
+                                Err(windows::core::Error::from_hresult(windows::core::HRESULT(
+                                    -1,
+                                )))
                             }
                         }),
                     )

@@ -149,7 +149,12 @@ impl AppState {
     }
 
     pub fn index_docs(&self) -> Vec<SearchDoc> {
-        self.search_index.read().unwrap().values().cloned().collect()
+        self.search_index
+            .read()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect()
     }
 }
 

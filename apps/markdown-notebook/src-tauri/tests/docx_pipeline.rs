@@ -60,11 +60,17 @@ fn a_word_page_converts_to_markdown_with_its_structure_intact() {
     // Inline formatting and links.
     assert!(markdown.contains("**bold**"), "{markdown}");
     assert!(markdown.contains("*italic*"), "{markdown}");
-    assert!(markdown.contains("[link](https://example.com)"), "{markdown}");
+    assert!(
+        markdown.contains("[link](https://example.com)"),
+        "{markdown}"
+    );
     // Lists, including nesting and numbering.
     assert!(markdown.contains("- First point"), "{markdown}");
     assert!(markdown.contains("  - A nested point"), "{markdown}");
-    assert!(markdown.contains("1.  Numbered one") || markdown.contains("1. Numbered one"), "{markdown}");
+    assert!(
+        markdown.contains("1.  Numbered one") || markdown.contains("1. Numbered one"),
+        "{markdown}"
+    );
     // A real pipe table, not a grid table and not one long line.
     assert!(markdown.contains("| Column A | Column B |"), "{markdown}");
     assert!(markdown.contains("| alpha"), "{markdown}");
@@ -96,7 +102,10 @@ fn the_embedded_image_is_extracted_and_ends_up_as_a_markdown_image() {
 
     // A Word export carries image dimensions, so pandoc emits a raw <img>.
     // This is the exact shape the conversion has to cope with.
-    assert!(markdown.contains("<img"), "expected pandoc's raw img: {markdown}");
+    assert!(
+        markdown.contains("<img"),
+        "expected pandoc's raw img: {markdown}"
+    );
 
     // …and the app turns it back into markdown.
     let converted = html_clean::html_images_to_markdown(&markdown);
@@ -108,7 +117,10 @@ fn the_embedded_image_is_extracted_and_ends_up_as_a_markdown_image() {
     assert_eq!(targets.len(), 1, "{converted}");
     let target = &targets[0].0;
     let resolved = media.parent().unwrap().join(target);
-    assert!(resolved.is_file(), "{target} should resolve to {resolved:?}");
+    assert!(
+        resolved.is_file(),
+        "{target} should resolve to {resolved:?}"
+    );
 
     let _ = std::fs::remove_dir_all(&media);
 }

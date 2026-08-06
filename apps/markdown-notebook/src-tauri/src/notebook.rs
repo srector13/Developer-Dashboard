@@ -147,9 +147,14 @@ pub fn parse_note_meta(content: &str, file_path: &Path) -> NoteMeta {
 
     if let Some(caps) = FRONTMATTER_RE.captures(content) {
         let block = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-        let fm_lines: Vec<&str> = block.split('\n').map(|l| l.trim_end_matches('\r')).collect();
+        let fm_lines: Vec<&str> = block
+            .split('\n')
+            .map(|l| l.trim_end_matches('\r'))
+            .collect();
         for (index, line) in fm_lines.iter().enumerate() {
-            let Some(colon) = line.find(':') else { continue };
+            let Some(colon) = line.find(':') else {
+                continue;
+            };
             let key = line[..colon].trim().to_lowercase();
             let val = line[colon + 1..].trim();
             match key.as_str() {
@@ -529,7 +534,13 @@ mod tests {
         let meta = parse_note_meta(src, Path::new("/n/t.md"));
         assert_eq!(meta.open_tasks, 3);
         assert_eq!(meta.completed_tasks, 1);
-        assert_eq!(meta.task_lines[0], TaskLine { text: "first".into(), line: 2 });
+        assert_eq!(
+            meta.task_lines[0],
+            TaskLine {
+                text: "first".into(),
+                line: 2
+            }
+        );
         assert_eq!(meta.task_lines[1].line, 4);
         assert_eq!(meta.task_lines[2].text, "numbered");
     }
@@ -552,7 +563,10 @@ mod tests {
     #[test]
     fn daily_keys_come_from_the_filename() {
         assert_eq!(parse_daily_key("2026-07-13.md"), Some("2026-07-13".into()));
-        assert_eq!(parse_daily_key("2026-07-13-standup.md"), Some("2026-07-13".into()));
+        assert_eq!(
+            parse_daily_key("2026-07-13-standup.md"),
+            Some("2026-07-13".into())
+        );
         assert_eq!(parse_daily_key("notes.md"), None);
     }
 
