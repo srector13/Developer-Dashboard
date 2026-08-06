@@ -6,6 +6,7 @@ name: Beta
 #
 #   .../releases/download/beta/Dev-Hub-beta-win-x64-portable.exe
 #   .../releases/download/beta/Log-Viewer-beta-win-x64-portable.exe
+#   .../releases/download/beta/Markdown-Notebook-beta-win-x64-portable.exe
 #
 # Bookmark those URLs on the work PC: each new build replaces the files at the
 # same addresses, so testing a change is "download, overwrite, run" with no
@@ -65,8 +66,9 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          cp "target/release/dev-hub.exe"    "dist/Dev-Hub-beta-win-x64-portable.exe"
-          cp "target/release/log-viewer.exe" "dist/Log-Viewer-beta-win-x64-portable.exe"
+          cp "target/release/dev-hub.exe"          "dist/Dev-Hub-beta-win-x64-portable.exe"
+          cp "target/release/log-viewer.exe"       "dist/Log-Viewer-beta-win-x64-portable.exe"
+          cp "target/release/markdown-notebook.exe" "dist/Markdown-Notebook-beta-win-x64-portable.exe"
           echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
           ls -l dist
 
@@ -81,11 +83,13 @@ jobs:
           | --- | --- |
           | Dev Hub | \`Dev-Hub-beta-win-x64-portable.exe\` |
           | Log Viewer | \`Log-Viewer-beta-win-x64-portable.exe\` |
+          | Markdown Notebook | \`Markdown-Notebook-beta-win-x64-portable.exe\` |
 
           Both are built from one commit of one workspace, so they always agree
           about the suite registry. Drop them in the same folder and they find
-          each other — Dev Hub's Logs card will open files in Log Viewer, and
-          Log Viewer's menu will open Dev Hub.
+          each other — Dev Hub's Logs card opens files in Log Viewer, its Todos
+          card opens notes in Markdown Notebook, and each app can launch its
+          siblings.
 
           | | |
           | --- | --- |
@@ -98,9 +102,9 @@ jobs:
 
           Download the \`.exe\`, put it wherever you like, and run it. No
           installer, no admin rights, nothing to unpack. Each app keeps its
-          state in a folder created next to its own exe — \`DevHubData\` and
-          \`LogViewerData\` — so an app travels with its file, and swapping in a
-          new build leaves that state alone.
+          state in a folder created next to its own exe — \`DevHubData\`,
+          \`LogViewerData\`, \`MarkdownNotebookData\` — so an app travels with its
+          file, and swapping in a new build leaves that state alone.
 
           Requires the Microsoft Edge WebView2 runtime, which ships with
           Windows 10 (from the 2020 updates) and Windows 11.
@@ -144,4 +148,5 @@ jobs:
           {
             echo "Dev Hub: $BASE/Dev-Hub-beta-win-x64-portable.exe"
             echo "Log Viewer: $BASE/Log-Viewer-beta-win-x64-portable.exe"
+            echo "Markdown Notebook: $BASE/Markdown-Notebook-beta-win-x64-portable.exe"
           } >> "$GITHUB_STEP_SUMMARY"

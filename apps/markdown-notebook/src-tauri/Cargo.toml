@@ -1,0 +1,84 @@
+[package]
+name = "markdown-notebook"
+# Its own version, deliberately not the workspace's. This app is at 1.5 and
+# shipping; Dev Hub and Log Viewer are at 0.2. Forcing a common number would
+# mean either pushing a mature app *backwards* for the people using it, or
+# claiming a maturity the other two have not earned. What has to agree between
+# the apps is the registry's own `version` field, and that is checked where it
+# is read — see crates/suite-registry.
+version = "1.5.0-beta.15"
+description = "A modern minimalistic Markdown note-taking desktop application."
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# One binary, no installer. `windows_subsystem` in main.rs keeps the console
+# window from flashing on launch.
+[[bin]]
+name = "markdown-notebook"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# The suite's shared plumbing. This app used to carry its own copy of the
+# registry writer, because it lived in another repository; now that it doesn't,
+# there is one implementation again.
+suite-registry = { workspace = true }
+
+tauri = { version = "2", features = ["tray-icon", "image-png", "protocol-asset"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Notebook scanning, watching and text work
+walkdir = "2"
+notify = "6"
+notify-debouncer-mini = "0.4"
+regex = "1"
+once_cell = "1"
+
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+sha1 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+urlencoding = "2"
+# OneNote's hierarchy comes back as XML
+quick-xml = "0.37"
+
+# Local AI servers only ever listen on localhost, but a user may point the
+# base URL at an https host, so keep TLS (schannel on Windows — no C toolchain).
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+tokio = { version = "1", features = ["time", "macros", "rt-multi-thread", "sync"] }
+
+# Screenshot-to-note
+xcap = "0.0.14"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[target.'cfg(windows)'.dependencies]
+# Clipboard HTML (CF_HTML) — Electron's clipboard.readHTML/write equivalent
+clipboard-win = "5"
+# WebView2 PrintToPdf — Electron's webContents.printToPDF equivalent.
+# Pinned to the versions wry 0.55 links against, so the COM interfaces
+# returned by tauri's with_webview() are the same types.
+webview2-com = "0.38"
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_Com",
+  "Win32_System_Variant",
+  "Win32_System_Ole",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_System_Registry",
+  "Win32_System_Threading",
+  "Win32_UI_Input_KeyboardAndMouse",
+] }
+
+# `[profile.release]` lives in the workspace root now — a profile set on a
+# member is ignored, and every app in the suite ships the same way anyway.

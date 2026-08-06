@@ -8,7 +8,7 @@ corporate Windows 11 box and run them.
 | --- | --- | --- |
 | **[Dev Hub](apps/dev-hub/)** | A global quick launcher plus a dashboard aggregating live signal from git repos, running services, markdown notes and log files. | [`Dev-Hub-beta-win-x64-portable.exe`](https://github.com/srector13/Developer-Dashboard/releases/download/beta/Dev-Hub-beta-win-x64-portable.exe) |
 | **[Log Viewer](apps/log-viewer/)** | A multi-file tail with saved filters, highlight rules and timestamp alignment across sources. | [`Log-Viewer-beta-win-x64-portable.exe`](https://github.com/srector13/Developer-Dashboard/releases/download/beta/Log-Viewer-beta-win-x64-portable.exe) |
-| **[Markdown Notebook](https://github.com/srector13/markdown-notebook)** | Local-first markdown notes. Still its own repository — see [the migration plan](docs/ARCHITECTURE.md#bringing-markdown-notebook-in). | — |
+| **[Markdown Notebook](apps/markdown-notebook/)** | Local-first markdown notes — one folder of plain files, no account, no sync. | [`Markdown-Notebook-beta-win-x64-portable.exe`](https://github.com/srector13/Developer-Dashboard/releases/download/beta/Markdown-Notebook-beta-win-x64-portable.exe) |
 
 Those URLs are permanent. Every push rebuilds them, so testing a change is
 *download, overwrite, run*. Each app's state lives in a folder beside its own
@@ -27,7 +27,8 @@ That is the whole setup. The apps then find each other:
 - Dev Hub's **Logs** card opens a file in Log Viewer — one click, or the hotkey
   and the log's name.
 - Open a notebook in Markdown Notebook and Dev Hub's **Todos** card follows it,
-  with no path configured anywhere.
+  with no path configured anywhere — and clicking a todo opens the note *on the
+  line the todo is on*.
 - Each app can launch its siblings.
 
 None of this is hardcoded. Every app writes one entry into
@@ -52,20 +53,31 @@ changed.
       "exe": "C:\\tools\\Log-Viewer.exe", "version": "0.2.0-beta.1",
       "capabilities": ["tail-file"],
       "registeredAt": 1772899215
+    },
+    "markdown-notebook": {
+      "id": "markdown-notebook", "name": "Markdown Notebook",
+      "exe": "C:\\tools\\Markdown-Notebook.exe", "version": "1.5.0-beta.15",
+      "capabilities": ["open-note-at-line"],
+      "registeredAt": 1772899230
     }
   },
   "notebookRoot": "C:\\notes"
 }
 ```
 
+Each app carries its own version, deliberately — they are at different points
+in their lives, and a shared number would either push a mature app backwards or
+claim maturity a young one hasn't earned. What has to agree is the registry's
+own `version`, and that is checked where it is read.
+
 Nothing is ever pruned from it: an exe on a USB stick that isn't plugged in is
 missing, not gone. A registered path that no longer resolves is skipped, not
 deleted. And a missing registry is normal — on a fresh box that is the truth,
 so every read returns an empty one rather than an error.
 
-Markdown Notebook has not been migrated yet, so its older pointer file
-(`%USERPROFILE%\.markdown-notebook\last-notebook.json`) is still read as a
-fallback. It keeps working untouched.
+The older pointer file (`%USERPROFILE%\.markdown-notebook\last-notebook.json`)
+is still written and read alongside, so a build of any app that predates the
+registry keeps working.
 
 ---
 
@@ -79,8 +91,9 @@ crates/
 
 ui/                  design tokens, the icon set, the vendored fonts
 apps/
-├─ dev-hub/          → dev-hub.exe
-└─ log-viewer/       → log-viewer.exe
+├─ dev-hub/            → dev-hub.exe
+├─ log-viewer/         → log-viewer.exe
+└─ markdown-notebook/  → markdown-notebook.exe
 ```
 
 `suite-core` and `suite-config` carry **no Tauri dependency**, on purpose: they
@@ -103,7 +116,8 @@ Why one repository rather than three, and what it cost:
 npm install
 npm run dev:hub        # cargo tauri dev, Dev Hub
 npm run dev:logs       # cargo tauri dev, Log Viewer
-npm run build          # both release exes
+npm run dev:notes      # cargo tauri dev, Markdown Notebook
+npm run build          # all three release exes
 npm run check          # cargo check, whole workspace
 npm run lint           # clippy, warnings as errors
 npm run test:rust      # every backend + crate test
@@ -118,8 +132,8 @@ Building one app: `cargo build -p log-viewer`. Testing one crate:
 `cargo test -p suite-core`.
 
 CI runs the renderer suites, the workspace tests and a standalone build of the
-shared crates on Linux, then `cargo fmt --check`, clippy, the tests and both
-release exes on Windows.
+shared crates on Linux, then `cargo fmt --check`, clippy, the tests and all
+three release exes on Windows.
 
 ### Adding an app
 
@@ -137,8 +151,9 @@ for free from steps 1 and 3.
 ## Privacy and portability
 
 - One `.exe` per app. No installer, no elevation.
-- All state beside the exe (`DevHubData`, `LogViewerData`), plus the shared
-  registry under `%USERPROFILE%`. Nothing is written anywhere else.
+- All state beside the exe (`DevHubData`, `LogViewerData`,
+  `MarkdownNotebookData`), plus the shared registry under `%USERPROFILE%`.
+  Nothing is written anywhere else.
 - **No outbound network calls** except the health endpoints and `command`
   providers you configure yourself, and URLs you explicitly open. No update
   check, no telemetry, no analytics.

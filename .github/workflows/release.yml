@@ -86,8 +86,9 @@ jobs:
         run: |
           mkdir -p dist
           V="${{ steps.version.outputs.value }}"
-          cp "target/release/dev-hub.exe"    "dist/Dev-Hub-$V-win-x64-portable.exe"
-          cp "target/release/log-viewer.exe" "dist/Log-Viewer-$V-win-x64-portable.exe"
+          cp "target/release/dev-hub.exe"           "dist/Dev-Hub-$V-win-x64-portable.exe"
+          cp "target/release/log-viewer.exe"        "dist/Log-Viewer-$V-win-x64-portable.exe"
+          cp "target/release/markdown-notebook.exe" "dist/Markdown-Notebook-$V-win-x64-portable.exe"
           ls -l dist
 
       # signtool ships with the Windows SDK that windows-latest already has.
@@ -122,6 +123,10 @@ jobs:
           | --- | --- |
           | **Dev Hub** | A global quick launcher plus a dashboard of live signal from your repos, services, notes and logs. |
           | **Log Viewer** | A multi-file tail with saved filters, highlight rules and timestamp alignment across sources. |
+          | **Markdown Notebook** | Local-first markdown notes — one folder of plain files, no account, no sync. |
+
+          The tag versions the *release*; each app carries its own version
+          internally, because they are at different points in their lives.
 
           Download what you want, put it wherever you like (Downloads, a USB
           stick, a work machine you can't install software on), and run it.
@@ -132,7 +137,8 @@ jobs:
           through a per-user registry at `%USERPROFILE%\.dev-suite\registry.json`.
 
           Each app keeps its state in a folder next to its own exe
-          (`DevHubData`, `LogViewerData`), so an app travels with its file.
+          (`DevHubData`, `LogViewerData`, `MarkdownNotebookData`), so an app
+          travels with its file.
 
           Requires the Microsoft Edge WebView2 runtime, which ships with
           Windows 10 (from the 2020 updates) and Windows 11.
