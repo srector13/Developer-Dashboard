@@ -1,0 +1,122 @@
+/* The suite's design tokens.
+ *
+ * This block used to exist twice — once in Markdown Notebook's style.css, once
+ * copied verbatim into Dev Hub's — and the second copy had already drifted.
+ * It lives here now, and every app imports it. That is the whole reason the
+ * apps read as one family of tools rather than three that happen to be dark.
+ *
+ * Every component class in every app draws from these tokens and adds nothing
+ * to the palette. If a colour is needed that isn't here, add a semantic token;
+ * don't inline it.
+ *
+ * Generated copies live at apps/<app>/renderer/vendor/suite/. Edit this file,
+ * then `npm run ui:sync` — CI fails if the copies have drifted.
+ */
+
+@import url("./fonts.css");
+
+:root {
+  /* Dark Theme Palette (base). Named themes override these variables in
+     body[data-theme=...] blocks below. */
+  --bg-primary: #0d1117;
+  --bg-secondary: rgba(22, 27, 34, 0.7);
+  --bg-tertiary: rgba(13, 17, 23, 0.5);
+
+  --border-color: rgba(240, 246, 252, 0.1);
+  --border-glow: rgba(56, 139, 253, 0.4);
+
+  --text-primary: #c9d1d9;
+  --text-secondary: #8b949e;
+  --text-muted: #484f58;
+
+  --accent-blue: #58a6ff;
+  --accent-teal: #39c5cf;
+  --accent-green: #3fb950;
+  --accent-red: #f85149;
+  --accent-glow: rgba(88, 166, 255, 0.15);
+
+  --glass-bg: rgba(22, 27, 34, 0.6);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-blur: blur(16px);
+
+  /* Semantic tokens: every component color must come from one of these so
+     light mode and the named themes stay correct everywhere. */
+  --text-heading: #ffffff;         /* titles, hover/active emphasis */
+  --text-strong: #f0f6fc;          /* sub-headings */
+  --text-inverse: #0d1117;         /* text sitting on accent backgrounds */
+  --editor-bg: #090c10;            /* raw editor pane */
+  --editor-text: #e6edf3;
+  --code-bg: #090c10;              /* pre / fenced code */
+  --code-surface: #0d1117;         /* code block wrapper card */
+  --surface-hover: rgba(255, 255, 255, 0.06);
+  --surface-active: rgba(255, 255, 255, 0.1);
+  --chip-bg: rgba(255, 255, 255, 0.06);
+  --menu-bg: rgba(22, 27, 34, 0.95);      /* dropdowns, palette, popout */
+  --tooltip-bg: rgba(22, 27, 34, 0.98);
+  --scrollbar-thumb: rgba(255, 255, 255, 0.08);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.16);
+  --heading-border: rgba(255, 255, 255, 0.1);
+  --blockquote-text: #9ecbff;
+  --mark-text: #f2c94c;
+  --mark-bg: rgba(242, 201, 76, 0.15);
+  --mark-border: rgba(242, 201, 76, 0.3);
+
+  --inset-bg: rgba(0, 0, 0, 0.2);        /* recessed control groups */
+  --overlay-bg: rgba(0, 0, 0, 0.7);      /* modal backdrop */
+
+  /* Form controls must be OPAQUE. A native <select> hands its own background
+     to the OS dropdown, and a translucent one composites against the desktop
+     rather than the app — on Windows that renders the closed list white, with
+     white text on it, readable only under the hover highlight. */
+  --control-bg: #161b22;
+  --control-text: #e6edf3;
+
+  /* Shared shape tokens */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-display: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: 'SFMono-Regular', Consolas, "Liberation Mono", Menlo, Courier, monospace;
+}
+
+/* Light theme: the same tokens, re-pointed. Nothing below this block needs to
+   know which theme is active. */
+body[data-theme="light"] {
+  --bg-primary: #f6f8fa;
+  --bg-secondary: rgba(255, 255, 255, 0.8);
+  --bg-tertiary: rgba(255, 255, 255, 0.6);
+
+  --border-color: rgba(31, 35, 40, 0.12);
+
+  --text-primary: #1f2328;
+  --text-secondary: #59636e;
+  --text-muted: #818b98;
+
+  --accent-blue: #0969da;
+  --accent-teal: #1b7c83;
+  --accent-green: #1a7f37;
+  --accent-red: #cf222e;
+  --accent-glow: rgba(9, 105, 218, 0.12);
+
+  --glass-bg: rgba(255, 255, 255, 0.75);
+  --glass-border: rgba(31, 35, 40, 0.08);
+
+  --text-heading: #010409;
+  --text-strong: #0d1117;
+  --text-inverse: #ffffff;
+  --surface-hover: rgba(31, 35, 40, 0.05);
+  --surface-active: rgba(31, 35, 40, 0.09);
+  --chip-bg: rgba(31, 35, 40, 0.05);
+  --menu-bg: rgba(255, 255, 255, 0.97);
+  --scrollbar-thumb: rgba(31, 35, 40, 0.12);
+  --scrollbar-thumb-hover: rgba(31, 35, 40, 0.22);
+  --inset-bg: rgba(31, 35, 40, 0.04);
+  --control-bg: #ffffff;
+  --control-text: #1f2328;
+}
+
+body[data-theme="dark"] { color-scheme: dark; }
+body[data-theme="light"] { color-scheme: light; }
