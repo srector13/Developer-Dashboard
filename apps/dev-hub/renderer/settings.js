@@ -20,6 +20,7 @@
     { id: 'projects', label: 'Repos', icon: 'git' },
     { id: 'todos', label: 'Todos', icon: 'check' },
     { id: 'health', label: 'Services', icon: 'health' },
+    { id: 'logs', label: 'Logs', icon: 'file' },
     { id: 'command', label: 'Custom', icon: 'command' },
     { id: 'advanced', label: 'Advanced', icon: 'file' },
   ];
@@ -179,6 +180,7 @@
     { id: 'launch', label: 'Launch', hint: 'Apps and links' },
     { id: 'todos', label: 'Todos', hint: 'Unchecked todos from your notes' },
     { id: 'health', label: 'Health', hint: 'Re-check services on demand' },
+    { id: 'logs', label: 'Logs', hint: 'Log files, opened in Log Viewer' },
   ];
 
   /** The launcher modes currently on, defaulting to all of them. */
@@ -481,6 +483,38 @@
       </div>`;
   }
 
+  function logsSection() {
+    const files = (config.logs && config.logs.files) || [];
+    return `
+      <div class="set-group">
+        <h3>Log files</h3>
+        <p class="set-hint">
+          Dev Hub only checks the size and the last-written time of these — it
+          never reads them. Clicking a row opens the file in Log Viewer, which
+          Dev Hub finds through the suite registry, so there is no path to
+          configure here. If Log Viewer isn't installed the rows still reveal
+          and copy.
+        </p>
+        ${files.length ? '' : '<p class="set-empty">No log files yet.</p>'}
+        ${files.map((file, i) => `
+          <div class="set-row">
+            <input type="text" data-log-field="name" data-index="${i}" value="${esc(file.name || '')}" placeholder="api">
+            <input type="text" data-log-field="path" data-index="${i}" value="${esc(file.path || '')}" placeholder="C:\\services\\api\\logs\\application.log" class="grow">
+            <button class="btn-ghost" data-browse="program" data-log-field="path" data-index="${i}">Browse…</button>
+            <button class="btn-ghost danger" data-remove-log="${i}" title="Remove">✕</button>
+          </div>`).join('')}
+        <button class="btn-ghost add" data-add-log="1">Add a log file</button>
+      </div>
+      <div class="set-group">
+        <h3>Timing</h3>
+        ${textField('config', 'logs.intervalSeconds', 'Check every (seconds)', { type: 'number', min: 5 })}
+        ${textField('config', 'logs.staleAfterMins', 'Flag as quiet after (minutes)', {
+          type: 'number', min: 0,
+          hint: 'A service that stops logging is often the first sign of trouble, and no health check will tell you about it. 0 switches the warning off — for a log that is supposed to be silent.',
+        })}
+      </div>`;
+  }
+
   function commandSection() {
     const commands = config.command || [];
     return `
@@ -544,6 +578,7 @@
       case 'projects': return projectsSection();
       case 'todos': return todosSection();
       case 'health': return healthSection();
+      case 'logs': return logsSection();
       case 'command': return commandSection();
       case 'advanced': return advancedSection();
       default: return '';
@@ -737,6 +772,12 @@
         markDirty();
         return;
       }
+      if (target.dataset.logField) {
+        const file = config.logs.files[index];
+        file[target.dataset.logField] = target.value;
+        markDirty();
+        return;
+      }
       if (target.dataset.commandField) {
         const entry = config.command[index];
         const field = target.dataset.commandField;
@@ -854,6 +895,8 @@
           config.projects.openWith[index].program = picked;
         } else if (target.dataset.commandField) {
           config.command[index].program = picked;
+        } else if (target.dataset.logField) {
+          config.logs.files[index].path = picked;
         } else if (target.dataset.target) {
           set(target.dataset.scope === 'settings' ? settings : config, target.dataset.target, picked);
         }
@@ -902,6 +945,16 @@
       }
       if (target.dataset.removeEndpoint) {
         config.health.endpoints.splice(Number(target.dataset.removeEndpoint), 1);
+        markDirty(); render(); return;
+      }
+      if (target.dataset.addLog) {
+        config.logs = config.logs || {};
+        config.logs.files = config.logs.files || [];
+        config.logs.files.push({ name: '', path: '' });
+        markDirty(); render(); return;
+      }
+      if (target.dataset.removeLog) {
+        config.logs.files.splice(Number(target.dataset.removeLog), 1);
         markDirty(); render(); return;
       }
       if (target.dataset.addCommand) {

@@ -8,6 +8,7 @@
 pub mod command;
 pub mod health;
 pub mod launch;
+pub mod logs;
 pub mod projects;
 pub mod todos;
 

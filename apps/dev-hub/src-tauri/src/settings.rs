@@ -25,6 +25,8 @@ pub struct ProviderToggles {
     pub projects: bool,
     pub todos: bool,
     pub health: bool,
+    #[serde(default = "default_true")]
+    pub logs: bool,
 }
 
 impl Default for ProviderToggles {
@@ -34,6 +36,7 @@ impl Default for ProviderToggles {
             projects: true,
             todos: true,
             health: true,
+            logs: true,
         }
     }
 }
@@ -45,6 +48,7 @@ impl ProviderToggles {
             "projects" => self.projects,
             "todos" => self.todos,
             "health" => self.health,
+            "logs" => self.logs,
             // `command` providers are opt-in by existing in the config at all.
             _ => true,
         }
@@ -112,7 +116,7 @@ impl Default for LauncherSettings {
 
 /// Every mode the launcher knows, in orb order. The renderer owns their labels
 /// and icons; this is the list settings validates against.
-pub const LAUNCHER_MODES: &[&str] = &["all", "projects", "launch", "todos", "health"];
+pub const LAUNCHER_MODES: &[&str] = &["all", "projects", "launch", "todos", "health", "logs"];
 
 /// A user's personal edits to one item, keyed by `Item::key()`.
 ///
@@ -500,6 +504,52 @@ fn default_command_timeout() -> u64 {
     10_000
 }
 
+/// One file the Logs card keeps an eye on.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LogWatch {
+    /// Empty → the file's own name.
+    #[serde(default)]
+    pub name: String,
+    pub path: String,
+    /// Overrides `logs.staleAfterMins` for this one file. `Some(0)` switches
+    /// the staleness warning off, for a log that is supposed to be silent.
+    #[serde(default)]
+    pub stale_after_mins: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LogsConfig {
+    #[serde(default)]
+    pub files: Vec<LogWatch>,
+    #[serde(default = "default_logs_interval")]
+    pub interval_seconds: u64,
+    /// Minutes of silence after which a log is flagged as quiet. A service
+    /// that stops logging is often the first sign of trouble, and no health
+    /// check will tell you about it.
+    #[serde(default = "default_stale_after_mins")]
+    pub stale_after_mins: u64,
+}
+
+fn default_logs_interval() -> u64 {
+    60
+}
+
+fn default_stale_after_mins() -> u64 {
+    15
+}
+
+impl Default for LogsConfig {
+    fn default() -> Self {
+        Self {
+            files: Vec::new(),
+            interval_seconds: default_logs_interval(),
+            stale_after_mins: default_stale_after_mins(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct HubConfig {
@@ -511,6 +561,8 @@ pub struct HubConfig {
     pub todos: TodosConfig,
     #[serde(default)]
     pub health: HealthConfig,
+    #[serde(default)]
+    pub logs: LogsConfig,
     #[serde(default)]
     pub command: Vec<CommandProviderConfig>,
 }
@@ -564,6 +616,19 @@ pub const DEFAULT_CONFIG: &str = r#"{
     "endpoints": [
       { "name": "API — local", "url": "http://localhost:8080/actuator/health", "expect": 200 }
     ]
+  },
+
+  "//logs": [
+    "Files the Logs card keeps an eye on. Dev Hub only stats them — clicking a",
+    "row hands the file to Log Viewer, which is found through the suite registry",
+    "rather than by a path you have to configure here.",
+    "`staleAfterMins` flags a log that has gone quiet; 0 switches that off for a",
+    "file that is supposed to be silent. Leave `name` out to use the file name."
+  ],
+  "logs": {
+    "intervalSeconds": 60,
+    "staleAfterMins": 15,
+    "files": []
   },
 
   "//command": [

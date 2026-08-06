@@ -6,7 +6,7 @@
 //! reads that cache and never triggers a refresh itself, which is what makes it
 //! open instantly.
 
-use crate::providers::{command, health, launch, projects, todos, Provider};
+use crate::providers::{command, health, launch, logs, projects, todos, Provider};
 use crate::settings::{AppSettings, HubConfig};
 use crate::state::AppState;
 use std::sync::atomic::Ordering;
@@ -16,7 +16,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 /// Ids that a `command` provider may not claim, so a config typo can't shadow
 /// a built-in card.
-const RESERVED_IDS: &[&str] = &[launch::ID, projects::ID, todos::ID, health::ID];
+const RESERVED_IDS: &[&str] = &[launch::ID, projects::ID, todos::ID, health::ID, logs::ID];
 
 /// Build the live provider set from the settings toggles and the user's config.
 /// Adding a provider means adding one line here.
@@ -35,6 +35,11 @@ pub fn build(settings: &AppSettings, config: &HubConfig) -> Vec<Arc<dyn Provider
     if settings.providers.health {
         providers.push(Arc::new(health::HealthProvider {
             interval: config.health.interval_seconds,
+        }));
+    }
+    if settings.providers.logs {
+        providers.push(Arc::new(logs::LogsProvider {
+            interval: config.logs.interval_seconds,
         }));
     }
 
@@ -261,7 +266,7 @@ mod tests {
         let providers = build(&AppSettings::default(), &HubConfig::default());
         assert_eq!(
             ids(&providers),
-            vec!["launch", "projects", "todos", "health"]
+            vec!["launch", "projects", "todos", "health", "logs"]
         );
     }
 
@@ -285,7 +290,7 @@ mod tests {
             ..Default::default()
         };
         let providers = build(&AppSettings::default(), &config);
-        assert_eq!(&ids(&providers)[4..], &["prs", "builds"]);
+        assert_eq!(&ids(&providers)[5..], &["prs", "builds"]);
     }
 
     #[test]
@@ -297,7 +302,7 @@ mod tests {
         let providers = build(&AppSettings::default(), &config);
         assert_eq!(
             ids(&providers),
-            vec!["launch", "projects", "todos", "health"]
+            vec!["launch", "projects", "todos", "health", "logs"]
         );
         // The surviving `projects` is the built-in, on its own 120s interval.
         assert_eq!(providers[1].refresh_interval(), 120);

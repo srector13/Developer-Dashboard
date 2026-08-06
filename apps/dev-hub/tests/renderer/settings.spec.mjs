@@ -28,6 +28,7 @@ await page.addInitScript(() => {
     projects: { roots: ['C:\\dev'], maxDepth: 3, openWith: [{ label: 'VS Code', program: 'code', args: ['{path}'] }] },
     todos: { roots: [], includeTags: [], openWith: { program: 'code', args: ['-g', '{path}:{line}'] } },
     health: { intervalSeconds: 60, timeoutMs: 4000, endpoints: [{ name: 'API', url: 'http://localhost:8080/health', expect: 200 }] },
+    logs: { intervalSeconds: 60, staleAfterMins: 15, files: [{ name: 'api', path: 'C:\\services\\api\\application.log' }] },
     command: [],
   };
   window.__shortcut = { accelerator: 'CommandOrControl+Shift+Space', registered: false, error: 'Windows refused it — another application already owns it.' };
@@ -37,12 +38,12 @@ await page.addInitScript(() => {
   window.__settings = {
     theme: 'dark', launcherShortcut: 'CommandOrControl+Shift+Space', keepInTray: true,
     startMinimized: false, dashboardColumns: 2, notifyOnFailure: false,
-    providers: { launch: true, projects: true, todos: true, health: true },
+    providers: { launch: true, projects: true, todos: true, health: true, logs: true },
     collapsed: [], cardLayout: {}, setupComplete: true,
     itemOverrides: { 'launch::0:Jenkins': { hidden: true } },
     launcher: {
       opacity: 0.88, showHints: true, maxResults: 40, showRecentWhenEmpty: true,
-      modes: ['all', 'projects', 'launch', 'todos', 'health'],
+      modes: ['all', 'projects', 'launch', 'todos', 'health', 'logs'],
     },
   };
 
@@ -79,7 +80,15 @@ await page.addInitScript(() => {
     getConfig: async () => ({ text: '{ "launch": [] }', path: 'C:/DevHubData/hub.config.json', error: null }),
     getConfigJson: async () => window.__config,
     saveConfig: async (text) => { window.__calls.push(['saveConfig', text]); },
-    saveConfigJson: async (config) => { window.__saved = config; window.__calls.push(['saveConfigJson']); return config; },
+    // A save persists, the way the backend's does — otherwise reopening a
+    // section silently reverts to the seed config and any test that edits,
+    // saves, then edits again is testing a fiction.
+    saveConfigJson: async (config) => {
+      window.__saved = config;
+      window.__config = JSON.parse(JSON.stringify(config));
+      window.__calls.push(['saveConfigJson']);
+      return config;
+    },
     revealConfigFile: () => window.__calls.push(['revealConfigFile']),
     pickFolder: async () => 'C:\\work\\repos',
     pickProgram: async () => 'C:\\bin\\idea64.exe',
@@ -180,7 +189,7 @@ check('dragging the slider updates the readout live', await page.evaluate(() =>
 
 check('every mode is listed and ticked by default', await page.evaluate(() => {
   const boxes = [...document.querySelectorAll('[data-mode]')];
-  return boxes.length === 5 && boxes.every(b => b.checked);
+  return boxes.length === 6 && boxes.every(b => b.checked);
 }));
 
 await page.uncheck('[data-mode="health"]');
@@ -195,7 +204,7 @@ check('opacity is saved as a fraction, not a percentage', await page.evaluate(()
 
 check('an unticked mode is dropped, and the rest keep their orb order', await page.evaluate(() => {
   const patch = JSON.parse(window.__calls.filter(c => c[0] === 'saveSettings').pop()[1]);
-  return patch.launcher.modes.join(',') === 'all,projects,launch,todos';
+  return patch.launcher.modes.join(',') === 'all,projects,launch,todos,logs';
 }));
 
 // Ticking in a different order must not reorder the orbs.
@@ -208,13 +217,13 @@ await page.click('#settings-save');
 await page.waitForTimeout(250);
 check('mode order follows the orb rail, not the order you ticked them', await page.evaluate(() => {
   const patch = JSON.parse(window.__calls.filter(c => c[0] === 'saveSettings').pop()[1]);
-  return patch.launcher.modes.join(',') === 'all,projects,launch,todos,health';
+  return patch.launcher.modes.join(',') === 'all,projects,launch,todos,health,logs';
 }));
 
 // The last mode standing can't be switched off.
 await openSettings('launcher');
 await page.evaluate(async () => {
-  for (const id of ['all', 'projects', 'launch', 'todos']) {
+  for (const id of ['all', 'projects', 'launch', 'todos', 'logs']) {
     const box = document.querySelector(`[data-mode="${id}"]`);
     box.checked = false;
     box.dispatchEvent(new Event('change', { bubbles: true }));
@@ -308,6 +317,37 @@ check('a new service round-trips with its expected status code', await page.eval
     && endpoint.url === 'https://api.dev.example.com/health'
     && endpoint.expect === 204;
 }));
+
+// --- Logs -----------------------------------------------------------------
+
+await openSettings('logs');
+check('watched log files render', await page.evaluate(() =>
+  document.querySelectorAll('input[data-log-field="path"]').length === 1));
+check('the panel says Dev Hub does not read the files itself', await page.evaluate(() =>
+  document.querySelector('#settings-body').textContent.includes('never reads them')));
+
+await page.click('[data-add-log]');
+await page.waitForTimeout(120);
+await page.fill('[data-log-field="name"][data-index="1"]', 'worker');
+await page.fill('[data-log-field="path"][data-index="1"]', 'C:\\services\\worker\\logs\\application.log');
+await page.fill('[data-path="logs.staleAfterMins"]', '30');
+await page.click('#settings-save');
+await page.waitForTimeout(200);
+check('a new log file round-trips', await page.evaluate(() => {
+  const file = window.__saved.logs.files[1];
+  return file.name === 'worker' && file.path === 'C:\\services\\worker\\logs\\application.log';
+}));
+check('the staleness threshold round-trips as a number', await page.evaluate(() =>
+  window.__saved.logs.staleAfterMins === 30));
+
+// Saving closes the panel, so removing needs it open again.
+await openSettings('logs');
+await page.click('[data-remove-log="1"]');
+await page.waitForTimeout(120);
+await page.click('#settings-save');
+await page.waitForTimeout(200);
+check('removing a log file drops only that one', await page.evaluate(() =>
+  window.__saved.logs.files.length === 1 && window.__saved.logs.files[0].name === 'api'));
 
 // --- Todos ----------------------------------------------------------------
 

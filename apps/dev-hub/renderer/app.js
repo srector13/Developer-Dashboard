@@ -29,12 +29,13 @@
     projects: '#bc8cff',
     todos: '#f2c94c',
     health: '#3fb950',
+    logs: '#ff7b72',
   };
   /** For `command` providers, whose ids aren't known until the config is read. */
   const FALLBACK_ACCENTS = ['#39c5cf', '#ff7b72', '#7ee787', '#ffa657', '#d2a8ff'];
 
   const PROVIDER_ICONS = {
-    launch: 'app', projects: 'git', todos: 'check', health: 'health',
+    launch: 'app', projects: 'git', todos: 'check', health: 'health', logs: 'file',
   };
 
   function accentFor(providerId) {
