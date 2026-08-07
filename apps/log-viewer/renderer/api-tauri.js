@@ -44,8 +44,14 @@
     // An id, never a path — the window can only reveal what it already watches.
     revealSource: (id) => invoke('reveal_source', { id }),
     pickFiles: () => invoke('pick_files'),
+    // Browse for a path without opening it — the settings pane editing a source.
+    browseFile: () => invoke('browse_file'),
 
     setFilter: (filter) => invoke('set_filter', { filter }),
+    // Resolves when the pattern compiles, rejects with the one-line reason when
+    // it does not. The highlight editor calls this as you type.
+    checkPattern: (pattern, regex, caseSensitive) =>
+      invoke('check_pattern', { pattern, regex, caseSensitive }),
     refresh: () => invoke('refresh'),
     clear: () => invoke('clear'),
     copyView: () => invoke('copy_view'),
@@ -54,6 +60,9 @@
 
     onLinesAppended: (cb) => on('lines-appended', (e) => cb(e.payload)),
     onSourcesChanged: (cb) => on('sources-changed', () => cb()),
+    // logs.config.json changed on disk — someone edited it, or another window
+    // saved it. See src-tauri/src/desktop.rs.
+    onConfigChanged: (cb) => on('config-changed', () => cb()),
 
     // Dropping a file has to come from Tauri rather than the HTML5 drop event:
     // a webview hands JS a File object with no path on it, and a path is the

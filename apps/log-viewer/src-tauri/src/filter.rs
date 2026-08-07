@@ -35,6 +35,12 @@ pub struct FilterSpec {
     /// Source ids to include. Empty means every source.
     #[serde(default)]
     pub sources: Vec<String>,
+    /// Show only the last N minutes. Zero means the whole buffer.
+    ///
+    /// The window counts back from the newest line the viewer holds rather than
+    /// from the wall clock — see `Matcher::build_at`.
+    #[serde(default)]
+    pub since_mins: u64,
 }
 
 /// A named, saved `FilterSpec`.
@@ -139,6 +145,12 @@ fn first_line(message: &str) -> String {
         .to_string()
 }
 
+/// Wall clock in epoch milliseconds — the fallback anchor for an interval when
+/// nothing in the buffer carries a timestamp.
+pub fn now_millis() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
 /// A `FilterSpec` compiled and ready to run.
 #[derive(Debug)]
 pub struct Matcher {
@@ -146,10 +158,33 @@ pub struct Matcher {
     exclude: Option<Pattern>,
     min_level: Level,
     sources: Vec<String>,
+    /// Lines older than this are hidden. `None` when no interval is set.
+    since: Option<i64>,
 }
 
 impl Matcher {
+    /// Compile a spec, counting any interval back from the wall clock.
+    ///
+    /// Every production path anchors to the buffer instead — see
+    /// `commands::matcher_for` — so this is the tests' entry point, where "now"
+    /// is the only anchor there is.
+    #[cfg(test)]
     pub fn build(spec: &FilterSpec) -> Result<Self, String> {
+        Self::build_at(spec, now_millis())
+    }
+
+    /// Compile a spec, counting any interval back from `anchor`.
+    ///
+    /// The anchor is the newest line the viewer holds, not `now`. Anchoring to
+    /// the wall clock is the obvious choice and the wrong one: a service that
+    /// stopped an hour ago has a perfectly good log, and "last 15 minutes"
+    /// against the wall clock empties the window with no explanation. Counting
+    /// back from the newest line means the interval always shows the *end* of
+    /// the log, which is what someone asking for it wants.
+    ///
+    /// `commands::matcher_for` supplies the anchor from the store; callers with
+    /// no store — and the tests — use `build`.
+    pub fn build_at(spec: &FilterSpec, anchor: i64) -> Result<Self, String> {
         Ok(Self {
             include: Pattern::build(&spec.query, spec.regex, spec.case_sensitive)
                 .map_err(|e| format!("Filter: {e}"))?,
@@ -157,6 +192,14 @@ impl Matcher {
                 .map_err(|e| format!("Exclude: {e}"))?,
             min_level: spec.min_level,
             sources: spec.sources.clone(),
+            // Saturating the whole way down. `sinceMins` can come from a saved
+            // filter in the config file, so it can be any u64 at all, and a
+            // naive cast turns a large one negative — which lands the floor in
+            // the future and hides the entire log.
+            since: (spec.since_mins > 0).then(|| {
+                let back = spec.since_mins.saturating_mul(60_000).min(i64::MAX as u64) as i64;
+                anchor.saturating_sub(back)
+            }),
         })
     }
 
@@ -170,6 +213,7 @@ impl Matcher {
             exclude: None,
             min_level: Level::Unknown,
             sources: Vec::new(),
+            since: None,
         }
     }
 
@@ -179,6 +223,15 @@ impl Matcher {
         }
         if !line.level.passes(self.min_level) {
             return false;
+        }
+        if let Some(floor) = self.since {
+            // A line the parser could place in time is judged on that. One it
+            // could not is kept, for the same reason `Level::Unknown` passes
+            // every floor: an interval must not be what silently swallows a
+            // stack trace, or a whole log that simply has no timestamps in it.
+            if line.effective_timestamp.is_some_and(|ts| ts < floor) {
+                return false;
+            }
         }
         if let Some(exclude) = &self.exclude {
             if exclude.matches(&line.text) {
@@ -198,7 +251,18 @@ impl Matcher {
             && self.exclude.is_none()
             && self.sources.is_empty()
             && self.min_level == Level::Unknown
+            && self.since.is_none()
     }
+}
+
+/// Compile a pattern only to find out whether it compiles.
+///
+/// The highlight editor calls this on every keystroke: a rule with a broken
+/// regex is skipped by `Highlighter::build` and simply colours nothing, which
+/// is indistinguishable from a rule that matches nothing. Saying so while the
+/// pattern is being typed is the only place that distinction can be made.
+pub fn check_pattern(pattern: &str, regex: bool, case_sensitive: bool) -> Result<(), String> {
+    Pattern::build(pattern, regex, case_sensitive).map(|_| ())
 }
 
 /// The compiled highlight rules, in the order they were configured.
@@ -376,6 +440,113 @@ mod tests {
         })
         .expect_err("a leading repeat must not compile");
         assert!(error.starts_with("Exclude: "), "got {error:?}");
+    }
+
+    // --- intervals
+
+    /// A line at a known moment, so the interval tests read as clock arithmetic.
+    fn at(millis: i64) -> LogLine {
+        LogLine {
+            effective_timestamp: Some(millis),
+            timestamp: Some(millis),
+            ..line("some text", Level::Info, "a")
+        }
+    }
+
+    const NOON: i64 = 1_714_564_800_000;
+    const MINUTE: i64 = 60_000;
+
+    #[test]
+    fn an_interval_hides_everything_older_than_it() {
+        let matcher = Matcher::build_at(
+            &FilterSpec {
+                since_mins: 15,
+                ..Default::default()
+            },
+            NOON,
+        )
+        .unwrap();
+
+        assert!(matcher.matches(&at(NOON)));
+        assert!(matcher.matches(&at(NOON - 14 * MINUTE)));
+        assert!(!matcher.matches(&at(NOON - 16 * MINUTE)));
+    }
+
+    #[test]
+    fn no_interval_shows_the_whole_buffer() {
+        let matcher = Matcher::build(&FilterSpec::default()).unwrap();
+        assert!(matcher.is_permissive());
+        assert!(matcher.matches(&at(0)), "1970 is still in the log");
+    }
+
+    #[test]
+    fn an_interval_stops_the_filter_being_permissive() {
+        // Otherwise the store's fast path would skip the per-line check and
+        // hand back everything.
+        let matcher = Matcher::build(&FilterSpec {
+            since_mins: 5,
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(!matcher.is_permissive());
+    }
+
+    #[test]
+    fn an_interval_keeps_lines_that_could_not_be_placed_in_time() {
+        // A log with no timestamps at all, or the trailing lines of a trace
+        // before the first timestamped line: an interval must not be the thing
+        // that empties the window.
+        let matcher = Matcher::build_at(
+            &FilterSpec {
+                since_mins: 5,
+                ..Default::default()
+            },
+            NOON,
+        )
+        .unwrap();
+        assert!(matcher.matches(&line("no clock on this one", Level::Info, "a")));
+    }
+
+    #[test]
+    fn the_interval_counts_back_from_the_anchor_not_from_now() {
+        // The whole point: a service that stopped yesterday still shows its
+        // last 15 minutes, rather than nothing at all.
+        let yesterday = now_millis() - 24 * 60 * MINUTE;
+        let matcher = Matcher::build_at(
+            &FilterSpec {
+                since_mins: 15,
+                ..Default::default()
+            },
+            yesterday,
+        )
+        .unwrap();
+        assert!(matcher.matches(&at(yesterday - 5 * MINUTE)));
+        assert!(!matcher.matches(&at(yesterday - 30 * MINUTE)));
+    }
+
+    #[test]
+    fn an_absurd_interval_does_not_overflow_into_the_future() {
+        // `sinceMins` arrives from a config file, so it can be anything.
+        let matcher = Matcher::build_at(
+            &FilterSpec {
+                since_mins: u64::MAX,
+                ..Default::default()
+            },
+            NOON,
+        )
+        .unwrap();
+        assert!(matcher.matches(&at(NOON)));
+    }
+
+    #[test]
+    fn checking_a_pattern_reports_what_the_highlight_editor_needs_to_say() {
+        assert!(check_pattern(r"\b(ERROR|FATAL)\b", true, false).is_ok());
+        assert!(
+            check_pattern("unclosed(", false, false).is_ok(),
+            "a literal"
+        );
+        assert!(check_pattern("unclosed(", true, false).is_err());
+        assert!(check_pattern("", true, false).is_ok(), "empty matches all");
     }
 
     #[test]

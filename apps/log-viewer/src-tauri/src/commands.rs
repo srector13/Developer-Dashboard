@@ -8,10 +8,22 @@
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
-use crate::filter::{FilterSpec, Highlighter, Matcher};
+use crate::filter::{self, FilterSpec, Highlighter, Matcher};
 use crate::settings::{self, LogSource, LogsConfig, ViewerSettings};
-use crate::state::AppState;
+use crate::state::{AppState, SourceHealth};
 use crate::store::View;
+
+/// Compile a filter, anchoring its interval to the newest line in the buffer.
+///
+/// Every production path goes through this rather than `Matcher::build`, so
+/// "the last 15 minutes" means the same thing everywhere — see the note on
+/// `Matcher::build_at` for why it is not 15 minutes before now.
+fn matcher_for(state: &State<AppState>, spec: &FilterSpec) -> Result<Matcher, String> {
+    let anchor = state
+        .with_store(|store| store.newest_timestamp())
+        .unwrap_or_else(filter::now_millis);
+    Matcher::build_at(spec, anchor)
+}
 
 /// What the window needs on first paint, in one round trip.
 #[derive(Debug, Serialize)]
@@ -101,6 +113,7 @@ pub fn list_sources(state: State<AppState>) -> Vec<SourceStatus> {
             // A configured source has an id the config knows; a session one
             // does not, which is what the pin button keys off.
             pinned: state.config().sources.iter().any(|s| s.id == source.id),
+            health: state.health(&source.id),
             source,
         })
         .collect()
@@ -113,6 +126,8 @@ pub struct SourceStatus {
     pub source: LogSource,
     pub lines: usize,
     pub pinned: bool,
+    #[serde(flatten)]
+    pub health: SourceHealth,
 }
 
 #[tauri::command]
@@ -161,7 +176,7 @@ pub fn reload_source(state: State<AppState>, id: String) {
 /// half-typed pattern should not blank the window.
 #[tauri::command]
 pub fn set_filter(state: State<AppState>, filter: FilterSpec) -> Result<View, String> {
-    let matcher = Matcher::build(&filter)?;
+    let matcher = matcher_for(&state, &filter)?;
     state.set_filter(filter);
     Ok(render(&state, &matcher))
 }
@@ -170,8 +185,15 @@ pub fn set_filter(state: State<AppState>, filter: FilterSpec) -> Result<View, St
 /// the incremental appends of follow mode, it orders the whole view.
 #[tauri::command]
 pub fn refresh(state: State<AppState>) -> Result<View, String> {
-    let matcher = Matcher::build(&state.filter())?;
+    let matcher = matcher_for(&state, &state.filter())?;
     Ok(render(&state, &matcher))
+}
+
+/// Does this pattern compile? For the highlight editor, which has to say so
+/// while the pattern is being typed — see `filter::check_pattern`.
+#[tauri::command]
+pub fn check_pattern(pattern: String, regex: bool, case_sensitive: bool) -> Result<(), String> {
+    filter::check_pattern(&pattern, regex, case_sensitive)
 }
 
 #[tauri::command]
@@ -189,7 +211,7 @@ fn render(state: &State<AppState>, matcher: &Matcher) -> View {
 /// Everything currently shown, as text — for pasting into a ticket.
 #[tauri::command]
 pub fn copy_view(state: State<AppState>) -> Result<String, String> {
-    let matcher = Matcher::build(&state.filter())?;
+    let matcher = matcher_for(&state, &state.filter())?;
     let view = render(&state, &matcher);
     Ok(view
         .lines
@@ -245,6 +267,31 @@ pub async fn pick_files(app: AppHandle) -> Vec<String> {
     }
     state.reconcile_tails();
     paths
+}
+
+/// Ask the user for one file, without opening it.
+///
+/// Separate from `pick_files` because the settings pane is editing a config
+/// entry rather than opening something: browsing to fix a typo in a path should
+/// not start tailing whatever you clicked on the way there.
+#[tauri::command]
+pub async fn browse_file(app: AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.dialog()
+        .file()
+        .add_filter("Logs", &["log", "txt", "out", "err"])
+        .add_filter("All files", &["*"])
+        .pick_file(move |path| {
+            let _ = tx.send(path);
+        });
+
+    tokio::task::spawn_blocking(move || rx.recv().ok().flatten())
+        .await
+        .ok()
+        .flatten()
+        .map(|path| path.to_string())
 }
 
 /// Open a sibling suite app — Dev Hub, the notebook — from the Log Viewer's

@@ -258,18 +258,28 @@
     // 5. Checklist items
     md.core.ruler.after('inline', 'notebook-task-lists', (state) => {
       const tokens = state.tokens;
+      // Track the enclosing list item with a stack, in a single pass.
+      //
+      // This used to scan backwards from every inline token looking for a
+      // `list_item_open`, stopping early only at a `list_item_close`. In a
+      // document with few or no lists nothing stops the scan, so every
+      // paragraph walked back to the start of the token stream and rendering
+      // went quadratic — a 1.2MB note took about four seconds with the preview
+      // sitting blank, and multi-megabyte notes took tens of seconds. The same
+      // note renders in ~120ms this way, against ~100ms for plain markdown-it.
+      const itemStack = [];
       for (let i = 0; i < tokens.length; i++) {
+        if (tokens[i].type === 'list_item_open') {
+          itemStack.push(tokens[i]);
+          continue;
+        }
+        if (tokens[i].type === 'list_item_close') {
+          itemStack.pop();
+          continue;
+        }
         if (tokens[i].type !== 'inline') continue;
 
-        // Find parent list item opening to fetch source line maps
-        let parent = null;
-        for (let j = i - 1; j >= 0; j--) {
-          if (tokens[j].type === 'list_item_open') {
-            parent = tokens[j];
-            break;
-          }
-          if (tokens[j].type === 'list_item_close') break;
-        }
+        const parent = itemStack[itemStack.length - 1];
         if (!parent) continue;
 
         const text = tokens[i].content;

@@ -118,7 +118,7 @@ impl Registry {
             .values()
             .filter(|entry| entry.can(capability))
             .collect();
-        found.sort_by(|a, b| b.registered_at.cmp(&a.registered_at));
+        found.sort_by_key(|entry| std::cmp::Reverse(entry.registered_at));
         found
     }
 }

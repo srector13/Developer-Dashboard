@@ -261,6 +261,27 @@ impl LineStore {
         false
     }
 
+    /// The moment of the most recently ingested line that could be placed in
+    /// time at all.
+    ///
+    /// This is what an interval filter counts back from. It scans from the back
+    /// because the newest line usually carries a timestamp, so the loop normally
+    /// ends on its first step — and it must not assume that, because the last
+    /// line of a stack trace does not.
+    ///
+    /// With two sources whose clocks disagree this is the last one to *write*,
+    /// not the latest reading. That is the forgiving direction: it puts the
+    /// floor slightly earlier and shows a few extra lines, where taking the
+    /// maximum would hide lines from a server whose clock runs behind. An
+    /// interval that shows too much is a nuisance; one that hides the thing you
+    /// were looking for is the bug this whole module is trying to avoid.
+    pub fn newest_timestamp(&self) -> Option<i64> {
+        self.lines
+            .iter()
+            .rev()
+            .find_map(|line| line.effective_timestamp)
+    }
+
     /// Per-source counts, for the source list in the sidebar.
     pub fn counts(&self) -> HashMap<String, usize> {
         let mut counts = HashMap::new();
@@ -498,6 +519,50 @@ mod tests {
         store.clear_source("api");
 
         assert_eq!(view_texts(&all(&store)), vec!["worker line"]);
+    }
+
+    #[test]
+    fn the_anchor_for_an_interval_is_the_newest_line_that_has_a_clock() {
+        let mut store = LineStore::default();
+        assert_eq!(store.newest_timestamp(), None, "nothing to anchor to yet");
+
+        store.push("api", "2024-05-01T12:00:00Z INFO up".into());
+        store.push("api", "\tat com.example.App.main".into());
+        // The last line has no clock of its own, but it inherited one, so the
+        // anchor is still the moment the log reached.
+        let anchor = store.newest_timestamp().expect("a line carried a time");
+        assert_eq!(anchor, all(&store).lines[0].line.timestamp.unwrap());
+    }
+
+    #[test]
+    fn an_interval_narrows_the_view_to_the_end_of_the_log() {
+        use crate::filter::FilterSpec;
+
+        let mut store = LineStore::default();
+        store.push("api", "2024-05-01T12:00:00Z INFO an hour ago".into());
+        store.push("api", "2024-05-01T12:50:00Z INFO ten minutes ago".into());
+        store.push("api", "2024-05-01T13:00:00Z INFO the newest line".into());
+
+        // Anchored to the newest line, exactly as commands::matcher_for does.
+        let anchor = store.newest_timestamp().unwrap();
+        let matcher = Matcher::build_at(
+            &FilterSpec {
+                since_mins: 15,
+                ..Default::default()
+            },
+            anchor,
+        )
+        .unwrap();
+
+        let view = store.query(&matcher, &Highlighter::default(), 10_000);
+        assert_eq!(
+            view_texts(&view),
+            vec![
+                "2024-05-01T12:50:00Z INFO ten minutes ago",
+                "2024-05-01T13:00:00Z INFO the newest line",
+            ]
+        );
+        assert_eq!(view.total, 3, "the buffer still holds the older line");
     }
 
     #[test]

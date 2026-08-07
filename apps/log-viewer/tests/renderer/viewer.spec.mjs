@@ -40,9 +40,13 @@ await page.addInitScript(() => {
   window.__all.push(line(401, 'api', '\tat com.example.App.main(App.java:42)', 'unknown', null, { continuation: true }));
   window.__all.push(line(402, 'worker', '<img src=x onerror="window.__pwned=1">', 'info', 1714566097000));
 
+  // Two applications, three files, one of which is not there — the shape the
+  // sidebar has to cope with: grouping, an environment sub-heading, and a
+  // source whose path does not resolve.
   window.__sources = [
-    { id: 'api-0', name: 'api', path: 'C:/logs/api.log', enabled: true, colour: 'blue', lines: 402, pinned: true },
-    { id: 'worker-1', name: 'worker', path: 'C:/logs/worker.log', enabled: true, colour: 'teal', lines: 1, pinned: false },
+    { id: 'api-0', name: 'api', path: 'C:/logs/api.log', enabled: true, colour: 'blue', lines: 402, pinned: true, app: 'Payments', env: 'prod', missing: false, seen: true },
+    { id: 'worker-1', name: 'worker', path: 'C:/logs/worker.log', enabled: true, colour: 'teal', lines: 1, pinned: false, app: 'Payments', env: 'uat', missing: false, seen: true },
+    { id: 'gateway-2', name: 'gateway', path: 'C:/logs/typo.log', enabled: true, colour: 'violet', lines: 0, pinned: true, app: 'Gateway', env: '', missing: true, seen: false },
   ];
 
   const viewFor = (filter) => {
@@ -65,11 +69,11 @@ await page.addInitScript(() => {
       },
       config: {
         sources: [],
-        filters: [{ id: 'errors', name: 'Errors only', query: '', exclude: '', regex: false, caseSensitive: false, minLevel: 'error', sources: [] }],
+        filters: [{ id: 'errors', name: 'Errors only', query: '', exclude: '', regex: false, caseSensitive: false, minLevel: 'error', sources: [], sinceMins: 15 }],
         highlights: [{ id: 'error', name: 'Errors', pattern: 'ERROR', regex: false, caseSensitive: true, colour: 'red', enabled: true }],
       },
       sources: window.__sources,
-      filter: { query: '', exclude: '', regex: false, caseSensitive: false, minLevel: 'unknown', sources: [] },
+      filter: { query: '', exclude: '', regex: false, caseSensitive: false, minLevel: 'unknown', sources: [], sinceMins: 0 },
       version: '0.2.0',
       configError: null,
       siblings: [{ id: 'dev-hub', name: 'Dev Hub' }],
@@ -101,8 +105,14 @@ await page.addInitScript(() => {
     pickFiles: async () => { window.__calls.push(['pickFiles']); return []; },
     revealConfigFile: async () => { window.__calls.push(['revealConfigFile']); },
     openSibling: async (id) => { window.__calls.push(['openSibling', id]); },
+    browseFile: async () => { window.__calls.push(['browseFile']); return 'C:/logs/chosen.log'; },
+    checkPattern: async (pattern, regex) => {
+      window.__calls.push(['checkPattern', pattern, regex]);
+      if (regex && /\($/.test(pattern)) throw 'unclosed group';
+    },
     onLinesAppended: (cb) => { window.__appended = cb; },
     onSourcesChanged: (cb) => { window.__sourcesChanged = cb; },
+    onConfigChanged: (cb) => { window.__configChanged = cb; },
     onFileDrop: (cb) => { window.__fileDrop = cb; },
     onFileDropHover: (cb) => { window.__fileDropHover = cb; },
     onFileDropCancel: (cb) => { window.__fileDropCancel = cb; },
@@ -207,12 +217,16 @@ const settle = () => page.waitForTimeout(220);
 
 {
   const marked = page.locator('#rows .row[data-highlight="error"]').first();
-  check('a highlighted line carries its rule so CSS can colour it',
-    await marked.count() > 0 || true);
+  check('a highlighted line carries its rule', await marked.count() === 1);
+  // The rule's own colour, not one CSS guessed from the id. A rule someone
+  // creates has an id no stylesheet has ever heard of.
+  check('…and the colour that rule was given, so a custom rule can be coloured',
+    (await marked.getAttribute('data-highlight-colour')) === 'red',
+    await marked.getAttribute('data-highlight-colour'));
 
   const continuation = await page.locator('#rows .row[data-continuation="true"]').count();
   check('a continuation line is marked so the trace reads as one thing',
-    continuation >= 0);
+    continuation === 1, `${continuation}`);
 }
 
 {
@@ -303,11 +317,28 @@ const settle = () => page.waitForTimeout(220);
 }
 
 {
+  await page.selectOption('#interval', '15');
+  await settle();
+  const sent = await page.evaluate(() => window.__calls.filter(c => c[0] === 'setFilter').pop()[1]);
+  check('choosing an interval reaches the backend as minutes',
+    sent.sinceMins === 15, JSON.stringify(sent));
+
+  await page.selectOption('#interval', '0');
+  await settle();
+  const full = await page.evaluate(() => window.__calls.filter(c => c[0] === 'setFilter').pop()[1]);
+  check('…and "Full log" asks for no interval at all', full.sinceMins === 0, JSON.stringify(full));
+}
+
+{
   await page.click('.saved-filter');
   await settle();
   const sent = await page.evaluate(() => window.__calls.filter(c => c[0] === 'setFilter').pop()[1]);
   check('a saved filter applies its whole spec', sent.minLevel === 'error', JSON.stringify(sent));
+  check('…including how much of the log it wanted', sent.sinceMins === 15, JSON.stringify(sent));
+  check('…and the filter bar shows what was applied',
+    await page.locator('#interval').inputValue() === '15');
   await page.selectOption('#level', 'unknown');
+  await page.selectOption('#interval', '0');
   await settle();
 }
 
@@ -316,11 +347,42 @@ const settle = () => page.waitForTimeout(220);
 // ---------------------------------------------------------------------------
 
 {
-  check('every source is listed', await page.locator('#source-list .source').count() === 2);
+  check('every source is listed', await page.locator('#source-list .source').count() === 3);
   check('a source shows its line count',
     (await page.locator('#source-list .source .count').first().textContent()).includes('402'));
   check('a source names its file in a tooltip',
     (await page.locator('#source-list .source .name').first().getAttribute('title')) === 'C:/logs/api.log');
+}
+
+// ---------------------------------------------------------------------------
+// Grouping, and files that are not there
+// ---------------------------------------------------------------------------
+
+{
+  const apps = await page.locator('#source-list .source-group > h3').allTextContents();
+  check('sources are grouped by application', JSON.stringify(apps) === JSON.stringify(['Payments', 'Gateway']),
+    JSON.stringify(apps));
+
+  const envs = await page.locator('#source-list .source-group h4').allTextContents();
+  check('…and by environment within it', JSON.stringify(envs) === JSON.stringify(['prod', 'uat']),
+    JSON.stringify(envs));
+
+  const gateway = page.locator('#source-list .source').nth(2);
+  check('a source with no environment needs no sub-heading — it is still listed',
+    (await gateway.locator('.name').textContent()) === 'gateway');
+}
+
+{
+  // The bug this whole pass started from: a file that cannot be read looked
+  // exactly like a file with nothing in it.
+  const trouble = page.locator('#source-list .source[data-trouble="true"]');
+  check('a file that cannot be read is called out', await trouble.count() === 1);
+  check('…and says which of the two problems it is',
+    (await trouble.locator('.trouble').textContent()) === 'not found');
+  check('…with the path and what to do about it on hover',
+    (await trouble.locator('.trouble').getAttribute('title')).includes('C:/logs/typo.log'));
+  check('…and the healthy sources are not marked',
+    await page.locator('#source-list .source:not([data-trouble="true"])').count() === 2);
 }
 
 {
@@ -345,7 +407,7 @@ const settle = () => page.waitForTimeout(220);
   await page.locator('#source-list .source').nth(1).hover();
   await page.locator('#source-list .source').nth(1).locator('.row-action').last().click();
   await page.waitForTimeout(200);
-  check('the bin closes a source', await page.locator('#source-list .source').count() === 1);
+  check('the bin closes a source', await page.locator('#source-list .source').count() === 2);
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +471,46 @@ const settle = () => page.waitForTimeout(220);
   check('…and dropping it opens that path',
     (await page.evaluate(() => window.__calls.filter(c => c[0] === 'addSource').pop()))[1] === 'C:/logs/dropped.log');
   check('…and the hint goes away', await page.locator('#drop-hint').isHidden());
+}
+
+// ---------------------------------------------------------------------------
+// The config changing underneath the window
+// ---------------------------------------------------------------------------
+
+{
+  // Editing logs.config.json used to do nothing until the next launch, which is
+  // most of why "I added a log and see nothing" happened at all.
+  await page.evaluate(() => {
+    window.__sources = [
+      ...window.__sources,
+      { id: 'added-by-hand', name: 'edited in', path: 'C:/logs/new.log', enabled: true, colour: 'green', lines: 7, pinned: true, app: 'Payments', env: 'prod', missing: false, seen: true },
+    ];
+  });
+  const before = await page.locator('#source-list .source').count();
+  await page.evaluate(() => window.__configChanged());
+  await page.waitForTimeout(250);
+  check('a config edited on disk shows up without a restart',
+    await page.locator('#source-list .source').count() === before + 1);
+}
+
+// ---------------------------------------------------------------------------
+// Loaded with no backend behind it
+// ---------------------------------------------------------------------------
+
+{
+  // The failure this replaces was silent: the window sat there saying "No lines
+  // yet", which is also what it says when everything works and the log is quiet.
+  const bare = await browser.newPage({ viewport: { width: 900, height: 600 } });
+  await bare.goto(`${server.origin}/index.html`);
+  await bare.waitForSelector('body[data-ready="no-bridge"]');
+  check('a window with no backend says so rather than looking empty',
+    await bare.locator('#no-bridge').isVisible());
+  check('…and does not pretend the log is simply quiet',
+    await bare.locator('#no-bridge').evaluate((el) => {
+      const box = el.getBoundingClientRect();
+      return box.width >= window.innerWidth && box.height >= window.innerHeight;
+    }));
+  await bare.close();
 }
 
 await browser.close();
